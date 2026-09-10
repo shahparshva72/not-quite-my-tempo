@@ -1,0 +1,27 @@
+{
+  "name": "not-quite-my-tempo",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.1.3",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "pnpm --filter @not-quite-my-tempo/api build",
+    "db:create": "pnpm --filter @not-quite-my-tempo/api db:create",
+    "db:types": "pnpm --filter @not-quite-my-tempo/api types",
+    "deploy": "pnpm --filter @not-quite-my-tempo/api deploy",
+    "dev": "pnpm --filter @not-quite-my-tempo/api dev",
+    "test": "pnpm --filter @not-quite-my-tempo/api test",
+    "test:watch": "pnpm --filter @not-quite-my-tempo/api test:watch",
+    "typecheck": "pnpm --filter @not-quite-my-tempo/api typecheck",
+    "typecheck:test": "pnpm --filter @not-quite-my-tempo/api typecheck:test"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}
