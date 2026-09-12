@@ -32,6 +32,10 @@ The Cloudflare Vitest plugin currently peers on Vitest `4.1.x`, so this workspac
 
 Requirements: Node.js 22 or newer and pnpm 11.
 
+Use `nvm install` and `nvm use` to select the pinned Node.js version in `.nvmrc`.
+GitHub CI uses this version and runs lint, formatting, the dry-run build, and tests
+on pushes and pull requests.
+
 ```sh
 pnpm install
 pnpm typecheck
