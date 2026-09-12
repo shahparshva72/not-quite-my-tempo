@@ -3,6 +3,13 @@
   "name": "not-quite-my-tempo-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-10",
+  "workflows": [
+    {
+      "binding": "REVIEW_PULL_REQUEST_WORKFLOW",
+      "name": "review-pull-request",
+      "class_name": "ReviewPullRequestWorkflow",
+    },
+  ],
   "d1_databases": [
     {
       "binding": "DB",

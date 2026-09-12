@@ -45,9 +45,11 @@ pnpm dev
 
 The local Worker starts at `http://localhost:8787`.
 
-The current application requires no environment variables. `.env.example` documents
-the configuration and must be kept in sync when variables are introduced or
-changed. D1 is configured through the `DB` binding in `apps/api/wrangler.jsonc`.
+The Worker requires `GITHUB_WEBHOOK_SECRET` to verify GitHub's HMAC-SHA256
+webhook signature. `.env.example` documents the configuration and must be kept
+in sync when variables are introduced or changed. D1 and the
+`REVIEW_PULL_REQUEST_WORKFLOW` Workflow are configured as bindings in
+`apps/api/wrangler.jsonc`.
 
 Lint and format the workspace with Oxlint and Oxfmt:
 
@@ -88,6 +90,14 @@ Migration application uses Wrangler authentication and the database configured i
 curl http://localhost:8787/health
 ```
 
+`POST /webhooks/github` accepts signed GitHub App webhook deliveries. It handles
+the `opened`, `synchronize`, and `reopened` actions for the `pull_request` event.
+Other event types and pull request actions return success without starting a
+review. Supported deliveries upsert the GitHub installation and repository,
+create one queued review run per repository, pull request number, and head SHA,
+and start `review-pull-request`. The Workflow marks the run running, performs a
+fake review, and marks it completed.
+
 For local end-to-end database debugging, create a review run for an existing
 repository and read it back through the Effect repository layer:
 
@@ -103,11 +113,104 @@ Deploy after the remote D1 database is configured:
 pnpm deploy
 ```
 
+## Test the GitHub webhook flow locally
+
+1. Choose a webhook secret and create `apps/api/.dev.vars` (this file is local
+   and must not be committed):
+
+   ```dotenv
+   GITHUB_WEBHOOK_SECRET=replace-with-a-random-local-secret
+   ```
+
+2. Apply the schema and start the local Worker:
+
+   ```sh
+   pnpm db:migrate:local
+   pnpm dev
+   ```
+
+3. Expose the running Worker to GitHub by pressing `t` in the Wrangler terminal.
+   Copy the resulting `https://...trycloudflare.com` URL. Do not use
+   `wrangler dev --remote`; Workflow bindings are not supported there.
+
+4. In a GitHub App that is installed on the test repository, set the webhook
+   URL to `<tunnel-url>/webhooks/github`, content type to `application/json`, and
+   its secret to the exact value in `apps/api/.dev.vars`. Subscribe to pull
+   request events. A GitHub App delivery is required because the application
+   expects the payload's `installation.id`.
+
+5. Open a pull request in an installation repository. Re-push the branch to test
+   `synchronize`, or close and reopen it to test `reopened`. Wrangler logs emit
+   structured entries for receipt, review-run ID, Workflow start, and completion.
+
+6. Inspect local orchestration and persisted state while `pnpm dev` is running:
+
+   ```sh
+   pnpm --filter @not-quite-my-tempo/api exec wrangler workflows instances list review-pull-request --local
+   pnpm --filter @not-quite-my-tempo/api exec wrangler d1 execute DB --local --command "SELECT id, pull_request_number, head_sha, status, trigger FROM review_runs ORDER BY id DESC LIMIT 10"
+   ```
+
+   GitHub's **Redeliver** action for the same delivery must leave the table with
+   one row for that repository, pull request number, and head SHA. The response
+   remains HTTP 202 and reports `already_processed`.
+
+For a quick signature check without GitHub, save a representative GitHub App
+pull request payload as `/tmp/github-pull-request.json`, then run:
+
+```sh
+WEBHOOK_SECRET='replace-with-a-random-local-secret'
+SIGNATURE="sha256=$(openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" /tmp/github-pull-request.json | awk '{print $2}')"
+curl -i http://localhost:8787/webhooks/github \
+  -H 'content-type: application/json' \
+  -H 'x-github-event: pull_request' \
+  -H "x-hub-signature-256: $SIGNATURE" \
+  --data-binary @/tmp/github-pull-request.json
+```
+
+## Test the GitHub webhook flow after deployment
+
+1. Create the production D1 database once, replace the placeholder
+   `database_id` in `apps/api/wrangler.jsonc` with the returned ID, and apply the
+   migrations:
+
+   ```sh
+   pnpm db:create
+   pnpm db:migrate:remote
+   ```
+
+2. Store a strong secret in Cloudflare and deploy. Enter the value only at
+   Wrangler's prompt; use the same value in GitHub:
+
+   ```sh
+   pnpm --filter @not-quite-my-tempo/api exec wrangler secret put GITHUB_WEBHOOK_SECRET
+   pnpm deploy
+   ```
+
+3. Set the GitHub App webhook URL to the deployed Worker URL followed by
+   `/webhooks/github`, select `application/json`, configure the matching secret,
+   subscribe to pull request events, and install the app on the test repository.
+
+4. Open a pull request and confirm its delivery received HTTP 202 in GitHub's
+   **Recent deliveries**. In separate terminals, inspect Cloudflare logs,
+   Workflow instances, and D1:
+
+   ```sh
+   pnpm --filter @not-quite-my-tempo/api exec wrangler tail
+   pnpm --filter @not-quite-my-tempo/api exec wrangler workflows instances list review-pull-request
+   pnpm --filter @not-quite-my-tempo/api exec wrangler d1 execute DB --remote --command "SELECT id, pull_request_number, head_sha, status, trigger FROM review_runs ORDER BY id DESC LIMIT 10"
+   ```
+
+   The newest run should transition from `queued` to `running` to `completed`.
+   Redelivering the same GitHub delivery must not add another row.
+
 ## References
 
 - [Drizzle: Cloudflare D1](https://orm.drizzle.team/docs/sqlite/connect-cloudflare-d1)
 - [Cloudflare: Query D1 from Hono](https://developers.cloudflare.com/d1/examples/d1-and-hono/)
 - [Cloudflare: TypeScript Workers and generated types](https://developers.cloudflare.com/workers/languages/typescript/)
 - [Cloudflare: Workers Vitest integration](https://developers.cloudflare.com/workers/testing/vitest-integration/)
+- [Cloudflare Workflows: Local development](https://developers.cloudflare.com/workflows/build/local-development/)
+- [Cloudflare Workflows: Workers API](https://developers.cloudflare.com/workflows/build/workers-api/)
 - [Effect: Using generators](https://effect.website/docs/getting-started/using-generators/)
+- [GitHub: Validating webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
 - [pnpm: Workspaces](https://pnpm.io/workspaces)

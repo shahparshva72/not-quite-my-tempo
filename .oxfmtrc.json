@@ -6,5 +6,20 @@
   "semi": true,
   "singleQuote": false,
   "trailingComma": "all",
-  "ignorePatterns": ["apps/api/worker-configuration.d.ts", "pnpm-lock.yaml"]
+  "ignorePatterns": [
+    ".agent/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".continue/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".opencode/**",
+    ".pi/**",
+    ".roo/**",
+    ".windsurf/**",
+    "apps/api/worker-configuration.d.ts",
+    "pnpm-lock.yaml",
+    "tools/oxlint/anti-slop/**"
+  ]
 }

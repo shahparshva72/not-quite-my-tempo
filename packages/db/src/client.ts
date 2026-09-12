@@ -6,5 +6,5 @@ import * as schema from "./schema/index.js";
 
 export type DatabaseClient = DrizzleD1Database<typeof schema>;
 
-export const makeDatabaseClient = (database: D1Database): DatabaseClient =>
+export const drizzleClient = (database: D1Database): DatabaseClient =>
   drizzle(database, { schema });

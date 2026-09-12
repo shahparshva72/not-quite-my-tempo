@@ -28,12 +28,15 @@ describe("ReviewRunRepository", () => {
       Effect.gen(function* () {
         const repository = yield* ReviewRunRepository;
         const created = yield* repository.create(input);
-        const byId = yield* repository.findById(created.id);
-        const byCommit = yield* repository.findByPullRequestCommit(
-          1,
-          42,
-          "abc123",
-        );
+
+        const byId = yield* repository
+          .findById(created.id)
+          .pipe(Effect.flatten);
+
+        const byCommit = yield* repository
+          .findByPullRequestCommit(1, 42, "abc123")
+          .pipe(Effect.flatten);
+
         return { created, byId, byCommit };
       }),
     );
@@ -48,25 +51,32 @@ describe("ReviewRunRepository", () => {
       Effect.gen(function* () {
         const repository = yield* ReviewRunRepository;
         const completedRun = yield* repository.create(input);
-        const running = yield* repository.markRunning(completedRun.id);
-        const completed = yield* repository.markCompleted(completedRun.id);
+
+        const running = yield* repository
+          .markRunning(completedRun.id)
+          .pipe(Effect.flatten);
+
+        const completed = yield* repository
+          .markCompleted(completedRun.id)
+          .pipe(Effect.flatten);
+
         const failedRun = yield* repository.create({
           ...input,
           headSha: "def456",
         });
-        const failed = yield* repository.markFailed(
-          failedRun.id,
-          "model_error",
-          "Model request failed",
-        );
+
+        const failed = yield* repository
+          .markFailed(failedRun.id, "model_error", "Model request failed")
+          .pipe(Effect.flatten);
+
         return { running, completed, failed };
       }),
     );
 
     expect(result.running).toMatchObject({ status: "running" });
-    expect(result.running?.startedAt).toBeInstanceOf(Date);
+    expect(result.running.startedAt).toBeInstanceOf(Date);
     expect(result.completed).toMatchObject({ status: "completed" });
-    expect(result.completed?.completedAt).toBeInstanceOf(Date);
+    expect(result.completed.completedAt).toBeInstanceOf(Date);
     expect(result.failed).toMatchObject({
       status: "failed",
       errorCode: "model_error",
@@ -79,14 +89,32 @@ describe("ReviewRunRepository", () => {
       Effect.gen(function* () {
         const repository = yield* ReviewRunRepository;
         yield* repository.create(input);
+
         return yield* repository.create(input).pipe(Effect.either);
       }),
     );
 
     expect(Either.isLeft(result)).toBe(true);
+
     if (Either.isLeft(result)) {
       expect(result.left).toBeInstanceOf(DatabaseError);
       expect(result.left.operation).toBe("review_runs.create");
     }
+  });
+
+  it("returns the existing review run for the same pull request commit", async () => {
+    const result = await run(
+      Effect.gen(function* () {
+        const repository = yield* ReviewRunRepository;
+        const first = yield* repository.createOrFind(input);
+        const duplicate = yield* repository.createOrFind(input);
+
+        return { first, duplicate };
+      }),
+    );
+
+    expect(result.first._tag).toBe("Created");
+    expect(result.duplicate._tag).toBe("Existing");
+    expect(result.duplicate.reviewRun.id).toBe(result.first.reviewRun.id);
   });
 });

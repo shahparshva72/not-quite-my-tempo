@@ -1,34 +1,19 @@
 import { and, eq } from "drizzle-orm";
-import { Context, Effect, Layer } from "effect";
+import { Array, Data, Effect, Option } from "effect";
 
-import { DatabaseError } from "../errors.js";
-import { reviewRuns } from "../schema/review-runs.js";
+import { databaseEffect, DatabaseError } from "../errors.js";
+import {
+  reviewRuns,
+  reviewRunStatuses,
+  reviewRunTriggers,
+} from "../schema/review-runs.js";
 import { Database } from "../services/database.js";
 
-export type ReviewRunStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type ReviewRun = typeof reviewRuns.$inferSelect;
 
-export type ReviewRunTrigger = "opened" | "synchronize" | "reopened" | "manual";
+export type ReviewRunStatus = (typeof reviewRunStatuses)[number];
 
-export interface ReviewRun {
-  readonly id: number;
-  readonly repositoryId: number;
-  readonly pullRequestNumber: number;
-  readonly headSha: string;
-  readonly status: ReviewRunStatus;
-  readonly trigger: ReviewRunTrigger;
-  readonly model: string | null;
-  readonly startedAt: Date | null;
-  readonly completedAt: Date | null;
-  readonly errorCode: string | null;
-  readonly errorMessage: string | null;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
-}
+export type ReviewRunTrigger = (typeof reviewRunTriggers)[number];
 
 export interface CreateReviewRunInput {
   readonly repositoryId: number;
@@ -38,67 +23,34 @@ export interface CreateReviewRunInput {
   readonly model?: string | null;
 }
 
-export interface ReviewRunRepositoryService {
-  readonly create: (
-    input: CreateReviewRunInput,
-  ) => Effect.Effect<ReviewRun, DatabaseError>;
-  readonly findById: (
-    id: number,
-  ) => Effect.Effect<ReviewRun | undefined, DatabaseError>;
-  readonly findByPullRequestCommit: (
-    repositoryId: number,
-    pullRequestNumber: number,
-    headSha: string,
-  ) => Effect.Effect<ReviewRun | undefined, DatabaseError>;
-  readonly markRunning: (
-    id: number,
-  ) => Effect.Effect<ReviewRun | undefined, DatabaseError>;
-  readonly markCompleted: (
-    id: number,
-  ) => Effect.Effect<ReviewRun | undefined, DatabaseError>;
-  readonly markFailed: (
-    id: number,
-    errorCode: string,
-    errorMessage: string,
-  ) => Effect.Effect<ReviewRun | undefined, DatabaseError>;
-}
+export type CreateReviewRunResult = Data.TaggedEnum<{
+  Created: { readonly reviewRun: ReviewRun };
+  Existing: { readonly reviewRun: ReviewRun };
+}>;
 
-export class ReviewRunRepository extends Context.Tag(
+export const ReviewRunCreation = Data.taggedEnum<CreateReviewRunResult>();
+
+const insertValues = (input: CreateReviewRunInput) => ({
+  repositoryId: input.repositoryId,
+  pullRequestNumber: input.pullRequestNumber,
+  headSha: input.headSha,
+  status: "queued" as const,
+  trigger: input.trigger,
+  model: input.model ?? null,
+});
+
+export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
   "@not-quite-my-tempo/db/ReviewRunRepository",
-)<ReviewRunRepository, ReviewRunRepositoryService>() {}
+  {
+    accessors: true,
+    effect: Effect.gen(function* () {
+      const { client } = yield* Database;
 
-const databaseEffect = <A>(operation: string, run: () => Promise<A>) =>
-  Effect.tryPromise({
-    try: run,
-    catch: (cause) => new DatabaseError({ operation, cause }),
-  });
-
-export const ReviewRunRepositoryLive = Layer.effect(
-  ReviewRunRepository,
-  Effect.gen(function* () {
-    const { client } = yield* Database;
-
-    return ReviewRunRepository.of({
-      create: (input) =>
-        databaseEffect("review_runs.create", () =>
-          client
-            .insert(reviewRuns)
-            .values({
-              repositoryId: input.repositoryId,
-              pullRequestNumber: input.pullRequestNumber,
-              headSha: input.headSha,
-              status: "queued",
-              trigger: input.trigger,
-              model: input.model ?? null,
-            })
-            .returning()
-            .get(),
-        ),
-      findById: (id) =>
-        databaseEffect("review_runs.find_by_id", () =>
-          client.select().from(reviewRuns).where(eq(reviewRuns.id, id)).get(),
-        ),
-      findByPullRequestCommit: (repositoryId, pullRequestNumber, headSha) =>
+      const findByPullRequestCommit = (
+        repositoryId: number,
+        pullRequestNumber: number,
+        headSha: string,
+      ) =>
         databaseEffect("review_runs.find_by_pull_request_commit", () =>
           client
             .select()
@@ -111,39 +63,98 @@ export const ReviewRunRepositoryLive = Layer.effect(
               ),
             )
             .get(),
-        ),
-      markRunning: (id) =>
-        databaseEffect("review_runs.mark_running", () =>
-          client
-            .update(reviewRuns)
-            .set({ status: "running", startedAt: new Date() })
-            .where(eq(reviewRuns.id, id))
-            .returning()
-            .get(),
-        ),
-      markCompleted: (id) =>
-        databaseEffect("review_runs.mark_completed", () =>
-          client
-            .update(reviewRuns)
-            .set({ status: "completed", completedAt: new Date() })
-            .where(eq(reviewRuns.id, id))
-            .returning()
-            .get(),
-        ),
-      markFailed: (id, errorCode, errorMessage) =>
-        databaseEffect("review_runs.mark_failed", () =>
-          client
-            .update(reviewRuns)
-            .set({
-              status: "failed",
-              completedAt: new Date(),
-              errorCode,
-              errorMessage,
-            })
-            .where(eq(reviewRuns.id, id))
-            .returning()
-            .get(),
-        ),
-    });
-  }),
-);
+        ).pipe(Effect.map(Option.fromNullable));
+
+      return {
+        create: (input: CreateReviewRunInput) =>
+          databaseEffect("review_runs.create", () =>
+            client
+              .insert(reviewRuns)
+              .values(insertValues(input))
+              .returning()
+              .get(),
+          ),
+        createOrFind: (input: CreateReviewRunInput) =>
+          databaseEffect("review_runs.create_or_find", () =>
+            client
+              .insert(reviewRuns)
+              .values(insertValues(input))
+              .onConflictDoNothing({
+                target: [
+                  reviewRuns.repositoryId,
+                  reviewRuns.pullRequestNumber,
+                  reviewRuns.headSha,
+                ],
+              })
+              .returning()
+              .all(),
+          ).pipe(
+            Effect.map(Array.head),
+            Effect.flatMap(
+              (inserted): Effect.Effect<CreateReviewRunResult, DatabaseError> =>
+                Option.match(inserted, {
+                  onSome: (reviewRun) =>
+                    Effect.succeed(ReviewRunCreation.Created({ reviewRun })),
+                  onNone: () =>
+                    findByPullRequestCommit(
+                      input.repositoryId,
+                      input.pullRequestNumber,
+                      input.headSha,
+                    ).pipe(
+                      Effect.flatten,
+                      Effect.catchTag(
+                        "NoSuchElementException",
+                        (cause) =>
+                          new DatabaseError({
+                            operation: "review_runs.find_after_conflict",
+                            cause,
+                          }),
+                      ),
+                      Effect.map((reviewRun) =>
+                        ReviewRunCreation.Existing({ reviewRun }),
+                      ),
+                    ),
+                }),
+            ),
+          ),
+        findById: (id: number) =>
+          databaseEffect("review_runs.find_by_id", () =>
+            client.select().from(reviewRuns).where(eq(reviewRuns.id, id)).get(),
+          ).pipe(Effect.map(Option.fromNullable)),
+        findByPullRequestCommit,
+        markRunning: (id: number) =>
+          databaseEffect("review_runs.mark_running", () =>
+            client
+              .update(reviewRuns)
+              .set({ status: "running", startedAt: new Date() })
+              .where(eq(reviewRuns.id, id))
+              .returning()
+              .get(),
+          ).pipe(Effect.map(Option.fromNullable)),
+        markCompleted: (id: number) =>
+          databaseEffect("review_runs.mark_completed", () =>
+            client
+              .update(reviewRuns)
+              .set({ status: "completed", completedAt: new Date() })
+              .where(eq(reviewRuns.id, id))
+              .returning()
+              .get(),
+          ).pipe(Effect.map(Option.fromNullable)),
+        markFailed: (id: number, errorCode: string, errorMessage: string) =>
+          databaseEffect("review_runs.mark_failed", () =>
+            client
+              .update(reviewRuns)
+              .set({
+                status: "failed",
+                completedAt: new Date(),
+                errorCode,
+                errorMessage,
+              })
+              .where(eq(reviewRuns.id, id))
+              .returning()
+              .get(),
+          ).pipe(Effect.map(Option.fromNullable)),
+      };
+    }),
+  },
+) {}
