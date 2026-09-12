@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@not-quite-my-tempo/core": "workspace:*",
-    "@not-quite-my-tempo/d1": "workspace:*",
+    "@not-quite-my-tempo/db": "workspace:*",
     "effect": "catalog:",
     "hono": "catalog:"
   },

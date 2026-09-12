@@ -77,9 +77,9 @@ importers:
       '@not-quite-my-tempo/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@not-quite-my-tempo/d1':
+      '@not-quite-my-tempo/db':
         specifier: workspace:*
-        version: link:../../packages/d1
+        version: link:../../packages/db
       effect:
         specifier: 'catalog:'
         version: 3.22.2
@@ -100,7 +100,7 @@ importers:
         specifier: 'catalog:'
         version: 3.22.2
 
-  packages/d1:
+  packages/db:
     dependencies:
       '@not-quite-my-tempo/core':
         specifier: workspace:*

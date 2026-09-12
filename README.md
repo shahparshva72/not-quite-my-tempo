@@ -9,7 +9,7 @@ apps/
   api/                 Cloudflare Worker, Wrangler config, and tests
 packages/
   core/                Platform-neutral Effect application primitives
-  d1/                  Effect layer for D1 and Drizzle ORM, migration configuration
+  db/                  Effect layer for D1, Drizzle schemas, and migrations
 ```
 
 ## Versions
@@ -72,7 +72,7 @@ Copy the returned `database_id` into `apps/api/wrangler.jsonc`, replacing the al
 
 The D1 Effect service exposes the raw binding as `database` and the Drizzle client as `db`. The client is initialized from the Worker's D1 binding.
 
-Drizzle Kit is configured to read future schema files from `packages/d1/src/schema/**/*.ts` and write SQL migrations to `packages/d1/migrations`. No schemas or migrations are included. Once you add your schema, use:
+Drizzle Kit reads schema files from `packages/db/src/schema/**/*.ts` and writes SQL migrations to `packages/db/drizzle`. The initial schema covers GitHub installations, repositories, review runs, and findings. Use:
 
 ```sh
 pnpm db:generate
@@ -86,6 +86,15 @@ Migration application uses Wrangler authentication and the database configured i
 
 ```sh
 curl http://localhost:8787/health
+```
+
+For local end-to-end database debugging, create a review run for an existing
+repository and read it back through the Effect repository layer:
+
+```sh
+curl -X POST http://localhost:8787/debug/review-runs \
+  -H 'content-type: application/json' \
+  -d '{"repositoryId":1,"pullRequestNumber":42,"headSha":"abc123","trigger":"manual"}'
 ```
 
 Deploy after the remote D1 database is configured:

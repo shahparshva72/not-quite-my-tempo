@@ -5,7 +5,7 @@
   "scripts": {
     "build": "pnpm --filter @not-quite-my-tempo/api build",
     "db:create": "pnpm --filter @not-quite-my-tempo/api db:create",
-    "db:generate": "pnpm --filter @not-quite-my-tempo/d1 db:generate",
+    "db:generate": "pnpm --filter @not-quite-my-tempo/db db:generate",
     "db:migrate:local": "pnpm --filter @not-quite-my-tempo/api db:migrate:local",
     "db:migrate:remote": "pnpm --filter @not-quite-my-tempo/api db:migrate:remote",
     "db:types": "pnpm --filter @not-quite-my-tempo/api types",
