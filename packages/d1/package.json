@@ -10,13 +10,16 @@
     }
   },
   "scripts": {
+    "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@not-quite-my-tempo/core": "workspace:*",
+    "drizzle-orm": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "catalog:"
+    "@cloudflare/workers-types": "catalog:",
+    "drizzle-kit": "catalog:"
   }
 }

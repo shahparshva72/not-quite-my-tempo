@@ -6,6 +6,8 @@
   "scripts": {
     "build": "pnpm types && wrangler deploy --dry-run",
     "db:create": "wrangler d1 create not-quite-my-tempo --binding DB",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "deploy": "pnpm types && wrangler deploy",
     "dev": "wrangler dev",
     "test": "vitest run",

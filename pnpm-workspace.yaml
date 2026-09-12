@@ -11,20 +11,24 @@ catalog:
   "@cloudflare/workers-types": 5.20260910.1
   "@types/node": 22.20.2
   effect: 3.22.2
+  drizzle-orm: 0.45.2
+  drizzle-kit: 0.31.10
   hono: 4.13.7
+  oxlint: 1.82.0
+  oxfmt: 0.67.0
   typescript: 7.0.2
   vite: 8.3.0
   vitest: 4.1.11
   wrangler: 4.131.0
 
 minimumReleaseAgeExclude:
-  - '@cloudflare/vitest-plugin@1.1.7'
-  - '@cloudflare/workerd-darwin-64@1.20260910.1'
-  - '@cloudflare/workerd-darwin-arm64@1.20260910.1'
-  - '@cloudflare/workerd-linux-64@1.20260910.1'
-  - '@cloudflare/workerd-linux-arm64@1.20260910.1'
-  - '@cloudflare/workerd-windows-64@1.20260910.1'
-  - '@cloudflare/workers-types@5.20260910.1'
+  - "@cloudflare/vitest-plugin@1.1.7"
+  - "@cloudflare/workerd-darwin-64@1.20260910.1"
+  - "@cloudflare/workerd-darwin-arm64@1.20260910.1"
+  - "@cloudflare/workerd-linux-64@1.20260910.1"
+  - "@cloudflare/workerd-linux-arm64@1.20260910.1"
+  - "@cloudflare/workerd-windows-64@1.20260910.1"
+  - "@cloudflare/workers-types@5.20260910.1"
   - miniflare@5.20260910.0-alpha
   - vite@8.3.0
   - workerd@1.20260910.1
