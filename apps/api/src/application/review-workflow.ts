@@ -20,6 +20,7 @@ import type { GitHubAppAuthError } from "../github/app-auth.js";
 import type {
   PullRequestClientError,
   PullRequestDetails,
+  PostedReviewComment,
   ReviewSubmitError,
 } from "../github/pull-request-client.js";
 import type { ReviewRequest } from "../github/review-request.js";
@@ -269,14 +270,25 @@ export const postReviewToGitHub = (
       })),
     });
 
+    const listPostedComments = (
+      attemptsRemaining: number,
+    ): Effect.Effect<readonly PostedReviewComment[], ReviewSubmitError> =>
+      client
+        .listReviewComments(installationToken, ref, created.reviewId)
+        .pipe(
+          Effect.flatMap((comments) =>
+            comments.length >= anchored.length || attemptsRemaining === 1
+              ? Effect.succeed(comments)
+              : Effect.sleep("250 millis").pipe(
+                  Effect.flatMap(() =>
+                    listPostedComments(attemptsRemaining - 1),
+                  ),
+                ),
+          ),
+        );
+
     const postedComments =
-      anchored.length === 0
-        ? []
-        : yield* client.listReviewComments(
-            installationToken,
-            ref,
-            created.reviewId,
-          );
+      anchored.length === 0 ? [] : yield* listPostedComments(3);
 
     yield* Effect.forEach(
       postedComments,

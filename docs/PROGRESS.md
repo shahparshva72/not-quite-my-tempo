@@ -23,10 +23,9 @@ then this file for exactly where things stand and what to do next.
 | 5     | Post the review to GitHub | ✅ Done      |
 | 6     | Hardening & operations    | 🟡 Core done |
 
-**Next task:** manual end-to-end verification (tunnel + real GitHub App +
-real Gemini key; README documents the flow) — it has NOT been performed yet.
-After that, Phase 6 stretch items in any order: `.fletcher.json` repo config,
-`/fletcher again` comment command, prior-findings memory on `synchronize`.
+**Next task:** Phase 6 stretch items in any order: `.fletcher.json` repo
+config, `/fletcher again` comment command, prior-findings memory on
+`synchronize`.
 Remember `pnpm db:migrate:local` (and `db:migrate:remote` before deploy) —
 migration `0001_abandoned_lorna_dane.sql` adds the token usage columns.
 
@@ -272,7 +271,10 @@ headSha }` via `Schema` decode). Tagged errors:
 - [ ] Stretch: `/fletcher again` issue-comment command (`manual` trigger
       already exists in the schema).
 - [ ] Stretch: prior-findings memory on `synchronize`.
-- [ ] Manual end-to-end verification with a real GitHub App + Gemini key.
+- [x] Manual end-to-end verification with a real GitHub App + Gemini key:
+      private-repository PR webhook delivery, durable Workflow execution,
+      Gemini structured review, summary and inline GitHub comments, D1
+      findings/model/token persistence, and duplicate delivery handling.
 
 ### Handoff notes (Phase 6, core)
 
@@ -283,3 +285,6 @@ headSha }` via `Schema` decode). Tagged errors:
   can't burn Gemini spend by failing repeatedly past the cap.
 - Remote deploys now require `pnpm db:migrate:remote` for `0001_*` before
   shipping this code.
+- Live verification used `shahparshva72/cv#14` with an isolated arithmetic
+  fixture. It confirmed a `not_my_tempo` verdict and a correctly anchored
+  critical finding on line 4.

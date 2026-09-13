@@ -173,7 +173,12 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
           databaseEffect("review_runs.mark_completed", () =>
             client
               .update(reviewRuns)
-              .set({ status: "completed", completedAt: new Date() })
+              .set({
+                status: "completed",
+                completedAt: new Date(),
+                errorCode: null,
+                errorMessage: null,
+              })
               .where(eq(reviewRuns.id, id))
               .returning()
               .get(),

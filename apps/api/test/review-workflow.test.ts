@@ -177,6 +177,7 @@ describe("postReviewToGitHub", () => {
 
   it("posts anchored comments inline, folds the rest, and stores comment IDs", async () => {
     const createReviewCalls: CreateReviewInput[] = [];
+    let listReviewCommentsCalls = 0;
 
     const stubClientLayer = Layer.succeed(
       GitHubPullRequestClient,
@@ -195,15 +196,22 @@ describe("postReviewToGitHub", () => {
 
           return Effect.succeed({ reviewId: 555 });
         },
-        listReviewComments: () =>
-          Effect.succeed([
-            {
-              id: 9001,
-              path: "src/tempo.ts",
-              line: 14,
-              body: anchoredCommentBody,
-            },
-          ]),
+        listReviewComments: () => {
+          listReviewCommentsCalls += 1;
+
+          return Effect.succeed(
+            listReviewCommentsCalls === 1
+              ? []
+              : [
+                  {
+                    id: 9001,
+                    path: "src/tempo.ts",
+                    line: 14,
+                    body: anchoredCommentBody,
+                  },
+                ],
+          );
+        },
       }),
     );
 
@@ -242,6 +250,7 @@ describe("postReviewToGitHub", () => {
       inlineCommentCount: 1,
       summaryFindingCount: 1,
     });
+    expect(listReviewCommentsCalls).toBe(2);
 
     const review = createReviewCalls[0];
     expect(review?.commitId).toBe("post123");

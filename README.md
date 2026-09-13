@@ -53,6 +53,17 @@ in sync when variables are introduced or changed. D1 and the
 
 ## GitHub App credentials
 
+Create a GitHub App and configure its repository permissions:
+
+- **Pull requests: Read & write** to read PR metadata and post reviews.
+- **Contents: Read-only** to fetch unified diffs from private repositories.
+- Under **Subscribe to events**, enable **Pull request**.
+
+Install the App on the repository to review. After changing permissions,
+approve the updated permissions on the installation if GitHub prompts you.
+Set the webhook URL to `<worker-or-tunnel-url>/webhooks/github` and use the
+same webhook secret as `GITHUB_WEBHOOK_SECRET`.
+
 The review bot authenticates as a GitHub App installation to read pull
 request diffs and post reviews. Two secrets configure this
 (`apps/api/src/github/app-auth.ts` consumes them):

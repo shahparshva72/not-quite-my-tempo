@@ -84,6 +84,33 @@ describe("ReviewRunRepository", () => {
     });
   });
 
+  it("clears a previous failure when a restarted run completes", async () => {
+    const result = await run(
+      Effect.gen(function* () {
+        const reviewRuns = yield* ReviewRunRepository;
+
+        const reviewRun = yield* reviewRuns.create({
+          repositoryId: 1,
+          pullRequestNumber: 43,
+          headSha: "restart123",
+          trigger: "reopened",
+        });
+
+        yield* reviewRuns.markFailed(reviewRun.id, "diff_fetch_error", "403");
+
+        return yield* reviewRuns
+          .markCompleted(reviewRun.id)
+          .pipe(Effect.flatten);
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "completed",
+      errorCode: null,
+      errorMessage: null,
+    });
+  });
+
   it("returns typed database errors", async () => {
     const result = await run(
       Effect.gen(function* () {
