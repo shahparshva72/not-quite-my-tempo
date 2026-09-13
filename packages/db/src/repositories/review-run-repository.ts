@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, ne } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import { Array, Data, Effect, Option } from "effect";
 
 import { databaseEffect, DatabaseError } from "../errors.js";
@@ -16,6 +16,14 @@ export interface ReviewRunUsage {
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
   readonly totalTokens: number | null;
+}
+
+export interface RepositoryUsageSummary {
+  readonly repositoryId: number;
+  readonly runCount: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalTokens: number;
 }
 
 export type ReviewRunStatus = (typeof reviewRunStatuses)[number];
@@ -175,6 +183,40 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
               .returning()
               .get(),
           ).pipe(Effect.map(Option.fromNullable)),
+        listByRepository: (repositoryId: number, limit: number) =>
+          databaseEffect("review_runs.list_by_repository", () =>
+            client
+              .select()
+              .from(reviewRuns)
+              .where(eq(reviewRuns.repositoryId, repositoryId))
+              .orderBy(desc(reviewRuns.createdAt), desc(reviewRuns.id))
+              .limit(limit)
+              .all(),
+          ),
+        usageByRepositoryIds: (repositoryIds: readonly number[]) =>
+          repositoryIds.length === 0
+            ? Effect.succeed<readonly RepositoryUsageSummary[]>([])
+            : databaseEffect("review_runs.usage_by_repository_ids", () =>
+                client
+                  .select({
+                    repositoryId: reviewRuns.repositoryId,
+                    runCount: count(),
+                    inputTokens: sql<number>`coalesce(sum(${reviewRuns.inputTokens}), 0)`,
+                    outputTokens: sql<number>`coalesce(sum(${reviewRuns.outputTokens}), 0)`,
+                    totalTokens: sql<number>`coalesce(sum(${reviewRuns.totalTokens}), 0)`,
+                  })
+                  .from(reviewRuns)
+                  .where(
+                    inArray(
+                      reviewRuns.repositoryId,
+                      // SAFETY: drizzle's inArray requires a mutable array
+                      // type; the values are only read.
+                      repositoryIds as number[],
+                    ),
+                  )
+                  .groupBy(reviewRuns.repositoryId)
+                  .all(),
+              ),
         countForInstallationSince: (installationId: number, since: Date) =>
           databaseEffect("review_runs.count_for_installation_since", () =>
             client

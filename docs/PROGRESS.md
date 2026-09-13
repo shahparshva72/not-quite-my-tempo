@@ -25,12 +25,14 @@ then this file for exactly where things stand and what to do next.
 | 7     | Findings memory           | ✅ Done      |
 | 8     | `/fletcher again` command | ✅ Done      |
 | 9     | `.fletcher.json` + guard  | ✅ Done      |
+| 10    | Read API + GitHub OAuth   | ✅ Done      |
 
-**Next task:** Phase 10 (see PLAN.md) — read-only JSON API (repos, runs,
-findings, token spend) followed by GitHub OAuth login with signed-cookie
-sessions, then auth-gate or remove `POST /debug/review-runs`. Operational
-reminders: subscribe the GitHub App to issue comment events, and run
-`pnpm db:migrate:remote` for `0001_*` before the next deploy if not done.
+**Next task:** Phase 11 — dashboard UI (Hono JSX server-rendered from the
+same Worker; PLAN.md has the view list). Operational prerequisites before
+the next deploy: set `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET`
+/ `SESSION_SECRET` as Worker secrets, set the GitHub App's OAuth callback
+URL to `<worker-url>/auth/callback`, subscribe the App to issue comment
+events, and run `pnpm db:migrate:remote` for `0001_*` if not done.
 
 ---
 
@@ -415,6 +417,55 @@ headSha }` via `Schema` decode). Tagged errors:
   e2e testing; preserved.
 - **Start next:** Phase 10 — read API + GitHub OAuth (PLAN.md has the
   design).
+
+## Phase 10 — Read API + GitHub OAuth ✅
+
+- [x] Session module (`apps/api/src/auth/session.ts`): HMAC-SHA256-signed
+      cookie (`nqmt_session`, 7-day TTL) carrying
+      `{ login, installationIds, expiresAt }`. `verifySession` resolves any
+      failure (bad signature, expiry, malformed, missing secret) to `None`.
+- [x] OAuth service (`apps/api/src/auth/github-oauth.ts`): `GitHubOAuth`
+      Effect service with `exchangeCode`, `fetchUserLogin`,
+      `fetchUserInstallationIds` (fetch-injected, tagged errors).
+- [x] Routes: `GET /auth/login` (random `state` in a short-lived cookie →
+      GitHub authorize URL), `GET /auth/callback` (state check → code
+      exchange → installations → session cookie → redirect `/`),
+      `GET /auth/logout`.
+- [x] Read API (`apps/api/src/application/read-api.ts` + routes):
+      `/api/repositories`, `/api/repositories/:id/runs` (latest 25),
+      `/api/runs/:id/findings`, `/api/usage` (per-repo run counts + token
+      sums). Authorization by joining the session's GitHub installation IDs;
+      unknown and inaccessible both return 404 (`ResourceNotFoundError`) to
+      prevent ID enumeration. No session → 401.
+- [x] DB additions: `GitHubRepositoryRepository.listByGithubInstallationIds`
+      / `findByIdWithGithubInstallationId`;
+      `ReviewRunRepository.listByRepository` / `usageByRepositoryIds`
+      (grouped `coalesce(sum(...))`).
+- [x] `POST /debug/review-runs` **removed** (was unauthenticated write
+      access; the read API + real pipeline replace it). README section
+      replaced with API/auth docs.
+- [x] New secrets documented in `.env.example` + README:
+      `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`,
+      `SESSION_SECRET` (rotating it signs everyone out).
+- [x] Tests (98 total): session round-trip/tamper/expiry/missing-secret,
+      OAuth service request shapes + failure, read-API authorization over
+      real D1, route-level 401/403-as-404/login-redirect/state-mismatch.
+
+### Handoff notes (Phase 10)
+
+- Session authorization is **point-in-time**: installation access is
+  captured at login and lives for the cookie's 7 days. Revoked access
+  persists until logout/expiry. Acceptable for v1; re-validate on a shorter
+  TTL if it matters.
+- The OAuth client credentials come from the **same GitHub App** (its OAuth
+  "Client ID" + generated client secret) — no separate OAuth App. The App's
+  callback URL must be `<worker-url>/auth/callback`.
+- `withSession` in `index.ts` is the auth gate for all `/api/*` routes —
+  reuse it for the Phase 11 HTML routes.
+- Cookies are `Secure`; for local `http://localhost:8787` testing use the
+  Wrangler tunnel (`t`) or a browser that allows secure cookies on
+  localhost (Chrome does).
+- **Start next:** Phase 11 — dashboard UI.
 - Live verification used `shahparshva72/cv#14` with an isolated arithmetic
   fixture. It confirmed a `not_my_tempo` verdict and a correctly anchored
   critical finding on line 4.

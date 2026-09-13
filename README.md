@@ -196,14 +196,24 @@ beyond the cap are acknowledged with `rate_limited` and no review is started.
 Completed runs record the Gemini model and token usage (`input_tokens`,
 `output_tokens`, `total_tokens`) for cost tracking.
 
-For local end-to-end database debugging, create a review run for an existing
-repository and read it back through the Effect repository layer:
+## Dashboard API and sign-in
 
-```sh
-curl -X POST http://localhost:8787/debug/review-runs \
-  -H 'content-type: application/json' \
-  -d '{"repositoryId":1,"pullRequestNumber":42,"headSha":"abc123","trigger":"manual"}'
-```
+A session-gated, read-only JSON API backs the (upcoming) dashboard:
+
+- `GET /auth/login` — redirects to GitHub OAuth (uses the GitHub App's OAuth
+  client credentials). `GET /auth/callback` verifies the `state` cookie,
+  exchanges the code, resolves the user's installations via
+  `GET /user/installations`, and sets a signed HttpOnly session cookie
+  (7-day HMAC-SHA256, `SESSION_SECRET`). `GET /auth/logout` clears it.
+- `GET /api/repositories` — repositories in the user's installations.
+- `GET /api/repositories/:id/runs` — the latest review runs.
+- `GET /api/runs/:id/findings` — findings for a run.
+- `GET /api/usage` — run counts and token usage per repository.
+
+Unknown and inaccessible resources both return 404. Requests without a valid
+session return 401. Configure `GITHUB_OAUTH_CLIENT_ID`,
+`GITHUB_OAUTH_CLIENT_SECRET`, and `SESSION_SECRET` (see `.env.example`), and
+set the GitHub App's callback URL to `<worker-url>/auth/callback`.
 
 Deploy after the remote D1 database is configured:
 
