@@ -27,6 +27,13 @@ import {
   verifySession,
 } from "./auth/session.js";
 import type { SessionPayload } from "./auth/session.js";
+import {
+  dashboardPage,
+  landingPage,
+  notFoundPage,
+  repositoryRunsPage,
+  runFindingsPage,
+} from "./dashboard/views.js";
 import { GitHubAppAuthLive } from "./github/app-auth.js";
 import { GitHubPullRequestClientLive } from "./github/pull-request-client.js";
 import { processGitHubWebhook } from "./github/webhook.js";
@@ -235,6 +242,89 @@ const withSession = (
       onSome: handle,
     }),
   );
+
+const withSessionPage = (
+  c: AppContext,
+  handle: (session: SessionPayload) => Promise<Response | Promise<Response>>,
+): Promise<Response> =>
+  Effect.runPromise(
+    verifySession(c.env.SESSION_SECRET, getCookie(c, SESSION_COOKIE)),
+  )
+    .then(
+      Option.match({
+        onNone: () => Promise.resolve(c.html(landingPage())),
+        onSome: handle,
+      }),
+    )
+    .then((response) => Promise.resolve(response));
+
+app.get("/dashboard", (c) =>
+  withSessionPage(c, (session) =>
+    Effect.runPromise(
+      usageSummary(session.installationIds).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) => internalError(c, cause),
+          onSuccess: (usage) => c.html(dashboardPage(session.login, usage)),
+        }),
+      ),
+    ),
+  ),
+);
+
+app.get("/dashboard/repositories/:id", (c) =>
+  withSessionPage(c, (session) => {
+    const repositoryId = Number(c.req.param("id"));
+
+    if (!Number.isInteger(repositoryId)) {
+      return Promise.resolve(c.html(notFoundPage(), 404));
+    }
+
+    return Effect.runPromise(
+      listRepositoryRuns(session.installationIds, repositoryId).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                c.html(notFoundPage(), 404),
+              ),
+              Match.orElse((error) => internalError(c, error)),
+            ),
+          onSuccess: ({ repository, runs }) =>
+            c.html(repositoryRunsPage(repository, runs)),
+        }),
+      ),
+    );
+  }),
+);
+
+app.get("/dashboard/runs/:id", (c) =>
+  withSessionPage(c, (session) => {
+    const reviewRunId = Number(c.req.param("id"));
+
+    if (!Number.isInteger(reviewRunId)) {
+      return Promise.resolve(c.html(notFoundPage(), 404));
+    }
+
+    return Effect.runPromise(
+      listRunFindings(session.installationIds, reviewRunId).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                c.html(notFoundPage(), 404),
+              ),
+              Match.orElse((error) => internalError(c, error)),
+            ),
+          onSuccess: ({ run, findings }) =>
+            c.html(runFindingsPage(run, findings)),
+        }),
+      ),
+    );
+  }),
+);
 
 app.get("/api/repositories", (c) =>
   withSession(c, (session) =>

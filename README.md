@@ -215,6 +215,12 @@ session return 401. Configure `GITHUB_OAUTH_CLIENT_ID`,
 `GITHUB_OAUTH_CLIENT_SECRET`, and `SESSION_SECRET` (see `.env.example`), and
 set the GitHub App's callback URL to `<worker-url>/auth/callback`.
 
+A server-rendered dashboard sits on the same API at `/dashboard`: signed-out
+visitors get a sign-in page; signed-in users see their repositories with run
+counts and token usage, each repository's recent review runs (status,
+trigger, error code, model, tokens), and each run's findings. Inaccessible
+resources render a 404 page.
+
 Deploy after the remote D1 database is configured:
 
 ```sh

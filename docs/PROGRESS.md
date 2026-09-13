@@ -26,13 +26,17 @@ then this file for exactly where things stand and what to do next.
 | 8     | `/fletcher again` command | ✅ Done      |
 | 9     | `.fletcher.json` + guard  | ✅ Done      |
 | 10    | Read API + GitHub OAuth   | ✅ Done      |
+| 11    | Dashboard UI              | ✅ Done      |
 
-**Next task:** Phase 11 — dashboard UI (Hono JSX server-rendered from the
-same Worker; PLAN.md has the view list). Operational prerequisites before
-the next deploy: set `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET`
-/ `SESSION_SECRET` as Worker secrets, set the GitHub App's OAuth callback
-URL to `<worker-url>/auth/callback`, subscribe the App to issue comment
-events, and run `pnpm db:migrate:remote` for `0001_*` if not done.
+**Next task:** deploy + dogfood. All planned phases are done. Operational
+prerequisites before the next deploy: set `GITHUB_OAUTH_CLIENT_ID` /
+`GITHUB_OAUTH_CLIENT_SECRET` / `SESSION_SECRET` as Worker secrets, set the
+GitHub App's OAuth callback URL to `<worker-url>/auth/callback`, subscribe
+the App to issue comment events, and run `pnpm db:migrate:remote` for
+`0001_*` if not done. Backlog after that (PLAN.md): oversized-diff Fletcher
+comment, opt-in `REQUEST_CHANGES` for criticals, review-comment pagination,
+prompt tuning from real reviews, settings write-path for `.fletcher.json`
+in the dashboard.
 
 ---
 
@@ -466,6 +470,39 @@ headSha }` via `Schema` decode). Tagged errors:
   Wrangler tunnel (`t`) or a browser that allows secure cookies on
   localhost (Chrome does).
 - **Start next:** Phase 11 — dashboard UI.
+
+## Phase 11 — Dashboard UI ✅
+
+- [x] Server-rendered views in `apps/api/src/dashboard/views.ts` using
+      `hono/html` tagged templates (auto-escaping; deviation from PLAN's
+      "Hono JSX" — same zero-build ergonomics without tsconfig/JSX tooling
+      changes). Dark monospace theme, brass accent, 🥁 branding.
+- [x] Routes on the same Worker, gated by `withSessionPage` (signed-out →
+      landing page with "Sign in with GitHub", not a 401):
+      `/dashboard` (repositories + run counts + token usage),
+      `/dashboard/repositories/:id` (latest runs: PR, trigger, status,
+      error code, model, tokens, created), `/dashboard/runs/:id` (findings:
+      severity, location, title/message, confidence, GitHub comment ID; a
+      clean run says "No findings. ...Good job.").
+- [x] Inaccessible/unknown resources render a themed 404 page ("Not my
+      chart.").
+- [x] Tests (`apps/api/test/dashboard.test.ts`): landing page when signed
+      out, usage table, runs table, findings table, cross-installation 404.
+      103 tests total.
+
+### Handoff notes (Phase 11)
+
+- `c.html` returns `Response | Promise<Response>`; `withSessionPage`
+  flattens with a final `.then(Promise.resolve)` — keep that if adding
+  routes.
+- Views take db row types (`ReviewRun`, `Finding`, `GitHubRepository`)
+  directly; interpolations are auto-escaped by `hono/html`. Never
+  interpolate with `raw()` for user-controlled strings.
+- The root `/` still returns service JSON (tests pin it); the dashboard
+  lives at `/dashboard`. Point people there or change `/` to redirect when
+  the JSON root stops being useful.
+- No settings write-path yet — `.fletcher.json` is repo-managed; the
+  dashboard is read-only by design for v1.
 - Live verification used `shahparshva72/cv#14` with an isolated arithmetic
   fixture. It confirmed a `not_my_tempo` verdict and a correctly anchored
   critical finding on line 4.
