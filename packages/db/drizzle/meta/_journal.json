@@ -8,6 +8,13 @@
       "when": 1789202251858,
       "tag": "0000_spooky_kinsey_walden",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1789296246974,
+      "tag": "0001_abandoned_lorna_dane",
+      "breakpoints": true
     }
   ]
 }

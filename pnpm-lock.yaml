@@ -83,6 +83,9 @@ importers:
       '@not-quite-my-tempo/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@not-quite-my-tempo/gemini':
+        specifier: workspace:*
+        version: link:../../packages/gemini
       effect:
         specifier: 'catalog:'
         version: 3.22.2
@@ -121,6 +124,12 @@ importers:
       drizzle-kit:
         specifier: 'catalog:'
         version: 0.31.10
+
+  packages/gemini:
+    dependencies:
+      effect:
+        specifier: 'catalog:'
+        version: 3.22.2
 
 packages:
 

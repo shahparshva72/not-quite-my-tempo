@@ -41,6 +41,9 @@ export const reviewRuns = sqliteTable(
     completedAt: integer("completed_at", { mode: "timestamp_ms" }),
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    totalTokens: integer("total_tokens"),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),

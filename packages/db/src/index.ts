@@ -4,6 +4,8 @@ export * from "./errors.js";
 
 export * from "./layers/live.js";
 
+export * from "./repositories/finding-repository.js";
+
 export * from "./repositories/github-installation-repository.js";
 
 export * from "./repositories/github-repository-repository.js";

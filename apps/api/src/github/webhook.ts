@@ -11,6 +11,7 @@ export class InvalidWebhookSignatureError extends Data.TaggedError(
 
 type GitHubWebhookResult =
   | { readonly status: "ignored" }
+  | { readonly status: "rate_limited" }
   | { readonly status: "already_processed"; readonly reviewRunId: number }
   | { readonly status: "queued"; readonly reviewRunId: number };
 

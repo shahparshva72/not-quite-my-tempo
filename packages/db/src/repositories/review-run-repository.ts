@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, count, eq, gte } from "drizzle-orm";
 import { Array, Data, Effect, Option } from "effect";
 
 import { databaseEffect, DatabaseError } from "../errors.js";
@@ -7,9 +7,16 @@ import {
   reviewRunStatuses,
   reviewRunTriggers,
 } from "../schema/review-runs.js";
+import { repositories } from "../schema/repositories.js";
 import { Database } from "../services/database.js";
 
 export type ReviewRun = typeof reviewRuns.$inferSelect;
+
+export interface ReviewRunUsage {
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly totalTokens: number | null;
+}
 
 export type ReviewRunStatus = (typeof reviewRunStatuses)[number];
 
@@ -131,6 +138,37 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
               .returning()
               .get(),
           ).pipe(Effect.map(Option.fromNullable)),
+        recordModelUsage: (id: number, model: string, usage: ReviewRunUsage) =>
+          databaseEffect("review_runs.record_model_usage", () =>
+            client
+              .update(reviewRuns)
+              .set({
+                model,
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                totalTokens: usage.totalTokens,
+              })
+              .where(eq(reviewRuns.id, id))
+              .returning()
+              .get(),
+          ).pipe(Effect.map(Option.fromNullable)),
+        countForInstallationSince: (installationId: number, since: Date) =>
+          databaseEffect("review_runs.count_for_installation_since", () =>
+            client
+              .select({ total: count() })
+              .from(reviewRuns)
+              .innerJoin(
+                repositories,
+                eq(reviewRuns.repositoryId, repositories.id),
+              )
+              .where(
+                and(
+                  eq(repositories.installationId, installationId),
+                  gte(reviewRuns.createdAt, since),
+                ),
+              )
+              .get(),
+          ).pipe(Effect.map((row) => row?.total ?? 0)),
         markCompleted: (id: number) =>
           databaseEffect("review_runs.mark_completed", () =>
             client

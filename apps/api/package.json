@@ -19,6 +19,7 @@
   "dependencies": {
     "@not-quite-my-tempo/core": "workspace:*",
     "@not-quite-my-tempo/db": "workspace:*",
+    "@not-quite-my-tempo/gemini": "workspace:*",
     "effect": "catalog:",
     "hono": "catalog:"
   },

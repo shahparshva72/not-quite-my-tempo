@@ -51,6 +51,49 @@ in sync when variables are introduced or changed. D1 and the
 `REVIEW_PULL_REQUEST_WORKFLOW` Workflow are configured as bindings in
 `apps/api/wrangler.jsonc`.
 
+## GitHub App credentials
+
+The review bot authenticates as a GitHub App installation to read pull
+request diffs and post reviews. Two secrets configure this
+(`apps/api/src/github/app-auth.ts` consumes them):
+
+- `GITHUB_APP_ID`: the numeric App ID from the GitHub App settings page.
+- `GITHUB_APP_PRIVATE_KEY`: the App's private key in PKCS#8 PEM format.
+  GitHub downloads keys as PKCS#1 (`BEGIN RSA PRIVATE KEY`); convert first:
+
+  ```sh
+  openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
+    -in app.pem -out app.pkcs8.pem
+  ```
+
+Locally, add both to `apps/api/.dev.vars` (gitignored, never commit). In
+production, store them as Worker secrets:
+
+```sh
+pnpm --filter @not-quite-my-tempo/api exec wrangler secret put GITHUB_APP_ID
+pnpm --filter @not-quite-my-tempo/api exec wrangler secret put GITHUB_APP_PRIVATE_KEY
+```
+
+The service mints a short-lived RS256 App JWT with WebCrypto and exchanges it
+for an installation token per review run inside the `review-pull-request`
+Workflow.
+
+## Gemini credentials
+
+The review itself is performed by the Gemini API through the
+`@not-quite-my-tempo/gemini` package (`packages/gemini`), which calls
+`generateContent` with structured JSON output and a fixed review persona.
+
+- `GEMINI_API_KEY` (required): add to `apps/api/.dev.vars` locally; in
+  production store it as a Worker secret:
+
+  ```sh
+  pnpm --filter @not-quite-my-tempo/api exec wrangler secret put GEMINI_API_KEY
+  ```
+
+- `GEMINI_MODEL` (optional): overrides the default `gemini-3.8-flash`. Not a
+  secret; set it under `vars` in `apps/api/wrangler.jsonc` if needed.
+
 Lint and format the workspace with Oxlint and Oxfmt:
 
 ```sh
@@ -95,8 +138,21 @@ the `opened`, `synchronize`, and `reopened` actions for the `pull_request` event
 Other event types and pull request actions return success without starting a
 review. Supported deliveries upsert the GitHub installation and repository,
 create one queued review run per repository, pull request number, and head SHA,
-and start `review-pull-request`. The Workflow marks the run running, performs a
-fake review, and marks it completed.
+and start `review-pull-request`. The Workflow marks the run running, mints a
+GitHub App installation token, fetches the pull request metadata and unified
+diff (filtering generated files and enforcing a size cap), reviews the diff
+with Gemini using structured JSON output, persists the findings and model to
+D1, posts the review to the pull request (a summary comment plus inline
+comments anchored to changed lines, with posted comment IDs written back to
+the findings), and marks the run completed. Failures record a stable
+`error_code` (`github_auth_error`, `diff_fetch_error`, `diff_too_large`,
+`gemini_error`, `post_review_error`, `db_error`, `review_run_not_found`, or
+`workflow_error`) on the run.
+
+Each installation is capped at 50 review runs per rolling 24 hours; deliveries
+beyond the cap are acknowledged with `rate_limited` and no review is started.
+Completed runs record the Gemini model and token usage (`input_tokens`,
+`output_tokens`, `total_tokens`) for cost tracking.
 
 For local end-to-end database debugging, create a review run for an existing
 repository and read it back through the Effect repository layer:
@@ -120,6 +176,9 @@ pnpm deploy
 
    ```dotenv
    GITHUB_WEBHOOK_SECRET=replace-with-a-random-local-secret
+   GITHUB_APP_ID=replace-with-the-github-app-id
+   GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...pkcs8 pem...\n-----END PRIVATE KEY-----"
+   GEMINI_API_KEY=replace-with-a-gemini-api-key
    ```
 
 2. Apply the schema and start the local Worker:

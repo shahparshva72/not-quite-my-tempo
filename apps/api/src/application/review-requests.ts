@@ -1,4 +1,12 @@
-import { Context, Data, Effect, Inspectable, Layer, Schema } from "effect";
+import {
+  Clock,
+  Context,
+  Data,
+  Effect,
+  Inspectable,
+  Layer,
+  Schema,
+} from "effect";
 import {
   GitHubInstallationRepository,
   GitHubRepositoryRepository,
@@ -46,7 +54,16 @@ export const ReviewWorkflowLive = (workflow: Workflow<ReviewWorkflowParams>) =>
     }),
   );
 
-export const enqueueReviewRequest = (request: ReviewRequest) =>
+// Per-installation cost guardrail: at most this many review runs per
+// rolling 24 hours before deliveries are acknowledged without a review.
+export const DAILY_REVIEW_RUN_CAP = 50;
+
+const DAY_MILLIS = 24 * 60 * 60 * 1000;
+
+export const handleReviewRequest = (
+  request: ReviewRequest,
+  dailyRunCap: number = DAILY_REVIEW_RUN_CAP,
+) =>
   Effect.gen(function* () {
     const installation = yield* GitHubInstallationRepository.upsert({
       githubInstallationId: request.installationId,
@@ -63,24 +80,36 @@ export const enqueueReviewRequest = (request: ReviewRequest) =>
       defaultBranch: request.defaultBranch,
     });
 
-    return yield* ReviewRunRepository.createOrFind({
-      repositoryId: repository.id,
-      pullRequestNumber: request.pullRequestNumber,
-      headSha: request.headSha,
-      trigger: request.trigger,
-    });
-  });
-
-export const handleReviewRequest = (request: ReviewRequest) =>
-  Effect.gen(function* () {
-    const result = yield* enqueueReviewRequest(request);
-
     const fields = {
       githubEvent: `pull_request.${request.trigger}`,
       repository: `${request.owner}/${request.repo}`,
       pullRequestNumber: request.pullRequestNumber,
       headSha: request.headSha,
     };
+
+    const nowMillis = yield* Clock.currentTimeMillis;
+
+    const recentRunCount = yield* ReviewRunRepository.countForInstallationSince(
+      installation.id,
+      new Date(nowMillis - DAY_MILLIS),
+    );
+
+    if (recentRunCount >= dailyRunCap) {
+      yield* logInfo("review_rate_limited", {
+        ...fields,
+        recentRunCount,
+        dailyRunCap,
+      });
+
+      return { status: "rate_limited" as const };
+    }
+
+    const result = yield* ReviewRunRepository.createOrFind({
+      repositoryId: repository.id,
+      pullRequestNumber: request.pullRequestNumber,
+      headSha: request.headSha,
+      trigger: request.trigger,
+    });
 
     return yield* ReviewRunCreation.$match(result, {
       Existing: ({ reviewRun }) =>
