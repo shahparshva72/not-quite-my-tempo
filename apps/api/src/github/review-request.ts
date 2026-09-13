@@ -8,7 +8,16 @@ export const ReviewTrigger = Schema.Literal(
 
 export type ReviewTrigger = typeof ReviewTrigger.Type;
 
-const GitHubId = Schema.Number.pipe(Schema.int(), Schema.positive());
+export const ReviewRequestTrigger = Schema.Literal(
+  "opened",
+  "synchronize",
+  "reopened",
+  "manual",
+);
+
+export type ReviewRequestTrigger = typeof ReviewRequestTrigger.Type;
+
+export const GitHubId = Schema.Number.pipe(Schema.int(), Schema.positive());
 
 export const ReviewRequest = Schema.Struct({
   installationId: GitHubId,
@@ -20,10 +29,17 @@ export const ReviewRequest = Schema.Struct({
   defaultBranch: Schema.NonEmptyString,
   pullRequestNumber: GitHubId,
   headSha: Schema.NonEmptyString,
-  trigger: ReviewTrigger,
+  trigger: ReviewRequestTrigger,
 });
 
 export type ReviewRequest = typeof ReviewRequest.Type;
+
+// Webhook deliveries can only produce the three pull_request actions;
+// "manual" comes from the /fletcher again comment command.
+const WebhookReviewRequest = Schema.Struct({
+  ...ReviewRequest.fields,
+  trigger: ReviewTrigger,
+});
 
 const ActionEnvelope = Schema.Struct({ action: Schema.String });
 
@@ -48,7 +64,7 @@ const PullRequestWebhook = Schema.Struct({
 
 const NormalizedPullRequestWebhook = Schema.transform(
   PullRequestWebhook,
-  ReviewRequest,
+  WebhookReviewRequest,
   {
     strict: true,
     decode: (webhook) => ({
@@ -110,6 +126,11 @@ export const decodePullRequestBody = (rawBody: ArrayBuffer) =>
       onSome: () =>
         Schema.decodeUnknown(Schema.parseJson(NormalizedPullRequestWebhook))(
           json,
-        ).pipe(Effect.map(Option.some), Effect.mapError(invalidPayload)),
+        ).pipe(
+          Effect.map((request): Option.Option<ReviewRequest> =>
+            Option.some(request),
+          ),
+          Effect.mapError(invalidPayload),
+        ),
     });
   });

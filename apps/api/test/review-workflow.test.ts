@@ -13,7 +13,9 @@ import {
 import type { GeminiReviewResult } from "@not-quite-my-tempo/gemini";
 
 import {
+  fetchReviewablePullRequest,
   isRetryableReviewError,
+  loadPriorReview,
   markReviewCompleted,
   markReviewRunning,
   persistReviewFindings,
@@ -154,6 +156,196 @@ describe("review workflow program", () => {
   });
 });
 
+describe("loadPriorReview", () => {
+  beforeEach(resetAndSeedRepository);
+
+  it("returns null when the pull request has no completed prior run", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reviewRuns = yield* ReviewRunRepository;
+
+        const reviewRun = yield* reviewRuns.create({
+          repositoryId: 1,
+          pullRequestNumber: 42,
+          headSha: "first123",
+          trigger: "opened",
+        });
+
+        return yield* loadPriorReview(reviewRun.id);
+      }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("returns the latest completed run's findings for the same pull request", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reviewRuns = yield* ReviewRunRepository;
+
+        const priorRun = yield* reviewRuns.create({
+          repositoryId: 1,
+          pullRequestNumber: 42,
+          headSha: "old456",
+          trigger: "opened",
+        });
+
+        yield* persistReviewFindings(priorRun.id, reviewResult);
+        yield* markReviewCompleted(priorRun.id);
+
+        // A failed run for the same PR must not shadow the completed one.
+        const failedRun = yield* reviewRuns.create({
+          repositoryId: 1,
+          pullRequestNumber: 42,
+          headSha: "broken789",
+          trigger: "synchronize",
+        });
+
+        yield* reviewRuns.markFailed(failedRun.id, "gemini_error", "boom");
+
+        const currentRun = yield* reviewRuns.create({
+          repositoryId: 1,
+          pullRequestNumber: 42,
+          headSha: "new123",
+          trigger: "synchronize",
+        });
+
+        return yield* loadPriorReview(currentRun.id);
+      }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+    );
+
+    expect(result?.headSha).toBe("old456");
+    expect(result?.findings).toEqual([
+      {
+        filePath: "src/tempo.ts",
+        line: 14,
+        severity: "warning",
+        title: "Off-by-one in beat subdivision",
+        message: "Guard subdivision before multiplying.",
+      },
+      {
+        filePath: "src/cymbal.ts",
+        line: null,
+        severity: "suggestion",
+        title: "File-level nit",
+        message: "Name the constant for the cymbal throw distance.",
+      },
+    ]);
+  });
+
+  it("ignores completed runs of other pull requests", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reviewRuns = yield* ReviewRunRepository;
+
+        const otherPrRun = yield* reviewRuns.create({
+          repositoryId: 1,
+          pullRequestNumber: 7,
+          headSha: "other123",
+          trigger: "opened",
+        });
+
+        yield* markReviewCompleted(otherPrRun.id);
+
+        const currentRun = yield* reviewRuns.create({
+          repositoryId: 1,
+          pullRequestNumber: 42,
+          headSha: "new123",
+          trigger: "opened",
+        });
+
+        return yield* loadPriorReview(currentRun.id);
+      }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+    );
+
+    expect(result).toBeNull();
+  });
+});
+
+describe("fetchReviewablePullRequest", () => {
+  const request = {
+    installationId: 1001,
+    installationAccountId: 2001,
+    installationAccountType: "Organization",
+    githubRepositoryId: 3001,
+    owner: "not-my-tempo",
+    repo: "app",
+    defaultBranch: "main",
+    pullRequestNumber: 42,
+    headSha: "config123",
+    trigger: "opened" as const,
+  };
+
+  const details = {
+    title: "Play Caravan at 240",
+    body: null,
+    baseRef: "main",
+    baseSha: "base",
+    headSha: "config123",
+  };
+
+  const clientWithConfig = (configFile: Option.Option<string>) =>
+    Layer.succeed(
+      GitHubPullRequestClient,
+      GitHubPullRequestClient.of({
+        fetchDiff: () => Effect.succeed(pullRequestDiff),
+        fetchDetails: () => Effect.succeed(details),
+        createReview: () => Effect.succeed({ reviewId: 1 }),
+        listReviewComments: () => Effect.succeed([]),
+        fetchRepositoryFile: () => Effect.succeed(configFile),
+      }),
+    );
+
+  it("falls back to defaults when .fletcher.json is absent", async () => {
+    const result = await Effect.runPromise(
+      fetchReviewablePullRequest("ghs_token", request).pipe(
+        Effect.provide(clientWithConfig(Option.none())),
+      ),
+    );
+
+    expect(result.config).toEqual({
+      enabled: true,
+      severityThreshold: "suggestion",
+      ignore: [],
+      intensity: "studio_band",
+    });
+    expect(result.diff).toContain("src/tempo.ts");
+  });
+
+  it("applies configured ignore globs to the diff", async () => {
+    const result = await Effect.runPromise(
+      fetchReviewablePullRequest("ghs_token", request).pipe(
+        Effect.provide(
+          clientWithConfig(
+            Option.some(
+              JSON.stringify({
+                intensity: "carnegie",
+                ignore: ["src/charts/**"],
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.config.intensity).toBe("carnegie");
+    expect(result.config.enabled).toBe(true);
+    expect(result.diff).not.toContain("src/charts/caravan.ts");
+    expect(result.diff).toContain("src/tempo.ts");
+  });
+
+  it("falls back to defaults when the config file is malformed", async () => {
+    const result = await Effect.runPromise(
+      fetchReviewablePullRequest("ghs_token", request).pipe(
+        Effect.provide(clientWithConfig(Option.some("{ not json"))),
+      ),
+    );
+
+    expect(result.config.enabled).toBe(true);
+    expect(result.config.intensity).toBe("studio_band");
+  });
+});
+
 describe("postReviewToGitHub", () => {
   beforeEach(resetAndSeedRepository);
 
@@ -212,6 +404,7 @@ describe("postReviewToGitHub", () => {
                 ],
           );
         },
+        fetchRepositoryFile: () => Effect.succeed(Option.none()),
       }),
     );
 

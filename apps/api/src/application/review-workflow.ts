@@ -1,18 +1,25 @@
 import { Data, Effect, Match } from "effect";
+import { Schema } from "effect";
 import {
   commentableLinesByFile,
+  defaultReviewConfig,
   filterUnifiedDiff,
   parseUnifiedDiff,
+  REVIEW_CONFIG_PATH,
+  ReviewConfig,
 } from "@not-quite-my-tempo/core";
 import { FindingRepository, ReviewRunRepository } from "@not-quite-my-tempo/db";
-import { GeminiReviewer } from "@not-quite-my-tempo/gemini";
+import {
+  filterReviewBySeverity,
+  GeminiReviewer,
+} from "@not-quite-my-tempo/gemini";
 import type { DatabaseError, Finding, ReviewRun } from "@not-quite-my-tempo/db";
-import type { GeminiReview } from "@not-quite-my-tempo/gemini";
+import type { GeminiReview, PriorReview } from "@not-quite-my-tempo/gemini";
 import type {
   GeminiReviewerError,
   GeminiReviewResult,
 } from "@not-quite-my-tempo/gemini";
-import type { Option } from "effect";
+import { Option } from "effect";
 
 import { GitHubAppAuth } from "../github/app-auth.js";
 import { GitHubPullRequestClient } from "../github/pull-request-client.js";
@@ -24,6 +31,7 @@ import type {
   ReviewSubmitError,
 } from "../github/pull-request-client.js";
 import type { ReviewRequest } from "../github/review-request.js";
+import { logError } from "../logging.js";
 import {
   buildFindingCommentBody,
   buildReviewSummaryBody,
@@ -130,7 +138,22 @@ export const mintInstallationToken = (installationId: number) =>
 export interface ReviewablePullRequest {
   readonly details: PullRequestDetails;
   readonly diff: string;
+  readonly config: ReviewConfig;
 }
+
+const resolveReviewConfig = (content: Option.Option<string>) =>
+  Option.match(content, {
+    onNone: () => Effect.succeed(defaultReviewConfig),
+    onSome: (json) =>
+      Schema.decodeUnknown(Schema.parseJson(ReviewConfig))(json).pipe(
+        Effect.catchTag("ParseError", (error) =>
+          logError("invalid_review_config", {
+            path: REVIEW_CONFIG_PATH,
+            error: error.message,
+          }).pipe(Effect.as(defaultReviewConfig)),
+        ),
+      ),
+  });
 
 export const fetchReviewablePullRequest = (
   installationToken: string,
@@ -146,31 +169,94 @@ export const fetchReviewablePullRequest = (
     };
 
     const details = yield* client.fetchDetails(installationToken, ref);
+
+    const configFile = yield* client.fetchRepositoryFile(
+      installationToken,
+      ref,
+      REVIEW_CONFIG_PATH,
+      request.headSha,
+    );
+
+    const config = yield* resolveReviewConfig(configFile);
     const diff = yield* client.fetchDiff(installationToken, ref);
 
     const result: ReviewablePullRequest = {
       details,
-      diff: filterUnifiedDiff(diff),
+      config,
+      diff: filterUnifiedDiff(diff, config.ignore),
     };
 
     return result;
   });
 
+/**
+ * Loads the findings of the most recent completed review of the same pull
+ * request (if any), slimmed down for the Gemini prompt. This gives the
+ * reviewer memory across `synchronize` pushes.
+ */
+export const loadPriorReview = (
+  reviewRunId: number,
+): Effect.Effect<
+  PriorReview | null,
+  DatabaseError | ReviewRunNotFoundError,
+  ReviewRunRepository | FindingRepository
+> =>
+  Effect.gen(function* () {
+    const currentRun = yield* requireReviewRun(
+      reviewRunId,
+      ReviewRunRepository.findById(reviewRunId),
+    );
+
+    const priorRun =
+      yield* ReviewRunRepository.findLatestCompletedForPullRequest(
+        currentRun.repositoryId,
+        currentRun.pullRequestNumber,
+        reviewRunId,
+      );
+
+    return yield* Option.match(priorRun, {
+      onNone: () => Effect.succeed(null),
+      onSome: (run) =>
+        FindingRepository.listByReviewRun(run.id).pipe(
+          Effect.map((findings): PriorReview => ({
+            headSha: run.headSha,
+            findings: findings.map((finding) => ({
+              filePath: finding.filePath,
+              line: finding.line,
+              severity: finding.severity,
+              title: finding.title,
+              message: finding.message,
+            })),
+          })),
+        ),
+    });
+  });
+
 export const performGeminiReview = (
   request: ReviewRequest,
-  details: PullRequestDetails,
-  diff: string,
+  pullRequest: ReviewablePullRequest,
+  priorReview: PriorReview | null,
 ) =>
   Effect.gen(function* () {
     const reviewer = yield* GeminiReviewer;
 
-    return yield* reviewer.review({
+    const result = yield* reviewer.review({
       repository: `${request.owner}/${request.repo}`,
       pullRequestNumber: request.pullRequestNumber,
-      title: details.title,
-      body: details.body,
-      diff,
+      title: pullRequest.details.title,
+      body: pullRequest.details.body,
+      diff: pullRequest.diff,
+      priorReview,
+      intensity: pullRequest.config.intensity,
     });
+
+    return {
+      ...result,
+      review: filterReviewBySeverity(
+        result.review,
+        pullRequest.config.severityThreshold,
+      ),
+    };
   });
 
 export const persistReviewFindings = (

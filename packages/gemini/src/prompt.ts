@@ -1,9 +1,31 @@
+import { Match } from "effect";
+
+import type { FindingSeverity } from "./schema.js";
+
+// Mirrors ReviewIntensity in @not-quite-my-tempo/core (kept dependency-free).
+export type ReviewIntensity = "sectional" | "studio_band" | "carnegie";
+
+export interface PriorFinding {
+  readonly filePath: string;
+  readonly line: number | null;
+  readonly severity: FindingSeverity;
+  readonly title: string | null;
+  readonly message: string;
+}
+
+export interface PriorReview {
+  readonly headSha: string;
+  readonly findings: readonly PriorFinding[];
+}
+
 export interface GeminiReviewInput {
   readonly repository: string;
   readonly pullRequestNumber: number;
   readonly title: string;
   readonly body: string | null;
   readonly diff: string;
+  readonly priorReview: PriorReview | null;
+  readonly intensity: ReviewIntensity;
 }
 
 export const FLETCHER_SYSTEM_PROMPT = `You are "Fletcher", a legendarily \
@@ -43,6 +65,16 @@ REVIEW RUBRIC
 - "line" must be a line number from the NEW version of the file, taken from
   the diff. Use null only for file-level findings.
 
+MEMORY
+- When a previous review is provided, you reviewed an earlier commit of this
+  same pull request. Compare it against the current diff.
+- Findings that are fixed: acknowledge them in the summary in one clipped,
+  grudging clause. Do not list them as findings.
+- Findings that are unchanged and still visible in the diff: re-raise them
+  once, escalated — raise the severity one level (suggestion → warning,
+  warning → critical) and note this is the second time.
+- Never re-raise a prior finding whose code no longer appears in the diff.
+
 VERDICT
 - "not_my_tempo": at least one critical finding, or the change is broadly
   sloppy.
@@ -53,6 +85,53 @@ OUTPUT
 - Respond only with JSON matching the provided response schema.
 - "summary" is the review opening: 2-5 sentences, persona voice, an honest
   overall assessment of the change.`;
+
+const intensitySection = (intensity: ReviewIntensity): string =>
+  Match.value(intensity).pipe(
+    Match.when(
+      "sectional",
+      () => `\n\nINTENSITY: sectional rehearsal. Dial the persona down: dry,
+curt, and businesslike. No theatrics, no catchphrases — just the findings
+and the verdict.`,
+    ),
+    Match.when("studio_band", () => ""),
+    Match.when(
+      "carnegie",
+      () => `\n\nINTENSITY: Carnegie. This is the performance. Hold the diff
+to the highest standard you can technically justify: scrutinize naming,
+edge cases, and tests. "good_job" requires a flawless change. The hard
+rules still apply — escalated standards, never fabricated findings.`,
+    ),
+    Match.exhaustive,
+  );
+
+export const buildSystemPrompt = (intensity: ReviewIntensity): string =>
+  `${FLETCHER_SYSTEM_PROMPT}${intensitySection(intensity)}`;
+
+const priorFindingLine = (finding: PriorFinding) => {
+  const location =
+    finding.line === null
+      ? finding.filePath
+      : `${finding.filePath}:${finding.line}`;
+
+  const title = finding.title === null ? "" : `${finding.title} — `;
+
+  return `- ${location} [${finding.severity}] ${title}${finding.message}`;
+};
+
+const priorReviewSection = (priorReview: PriorReview | null) => {
+  if (priorReview === null) {
+    return "";
+  }
+
+  if (priorReview.findings.length === 0) {
+    return `\n\nPrevious review (commit ${priorReview.headSha}): no findings\nwere raised. If this push introduced new problems, say so.`;
+  }
+
+  return `\n\nPrevious review (commit ${priorReview.headSha}) raised these\nfindings. Apply the MEMORY rules:\n${priorReview.findings
+    .map(priorFindingLine)
+    .join("\n")}`;
+};
 
 export const buildReviewUserPrompt = (input: GeminiReviewInput) => {
   const description =
@@ -67,7 +146,7 @@ Pull request: #${input.pullRequestNumber}
 Title: ${input.title}
 
 Description:
-${description}
+${description}${priorReviewSection(input.priorReview)}
 
 Unified diff:
 \`\`\`diff

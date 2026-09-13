@@ -160,6 +160,37 @@ the findings), and marks the run completed. Failures record a stable
 `gemini_error`, `post_review_error`, `db_error`, `review_run_not_found`, or
 `workflow_error`) on the run.
 
+Commenting `/fletcher again` on a pull request (via the `issue_comment`
+event) triggers a `manual` review of the PR's current head SHA through the
+same pipeline. Only comments whose author is the repository `OWNER`, an org
+`MEMBER`, or a `COLLABORATOR` are honored. Idempotency still applies: if the
+head SHA was already reviewed, the delivery reports `already_processed`.
+
+## Per-repository configuration
+
+Repositories may include a `.fletcher.json` at the root (read from the pull
+request's head SHA). All fields are optional; a missing or malformed file
+falls back to defaults and never fails a review:
+
+```json
+{
+  "enabled": true,
+  "severityThreshold": "suggestion",
+  "ignore": ["docs/**", "**/*.gen.ts"],
+  "intensity": "studio_band"
+}
+```
+
+- `enabled`: `false` skips the review entirely (the run completes with no
+  findings and no comment).
+- `severityThreshold`: minimum severity persisted and posted —
+  `suggestion` (default, everything), `warning`, or `critical`.
+- `ignore`: extra glob patterns merged with the built-in generated-file
+  ignore list. Globs match the full path; `**` crosses directories, `*` and
+  `?` do not.
+- `intensity`: persona dial — `sectional` (dry, no theatrics), `studio_band`
+  (default), or `carnegie` (maximum exactness).
+
 Each installation is capped at 50 review runs per rolling 24 hours; deliveries
 beyond the cap are acknowledged with `rate_limited` and no review is started.
 Completed runs record the Gemini model and token usage (`input_tokens`,
@@ -206,8 +237,8 @@ pnpm deploy
 4. In a GitHub App that is installed on the test repository, set the webhook
    URL to `<tunnel-url>/webhooks/github`, content type to `application/json`, and
    its secret to the exact value in `apps/api/.dev.vars`. Subscribe to pull
-   request events. A GitHub App delivery is required because the application
-   expects the payload's `installation.id`.
+   request and issue comment events. A GitHub App delivery is required because
+   the application expects the payload's `installation.id`.
 
 5. Open a pull request in an installation repository. Re-push the branch to test
    `synchronize`, or close and reopen it to test `reopened`. Wrangler logs emit
@@ -258,7 +289,8 @@ curl -i http://localhost:8787/webhooks/github \
 
 3. Set the GitHub App webhook URL to the deployed Worker URL followed by
    `/webhooks/github`, select `application/json`, configure the matching secret,
-   subscribe to pull request events, and install the app on the test repository.
+   subscribe to pull request and issue comment events, and install the app on
+   the test repository.
 
 4. Open a pull request and confirm its delivery received HTTP 202 in GitHub's
    **Recent deliveries**. In separate terminals, inspect Cloudflare logs,

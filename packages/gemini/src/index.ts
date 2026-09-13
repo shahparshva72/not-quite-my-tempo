@@ -1,8 +1,18 @@
-export { buildReviewUserPrompt, FLETCHER_SYSTEM_PROMPT } from "./prompt.js";
+export {
+  buildReviewUserPrompt,
+  buildSystemPrompt,
+  FLETCHER_SYSTEM_PROMPT,
+} from "./prompt.js";
 
-export type { GeminiReviewInput } from "./prompt.js";
+export type {
+  GeminiReviewInput,
+  PriorFinding,
+  PriorReview,
+  ReviewIntensity,
+} from "./prompt.js";
 
 export {
+  filterReviewBySeverity,
   FindingSeverity,
   GeminiFinding,
   GeminiReview,

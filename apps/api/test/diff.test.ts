@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   filterUnifiedDiff,
+  globToRegExp,
   isIgnoredDiffPath,
   parseUnifiedDiff,
   reviewableDiffFiles,
@@ -125,6 +126,13 @@ describe("reviewableDiffFiles", () => {
     ]);
   });
 
+  it("applies extra ignore globs from repository config", () => {
+    const filtered = filterUnifiedDiff(pullRequestDiff, ["src/charts/**"]);
+
+    expect(filtered).not.toContain("src/charts/caravan.ts");
+    expect(filtered).toContain("src/tempo.ts");
+  });
+
   it("ignores known generated paths anywhere in the tree", () => {
     expect(isIgnoredDiffPath("pnpm-lock.yaml")).toBe(true);
     expect(isIgnoredDiffPath("packages/db/drizzle/0000_init.sql")).toBe(true);
@@ -136,5 +144,22 @@ describe("reviewableDiffFiles", () => {
     expect(isIgnoredDiffPath("assets/logo.png")).toBe(true);
     expect(isIgnoredDiffPath("src/locks.ts")).toBe(false);
     expect(isIgnoredDiffPath("src/minify.js")).toBe(false);
+  });
+});
+
+describe("globToRegExp", () => {
+  it("lets ** cross directories while * stays within one segment", () => {
+    expect(globToRegExp("docs/**").test("docs/a/b.md")).toBe(true);
+    expect(globToRegExp("docs/**").test("src/docs.ts")).toBe(false);
+    expect(globToRegExp("**/*.gen.ts").test("a/b/c.gen.ts")).toBe(true);
+    expect(globToRegExp("src/*.ts").test("src/a.ts")).toBe(true);
+    expect(globToRegExp("src/*.ts").test("src/a/b.ts")).toBe(false);
+    expect(globToRegExp("*.md").test("README.md")).toBe(true);
+    expect(globToRegExp("*.md").test("docs/README.md")).toBe(false);
+  });
+
+  it("escapes regex metacharacters in literal segments", () => {
+    expect(globToRegExp(".fletcher.json").test(".fletcher.json")).toBe(true);
+    expect(globToRegExp(".fletcher.json").test("xfletcherxjson")).toBe(false);
   });
 });

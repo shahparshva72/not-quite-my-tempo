@@ -2,6 +2,8 @@ import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   buildReviewUserPrompt,
+  buildSystemPrompt,
+  filterReviewBySeverity,
   FLETCHER_SYSTEM_PROMPT,
   GeminiReview,
   GeminiReviewer,
@@ -19,6 +21,8 @@ const input: GeminiReviewInput = {
   title: "Play Caravan at 240",
   body: "Double time swing.",
   diff: "diff --git a/src/tempo.ts b/src/tempo.ts",
+  priorReview: null,
+  intensity: "studio_band",
 };
 
 const reviewJson = {
@@ -227,5 +231,104 @@ describe("golden review schema", () => {
     expect(FLETCHER_SYSTEM_PROMPT).toContain("never the author");
     expect(FLETCHER_SYSTEM_PROMPT).toContain("concrete, technically correct");
     expect(FLETCHER_SYSTEM_PROMPT).toContain("good_job");
+    expect(FLETCHER_SYSTEM_PROMPT).toContain("MEMORY");
+  });
+});
+
+describe("buildSystemPrompt", () => {
+  it("is the base persona at studio_band intensity", () => {
+    expect(buildSystemPrompt("studio_band")).toBe(FLETCHER_SYSTEM_PROMPT);
+  });
+
+  it("appends the intensity dial for the other settings", () => {
+    expect(buildSystemPrompt("sectional")).toContain("INTENSITY: sectional");
+    expect(buildSystemPrompt("carnegie")).toContain("INTENSITY: Carnegie");
+    expect(buildSystemPrompt("carnegie")).toContain("never fabricated");
+  });
+});
+
+describe("filterReviewBySeverity", () => {
+  const baseFinding = {
+    filePath: "src/tempo.ts",
+    line: 14,
+    category: "correctness",
+    confidence: 0.8,
+    title: "Off-by-one",
+    message: "Guard it.",
+  };
+
+  const review: GeminiReview = {
+    verdict: "not_my_tempo",
+    summary: "Sloppy.",
+    findings: [
+      { ...baseFinding, severity: "critical" },
+      { ...baseFinding, severity: "warning" },
+      { ...baseFinding, severity: "suggestion" },
+    ],
+  };
+
+  it("keeps everything at the suggestion threshold", () => {
+    expect(filterReviewBySeverity(review, "suggestion").findings).toHaveLength(
+      3,
+    );
+  });
+
+  it("drops below-threshold findings without touching the verdict", () => {
+    const filtered = filterReviewBySeverity(review, "warning");
+
+    expect(filtered.findings.map((finding) => finding.severity)).toEqual([
+      "critical",
+      "warning",
+    ]);
+    expect(filtered.verdict).toBe("not_my_tempo");
+
+    expect(filterReviewBySeverity(review, "critical").findings).toHaveLength(1);
+  });
+});
+
+describe("buildReviewUserPrompt", () => {
+  it("omits the previous review section without prior findings", () => {
+    expect(buildReviewUserPrompt(input)).not.toContain("Previous review");
+  });
+
+  it("lists prior findings with their locations when provided", () => {
+    const prompt = buildReviewUserPrompt({
+      ...input,
+      priorReview: {
+        headSha: "old456",
+        findings: [
+          {
+            filePath: "src/tempo.ts",
+            line: 14,
+            severity: "warning",
+            title: "Off-by-one in beat subdivision",
+            message: "Guard subdivision before multiplying.",
+          },
+          {
+            filePath: "src/cymbal.ts",
+            line: null,
+            severity: "suggestion",
+            title: null,
+            message: "Name the constant.",
+          },
+        ],
+      },
+    });
+
+    expect(prompt).toContain("Previous review (commit old456)");
+    expect(prompt).toContain(
+      "- src/tempo.ts:14 [warning] Off-by-one in beat subdivision \u2014 " +
+        "Guard subdivision before multiplying.",
+    );
+    expect(prompt).toContain("- src/cymbal.ts [suggestion] Name the constant.");
+  });
+
+  it("tells the model when the previous review was clean", () => {
+    const prompt = buildReviewUserPrompt({
+      ...input,
+      priorReview: { headSha: "old456", findings: [] },
+    });
+
+    expect(prompt).toContain("Previous review (commit old456): no findings");
   });
 });

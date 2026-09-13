@@ -286,6 +286,22 @@ const DEFAULT_IGNORED_PATH_PATTERNS: readonly RegExp[] = [
 export const isIgnoredDiffPath = (path: string): boolean =>
   DEFAULT_IGNORED_PATH_PATTERNS.some((pattern) => pattern.test(path));
 
+/**
+ * Converts an ignore glob to a RegExp anchored to the full path. `**` crosses
+ * directory boundaries, `*` and `?` do not.
+ */
+export const globToRegExp = (glob: string): RegExp => {
+  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+
+  const pattern = escaped
+    .replaceAll("**", "\u0000")
+    .replaceAll("*", "[^/]*")
+    .replaceAll("?", "[^/]")
+    .replaceAll("\u0000", ".*");
+
+  return new RegExp(`^${pattern}$`);
+};
+
 export const reviewableDiffFiles = (
   files: readonly DiffFile[],
 ): readonly DiffFile[] => files.filter((file) => !isIgnoredDiffPath(file.path));
@@ -323,8 +339,17 @@ export const commentableLinesByFile = (
  * Removes ignored file blocks from a raw unified diff, preserving the exact
  * original text of the remaining blocks so line numbers stay valid.
  */
-export const filterUnifiedDiff = (diff: string): string =>
-  diff
+export const filterUnifiedDiff = (
+  diff: string,
+  extraIgnoreGlobs: readonly string[] = [],
+): string => {
+  const extraPatterns = extraIgnoreGlobs.map(globToRegExp);
+
+  const isIgnored = (path: string) =>
+    isIgnoredDiffPath(path) ||
+    extraPatterns.some((pattern) => pattern.test(path));
+
+  return diff
     .split(/^(?=diff --git )/m)
     .filter((block) => {
       if (!block.startsWith("diff --git ")) {
@@ -333,6 +358,7 @@ export const filterUnifiedDiff = (diff: string): string =>
 
       const file = parseUnifiedDiff(block)[0];
 
-      return file === undefined ? false : !isIgnoredDiffPath(file.path);
+      return file === undefined ? false : !isIgnored(file.path);
     })
     .join("");
+};

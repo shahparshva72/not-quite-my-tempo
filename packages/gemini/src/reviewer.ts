@@ -9,7 +9,7 @@ import {
   Schema,
 } from "effect";
 
-import { buildReviewUserPrompt, FLETCHER_SYSTEM_PROMPT } from "./prompt.js";
+import { buildReviewUserPrompt, buildSystemPrompt } from "./prompt.js";
 import { GeminiReview, geminiResponseJsonSchema } from "./schema.js";
 import type { GeminiReviewInput } from "./prompt.js";
 
@@ -137,7 +137,7 @@ const requestReview = (
           },
           body: JSON.stringify({
             systemInstruction: {
-              parts: [{ text: FLETCHER_SYSTEM_PROMPT }],
+              parts: [{ text: buildSystemPrompt(input.intensity) }],
             },
             contents: [
               {

@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -182,6 +182,75 @@ describe("GitHubPullRequestClient.listReviewComments", () => {
       { id: 9001, path: "src/tempo.ts", line: 14, body: "Guard it." },
       { id: 9002, path: "src/cymbal.ts", line: null, body: "File-level." },
     ]);
+  });
+});
+
+describe("GitHubPullRequestClient.fetchRepositoryFile", () => {
+  it("fetches raw file content at the given ref", async () => {
+    const requests: { url: string; init: RequestInit | undefined }[] = [];
+
+    const fetchImpl: typeof fetch = (input, init) => {
+      requests.push({ url: String(input), init });
+
+      return Promise.resolve(new Response('{"enabled":false}'));
+    };
+
+    const result = await Effect.runPromise(
+      withClient({ baseUrl: "https://github.test", fetchImpl }, (client) =>
+        client.fetchRepositoryFile(
+          "ghs_token",
+          ref,
+          ".fletcher.json",
+          "head789",
+        ),
+      ),
+    );
+
+    expect(Option.getOrNull(result)).toBe('{"enabled":false}');
+    expect(requests[0]?.url).toBe(
+      "https://github.test/repos/shaffer/studio-band/contents/.fletcher.json?ref=head789",
+    );
+
+    const headers = new Headers(requests[0]?.init?.headers);
+    expect(headers.get("accept")).toBe("application/vnd.github.raw+json");
+  });
+
+  it("returns none when the file does not exist", async () => {
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(new Response("Not Found", { status: 404 }));
+
+    const result = await Effect.runPromise(
+      withClient({ fetchImpl }, (client) =>
+        client.fetchRepositoryFile(
+          "ghs_token",
+          ref,
+          ".fletcher.json",
+          "head789",
+        ),
+      ),
+    );
+
+    expect(Option.isNone(result)).toBe(true);
+  });
+
+  it("fails on other non-2xx responses", async () => {
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(new Response("nope", { status: 403 }));
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        withClient({ fetchImpl }, (client) =>
+          client.fetchRepositoryFile(
+            "ghs_token",
+            ref,
+            ".fletcher.json",
+            "head789",
+          ),
+        ),
+      ),
+    );
+
+    expect(error._tag).toBe("PullRequestResponseError");
   });
 });
 

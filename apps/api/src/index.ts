@@ -12,6 +12,8 @@ import type { Context } from "hono";
 
 import { ReviewWorkflowLive } from "./application/review-requests.js";
 import type { ReviewWorkflowParams } from "./application/review-requests.js";
+import { GitHubAppAuthLive } from "./github/app-auth.js";
+import { GitHubPullRequestClientLive } from "./github/pull-request-client.js";
 import { processGitHubWebhook } from "./github/webhook.js";
 import { logError } from "./logging.js";
 
@@ -19,6 +21,8 @@ export { ReviewPullRequestWorkflow } from "./workflows/review-pull-request.js";
 
 type Bindings = Env & {
   readonly GITHUB_WEBHOOK_SECRET: string;
+  readonly GITHUB_APP_ID: string;
+  readonly GITHUB_APP_PRIVATE_KEY: string;
   readonly REVIEW_PULL_REQUEST_WORKFLOW: Workflow<ReviewWorkflowParams>;
 };
 
@@ -114,6 +118,13 @@ app.post("/webhooks/github", (c) => {
       ),
       Effect.provide(makeLiveLayer(c.env.DB)),
       Effect.provide(ReviewWorkflowLive(c.env.REVIEW_PULL_REQUEST_WORKFLOW)),
+      Effect.provide(
+        GitHubAppAuthLive({
+          appId: c.env.GITHUB_APP_ID,
+          privateKey: c.env.GITHUB_APP_PRIVATE_KEY,
+        }),
+      ),
+      Effect.provide(GitHubPullRequestClientLive({})),
       Effect.match({
         onFailure: (cause) =>
           Match.value(cause).pipe(

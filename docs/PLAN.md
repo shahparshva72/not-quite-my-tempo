@@ -242,6 +242,85 @@ posts a review with at least one correctly anchored inline comment.
 
 Every addition updates `.env.example` and the README in the same change.
 
+## Phase 7 — Findings memory on `synchronize`
+
+Every push currently gets an amnesiac review. Feed the prior review into the
+prompt so Fletcher remembers:
+
+1. **Data**: for the current run, load the most recent _completed_ prior run
+   for the same (repository, PR number) — one run only, not full history, to
+   keep prompt noise down — and its findings
+   (`ReviewRunRepository.findLatestCompletedForPullRequest` +
+   existing `FindingRepository.listByReviewRun`).
+2. **Prompt**: `GeminiReviewInput` gains `priorReview: PriorReview | null`
+   (`headSha` + slimmed findings: path, line, severity, title, message). The
+   user prompt appends a "previous review" section instructing the model to:
+   - acknowledge fixed findings briefly in the summary (grudgingly),
+   - not re-raise unchanged findings the author already saw,
+   - escalate severity/tone when the same defect survives another push.
+3. **Workflow**: new durable step `load prior findings` between
+   `fetch pull request` and `run gemini review`; result is serializable and
+   memoized like every other step.
+4. **No schema changes** — everything needed is already in D1.
+
+## Phase 9 — `.fletcher.json` config + command guard
+
+Per-repo configuration read from the PR's head SHA, plus the one real
+security gap in the command path.
+
+1. **Config schema** (`packages/core/src/review-config.ts`), all fields
+   optional with defaults:
+
+   ```json
+   {
+     "enabled": true,
+     "severityThreshold": "suggestion",
+     "ignore": ["docs/**", "**/*.gen.ts"],
+     "intensity": "studio_band"
+   }
+   ```
+
+   - `severityThreshold`: minimum severity persisted/posted
+     (`suggestion` = everything, `critical` = criticals only).
+   - `ignore`: extra glob patterns merged with the built-in ignore list
+     (globs anchored to the full path; `**` crosses directories, `*` does
+     not).
+   - `intensity`: persona dial — `sectional` (dry, minimal theatrics),
+     `studio_band` (default), `carnegie` (maximum exactness).
+   - Malformed config → log a warning, fall back to defaults. Never fail a
+     review over a bad config file.
+
+2. **Fetch**: `GitHubPullRequestClient.fetchRepositoryFile` via the contents
+   API with `Accept: application/vnd.github.raw+json` at `ref=headSha`;
+   404 → `Option.none` → defaults.
+3. **Apply**: `enabled: false` → mark run completed, log skip, no Gemini
+   call. `ignore` → extra patterns into `filterUnifiedDiff`. `intensity` →
+   system prompt section. `severityThreshold` → filter Gemini findings
+   before persisting (memoized in the review step, so persist + post stay
+   consistent).
+4. **Command guard**: `/fletcher again` only honors comments whose
+   `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`.
+
+## Phase 10 — Read API + GitHub OAuth
+
+The API surface the dashboard needs, gated by user auth.
+
+1. Read-only JSON endpoints: repositories, review runs per repo, findings
+   per run, token-spend rollup.
+2. GitHub OAuth login (user identity, distinct from the App's machine
+   identity): code exchange → `GET /user/installations` → authorize the
+   user for exactly the installations they can access. Session = signed
+   HttpOnly cookie (HMAC via WebCrypto). No user table — GitHub is the user
+   store, joined against `github_installations`.
+3. Remove or auth-gate `POST /debug/review-runs`.
+
+## Phase 11 — Dashboard UI
+
+Start with Hono JSX server-rendered from the same Worker (zero new infra);
+upgrade to a separate SPA only if the UI outgrows it. Views: runs per repo
+(status, verdict, error code), findings per run, token spend, and read-only
+display of the effective `.fletcher.json`.
+
 ## Suggested sequencing
 
 Phases 1–2 are pure GitHub plumbing and can land independently. Phase 3 is

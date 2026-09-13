@@ -3,10 +3,19 @@ import { Effect } from "effect";
 export {
   commentableLinesByFile,
   filterUnifiedDiff,
+  globToRegExp,
   isIgnoredDiffPath,
   parseUnifiedDiff,
   reviewableDiffFiles,
 } from "./diff.js";
+
+export {
+  defaultReviewConfig,
+  REVIEW_CONFIG_PATH,
+  ReviewConfig,
+  ReviewIntensity,
+  ReviewSeverityThreshold,
+} from "./review-config.js";
 
 export type {
   DiffFile,

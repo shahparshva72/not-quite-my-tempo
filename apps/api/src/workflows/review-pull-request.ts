@@ -11,6 +11,7 @@ import type { GeminiReviewerConfig } from "@not-quite-my-tempo/gemini";
 import {
   fetchReviewablePullRequest,
   isRetryableReviewError,
+  loadPriorReview,
   markReviewCompleted,
   markReviewFailed,
   markReviewRunning,
@@ -169,14 +170,32 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           ),
         );
 
+        if (!pullRequest.config.enabled) {
+          yield* runStep(
+            step,
+            "mark review run completed",
+            markReviewCompleted(reviewRunId).pipe(
+              Effect.provide(databaseLayer),
+            ),
+          );
+
+          yield* logInfo("review_skipped_disabled", fields);
+
+          return { skipped: true } as const;
+        }
+
+        const priorReview = yield* runStep(
+          step,
+          "load prior findings",
+          loadPriorReview(reviewRunId).pipe(Effect.provide(databaseLayer)),
+        );
+
         const reviewResult = yield* runStep(
           step,
           "run gemini review",
-          performGeminiReview(
-            request,
-            pullRequest.details,
-            pullRequest.diff,
-          ).pipe(Effect.provide(geminiLayer)),
+          performGeminiReview(request, pullRequest, priorReview).pipe(
+            Effect.provide(geminiLayer),
+          ),
         );
 
         const persisted = yield* runStep(

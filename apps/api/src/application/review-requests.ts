@@ -14,8 +14,11 @@ import {
   ReviewRunRepository,
 } from "@not-quite-my-tempo/db";
 
+import { GitHubAppAuth } from "../github/app-auth.js";
+import { GitHubPullRequestClient } from "../github/pull-request-client.js";
 import { ReviewRequest } from "../github/review-request.js";
 import { logError, logInfo } from "../logging.js";
+import type { ManualReviewCommand } from "../github/manual-command.js";
 
 export const ReviewWorkflowParams = Schema.Struct({
   reviewRunId: Schema.Number.pipe(Schema.int(), Schema.positive()),
@@ -59,6 +62,37 @@ export const ReviewWorkflowLive = (workflow: Workflow<ReviewWorkflowParams>) =>
 export const DAILY_REVIEW_RUN_CAP = 50;
 
 const DAY_MILLIS = 24 * 60 * 60 * 1000;
+
+/**
+ * Handles a `/fletcher again` comment: resolves the pull request's current
+ * head SHA as the GitHub App installation and enqueues a `manual` review
+ * through the normal path (idempotency and the daily cap both apply).
+ */
+export const handleManualReviewCommand = (command: ManualReviewCommand) =>
+  Effect.gen(function* () {
+    const auth = yield* GitHubAppAuth;
+    const client = yield* GitHubPullRequestClient;
+
+    const token = yield* auth.mintInstallationToken(command.installationId);
+
+    const details = yield* client.fetchDetails(token.token, {
+      owner: command.owner,
+      repo: command.repo,
+      pullRequestNumber: command.pullRequestNumber,
+    });
+
+    yield* logInfo("manual_review_requested", {
+      repository: `${command.owner}/${command.repo}`,
+      pullRequestNumber: command.pullRequestNumber,
+      headSha: details.headSha,
+    });
+
+    return yield* handleReviewRequest({
+      ...command,
+      headSha: details.headSha,
+      trigger: "manual",
+    });
+  });
 
 export const handleReviewRequest = (
   request: ReviewRequest,

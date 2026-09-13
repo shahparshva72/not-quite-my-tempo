@@ -1,4 +1,4 @@
-import { and, count, eq, gte } from "drizzle-orm";
+import { and, count, desc, eq, gte, ne } from "drizzle-orm";
 import { Array, Data, Effect, Option } from "effect";
 
 import { databaseEffect, DatabaseError } from "../errors.js";
@@ -129,6 +129,29 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
             client.select().from(reviewRuns).where(eq(reviewRuns.id, id)).get(),
           ).pipe(Effect.map(Option.fromNullable)),
         findByPullRequestCommit,
+        findLatestCompletedForPullRequest: (
+          repositoryId: number,
+          pullRequestNumber: number,
+          excludeReviewRunId: number,
+        ) =>
+          databaseEffect(
+            "review_runs.find_latest_completed_for_pull_request",
+            () =>
+              client
+                .select()
+                .from(reviewRuns)
+                .where(
+                  and(
+                    eq(reviewRuns.repositoryId, repositoryId),
+                    eq(reviewRuns.pullRequestNumber, pullRequestNumber),
+                    eq(reviewRuns.status, "completed"),
+                    ne(reviewRuns.id, excludeReviewRunId),
+                  ),
+                )
+                .orderBy(desc(reviewRuns.createdAt), desc(reviewRuns.id))
+                .limit(1)
+                .get(),
+          ).pipe(Effect.map(Option.fromNullable)),
         markRunning: (id: number) =>
           databaseEffect("review_runs.mark_running", () =>
             client

@@ -22,12 +22,15 @@ then this file for exactly where things stand and what to do next.
 | 4     | Wire the Workflow         | ✅ Done      |
 | 5     | Post the review to GitHub | ✅ Done      |
 | 6     | Hardening & operations    | 🟡 Core done |
+| 7     | Findings memory           | ✅ Done      |
+| 8     | `/fletcher again` command | ✅ Done      |
+| 9     | `.fletcher.json` + guard  | ✅ Done      |
 
-**Next task:** Phase 6 stretch items in any order: `.fletcher.json` repo
-config, `/fletcher again` comment command, prior-findings memory on
-`synchronize`.
-Remember `pnpm db:migrate:local` (and `db:migrate:remote` before deploy) —
-migration `0001_abandoned_lorna_dane.sql` adds the token usage columns.
+**Next task:** Phase 10 (see PLAN.md) — read-only JSON API (repos, runs,
+findings, token spend) followed by GitHub OAuth login with signed-cookie
+sessions, then auth-gate or remove `POST /debug/review-runs`. Operational
+reminders: subscribe the GitHub App to issue comment events, and run
+`pnpm db:migrate:remote` for `0001_*` before the next deploy if not done.
 
 ---
 
@@ -268,10 +271,11 @@ headSha }` via `Schema` decode). Tagged errors:
       both migrations (it hardcodes the list — extend again for `0002_*`).
 - [ ] Stretch: `.fletcher.json` repo config (severity threshold, ignore
       globs, persona intensity).
-- [ ] Stretch: `/fletcher again` issue-comment command (`manual` trigger
-      already exists in the schema).
+- [x] Stretch: `/fletcher again` issue-comment command — done as Phase 8.
 - [ ] Stretch: prior-findings memory on `synchronize`.
-- [x] Manual end-to-end verification with a real GitHub App + Gemini key:
+- [x] Manual end-to-end verification with a real GitHub App + Gemini key
+      (performed 2026-09-14: live webhook → Workflow → Gemini → posted
+      review confirmed).
       private-repository PR webhook delivery, durable Workflow execution,
       Gemini structured review, summary and inline GitHub comments, D1
       findings/model/token persistence, and duplicate delivery handling.
@@ -285,6 +289,132 @@ headSha }` via `Schema` decode). Tagged errors:
   can't burn Gemini spend by failing repeatedly past the cap.
 - Remote deploys now require `pnpm db:migrate:remote` for `0001_*` before
   shipping this code.
+
+## Phase 7 — Findings memory on `synchronize` ✅
+
+- [x] `ReviewRunRepository.findLatestCompletedForPullRequest` (repository,
+      PR number, excluded run ID) — latest **completed** prior run only
+      (failed runs never shadow a completed review).
+- [x] `loadPriorReview(reviewRunId)` in
+      `apps/api/src/application/review-workflow.ts`: resolves the current
+      run → prior completed run → slims its findings to
+      `PriorFinding { filePath, line, severity, title, message }`; returns
+      `PriorReview | null` (serializable).
+- [x] `GeminiReviewInput.priorReview: PriorReview | null` (breaking change,
+      all call sites updated). User prompt gains a "Previous review (commit
+      …)" section — including an explicit "no findings were raised" variant
+      for clean prior reviews. System prompt gains a MEMORY block:
+      acknowledge fixes grudgingly in the summary, don't re-raise unchanged
+      findings verbatim, escalate severity one level on repeat offenses.
+- [x] New durable Workflow step `load prior findings` between
+      `fetch pull request` and `run gemini review`.
+- [x] No schema changes.
+- [x] Tests: prompt section rendering (with/without/empty prior review),
+      MEMORY guardrail pinned in the golden test, and three D1 integration
+      tests for `loadPriorReview` (no prior, latest-completed selection with
+      a failed run in between, other-PR isolation). 63 tests total.
+
+### Handoff notes (Phase 7)
+
+- Only the **single most recent completed** prior review is fed to the
+  prompt, by design — full history is noise and token spend. Revisit only if
+  repeat-offense escalation proves too forgetful across 3+ pushes.
+- The `opened` trigger also benefits: a reopened PR (new run after a
+  completed one) gets memory for free.
+- Escalation happens in the model via prompt rules, not in code — there is
+  no programmatic severity bump. Keep it that way unless evals show the
+  model ignores the MEMORY rules.
+- **Start next:** `/fletcher again` (see "Next task" at the top).
+
+## Phase 8 — `/fletcher again` comment command ✅
+
+- [x] `ReviewRequest.trigger` widened to include `manual`
+      (`ReviewRequestTrigger`); the pull_request webhook transform stays
+      narrow via an internal `WebhookReviewRequest` struct (webhooks can
+      never decode to `manual`).
+- [x] `apps/api/src/github/manual-command.ts`: `decodeIssueCommentBody`
+      decodes `issue_comment` deliveries; only `created` comments starting
+      with `/fletcher again` (case-insensitive, trimmed) on actual pull
+      requests (`issue.pull_request` present) produce a command — everything
+      else is `None`/ignored, never a 400.
+- [x] `handleManualReviewCommand` in `review-requests.ts`: mints an
+      installation token, resolves the current head SHA via `fetchDetails`,
+      then funnels into `handleReviewRequest` with `trigger: "manual"` — so
+      idempotency (`already_processed` for an already-reviewed SHA) and the
+      daily cap both apply unchanged.
+- [x] Webhook routing: `issue_comment` arm in `processGitHubWebhook`; the
+      route in `index.ts` now provides `GitHubAppAuthLive` +
+      `GitHubPullRequestClientLive` (Bindings gained `GITHUB_APP_ID` /
+      `GITHUB_APP_PRIVATE_KEY`).
+- [x] README: command documented; webhook setup steps now say to subscribe
+      to issue comment events.
+- [x] Tests: decoder (command / ordinary comment / non-PR issue) and a full
+      `handleManualReviewCommand` integration test with stub auth + client +
+      workflow layers over real D1 (verifies `manual` trigger and resolved
+      head SHA). 67 tests total.
+
+### Handoff notes (Phase 8)
+
+- **Operational prerequisite:** the GitHub App must be subscribed to
+  **Issue comment** events (and have Pull requests read/write + Issues read
+  permissions) or the command silently never arrives.
+- Malformed or irrelevant `issue_comment` payloads are ignored (200-path),
+  by design — only `pull_request` payloads with supported actions can
+  produce a 400.
+- No permission check on who commented: anyone who can comment on the PR
+  can trigger a re-review. The daily cap is the only brake. Consider
+  restricting to collaborators (`author_association` field) as a follow-up.
+- Errors during head-SHA resolution (auth/API failures) surface as 500s on
+  the webhook delivery — visible in GitHub's delivery log, retryable via
+  GitHub's redeliver button.
+- ~~No permission check on who commented~~ — fixed in Phase 9
+  (`author_association` guard).
+
+## Phase 9 — `.fletcher.json` config + command guard ✅
+
+- [x] `packages/core/src/review-config.ts`: `ReviewConfig` schema with
+      defaults (`enabled: true`, `severityThreshold: "suggestion"`,
+      `ignore: []`, `intensity: "studio_band"`), `defaultReviewConfig`,
+      `REVIEW_CONFIG_PATH`.
+- [x] `globToRegExp` in core (`**` crosses directories, `*`/`?` do not;
+      metacharacters escaped); `filterUnifiedDiff` accepts extra ignore
+      globs merged with the built-in list.
+- [x] `GitHubPullRequestClient.fetchRepositoryFile` — contents API with
+      `Accept: application/vnd.github.raw+json` at `ref=headSha`; 404 →
+      `Option.none`.
+- [x] `fetchReviewablePullRequest` resolves the config (malformed file →
+      `invalid_review_config` log + defaults, never a failure) and applies
+      ignore globs to the diff; returns `config` alongside details + diff.
+- [x] `enabled: false` → Workflow marks the run completed and logs
+      `review_skipped_disabled` before any Gemini/GitHub calls.
+- [x] `intensity` → `buildSystemPrompt(intensity)` in `packages/gemini`
+      (`sectional` / `studio_band` = base prompt / `carnegie`);
+      `severityThreshold` → `filterReviewBySeverity` applied inside the
+      memoized review step so persist + post stay consistent.
+- [x] `/fletcher again` now requires `comment.author_association` ∈
+      {OWNER, MEMBER, COLLABORATOR}.
+- [x] Tests: config resolution (absent/malformed/applied globs), glob
+      semantics, severity filtering, intensity prompt variants, contents-API
+      client (raw fetch / 404 / 403), non-collaborator command rejection.
+      81 tests total.
+
+### Handoff notes (Phase 9)
+
+- A disabled repo still **creates a run row** (status `completed`, zero
+  findings) — deliberate, so the daily-cap math and audit trail stay simple.
+- `severityThreshold` filtering happens inside the `run gemini review` step,
+  _after_ the model call — the model still sees and weighs everything; the
+  threshold only gates persistence/posting. Verdict is not recomputed.
+- The config is read at the PR's **head SHA** — a PR can change its own
+  review config. Acceptable for now; pin to the default branch if it gets
+  abused.
+- `ReviewIntensity` literal union is duplicated in `packages/gemini`
+  (dependency-free by design) — keep the two in sync.
+- Note: `postReviewToGitHub` gained a short poll (3 × 250 ms) for
+  `listReviewComments` eventual consistency — added by the user during live
+  e2e testing; preserved.
+- **Start next:** Phase 10 — read API + GitHub OAuth (PLAN.md has the
+  design).
 - Live verification used `shahparshva72/cv#14` with an isolated arithmetic
   fixture. It confirmed a `not_my_tempo` verdict and a correctly anchored
   critical finding on line 4.

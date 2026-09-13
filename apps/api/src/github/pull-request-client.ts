@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 
 const GITHUB_API_BASE_URL = "https://api.github.com";
 
@@ -130,6 +130,15 @@ export interface GitHubPullRequestClientService {
     ref: PullRequestRef,
     reviewId: number,
   ) => Effect.Effect<readonly PostedReviewComment[], ReviewSubmitError>;
+  readonly fetchRepositoryFile: (
+    installationToken: string,
+    ref: PullRequestRef,
+    filePath: string,
+    gitRef: string,
+  ) => Effect.Effect<
+    Option.Option<string>,
+    PullRequestRequestError | PullRequestResponseError
+  >;
 }
 
 export class GitHubPullRequestClient extends Context.Tag(
@@ -314,6 +323,50 @@ export const GitHubPullRequestClientLive = (
           );
 
           return { reviewId: decoded.id };
+        }),
+      fetchRepositoryFile: (installationToken, ref, filePath, gitRef) =>
+        Effect.gen(function* () {
+          const baseUrl = config.baseUrl ?? GITHUB_API_BASE_URL;
+
+          const fetchImpl =
+            config.fetchImpl ??
+            ((input: RequestInfo | URL, init?: RequestInit) =>
+              globalThis.fetch(input, init));
+
+          const response = yield* Effect.tryPromise({
+            try: () =>
+              fetchImpl(
+                `${baseUrl}/repos/${ref.owner}/${ref.repo}/contents/${filePath}?ref=${gitRef}`,
+                {
+                  method: "GET",
+                  headers: {
+                    accept: "application/vnd.github.raw+json",
+                    authorization: `Bearer ${installationToken}`,
+                    "user-agent": USER_AGENT,
+                    "x-github-api-version": GITHUB_API_VERSION,
+                  },
+                },
+              ),
+            catch: (cause) => new PullRequestRequestError({ cause }),
+          });
+
+          const body = yield* Effect.tryPromise({
+            try: () => response.text(),
+            catch: (cause) => new PullRequestRequestError({ cause }),
+          });
+
+          if (response.status === 404) {
+            return Option.none<string>();
+          }
+
+          if (!response.ok) {
+            return yield* new PullRequestResponseError({
+              status: response.status,
+              body,
+            });
+          }
+
+          return Option.some(body);
         }),
       listReviewComments: (installationToken, ref, reviewId) =>
         Effect.gen(function* () {

@@ -36,6 +36,27 @@ export const GeminiReview = Schema.Struct({
 
 export type GeminiReview = typeof GeminiReview.Type;
 
+const severityRank: Record<FindingSeverity, number> = {
+  critical: 3,
+  warning: 2,
+  suggestion: 1,
+};
+
+/**
+ * Drops findings below the configured severity threshold. The verdict and
+ * summary are left untouched — the model already weighed everything; the
+ * threshold only controls what gets persisted and posted.
+ */
+export const filterReviewBySeverity = (
+  review: GeminiReview,
+  threshold: FindingSeverity,
+): GeminiReview => ({
+  ...review,
+  findings: review.findings.filter(
+    (finding) => severityRank[finding.severity] >= severityRank[threshold],
+  ),
+});
+
 /**
  * The response schema sent to Gemini's `generationConfig.responseSchema` so
  * structured output decodes directly into {@link GeminiReview}. Kept in sync

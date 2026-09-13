@@ -1,7 +1,11 @@
 import { Data, Effect, Match, Option } from "effect";
 
-import { handleReviewRequest } from "../application/review-requests.js";
+import {
+  handleManualReviewCommand,
+  handleReviewRequest,
+} from "../application/review-requests.js";
 import { logInfo } from "../logging.js";
+import { decodeIssueCommentBody } from "./manual-command.js";
 import { decodePullRequestBody } from "./review-request.js";
 import { verifyGitHubWebhookSignature } from "./signature.js";
 
@@ -47,6 +51,19 @@ export const processGitHubWebhook = (
               onNone: () => ignoredWebhook,
               onSome: (request) =>
                 handleReviewRequest(request).pipe(
+                  Effect.map((result): GitHubWebhookResult => result),
+                ),
+            }),
+          ),
+        ),
+      ),
+      Match.when("issue_comment", () =>
+        decodeIssueCommentBody(rawBody).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => ignoredWebhook,
+              onSome: (command) =>
+                handleManualReviewCommand(command).pipe(
                   Effect.map((result): GitHubWebhookResult => result),
                 ),
             }),
