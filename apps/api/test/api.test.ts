@@ -11,14 +11,21 @@ const request = (path: string, init?: RequestInit) =>
   app.request(`https://example.com${path}`, init, testEnv);
 
 describe("Worker", () => {
-  it("reports service metadata", async () => {
+  it("serves the landing page to signed-out visitors", async () => {
     const response = await request("/");
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      name: "not-quite-my-tempo-api",
-      message: "Hono on Cloudflare Workers with D1 and Effect",
-    });
+    expect(await response.text()).toContain('href="/auth/login"');
+  });
+
+  it("sends signed-in visitors from the root to the dashboard", async () => {
+    await resetAndSeedRepository();
+    const cookie = await sessionCookie([3001]);
+
+    const response = await request("/", { headers: { cookie } });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/dashboard");
   });
 
   it("reports health", async () => {

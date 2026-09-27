@@ -121,6 +121,21 @@ export const handleReviewRequest = (
       headSha: request.headSha,
     };
 
+    if (
+      installation.status !== "active" ||
+      repository.removedAt !== null ||
+      !repository.enabled
+    ) {
+      yield* logInfo("review_skipped_inactive_repository", {
+        ...fields,
+        installationStatus: installation.status,
+        repositoryRemoved: repository.removedAt !== null,
+        repositoryEnabled: repository.enabled,
+      });
+
+      return { status: "ignored" as const };
+    }
+
     const nowMillis = yield* Clock.currentTimeMillis;
 
     const recentRunCount = yield* ReviewRunRepository.countForInstallationSince(

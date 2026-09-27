@@ -1,11 +1,16 @@
 import { env } from "cloudflare:workers";
-import { Effect, Option } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeLiveLayer } from "@not-quite-my-tempo/db";
 
 import app from "../src/index";
 import { GitHubOAuthLive } from "../src/auth/github-oauth";
 import { createAuthRoutes } from "../src/auth/routes";
+import {
+  GitHubAppAuth,
+  GitHubInstallationTokenError,
+} from "../src/github/app-auth";
+import { GitHubInstallationClient } from "../src/github/installation-client";
 import { verifySession } from "../src/auth/session";
 import { sessionCookie, TEST_SESSION_SECRET } from "./authentication";
 import { resetAndSeedRepository } from "./database";
@@ -29,7 +34,18 @@ const identityFetch =
         return Promise.resolve(Response.json({ id: 4001, login }));
       case "/user/installations":
         return Promise.resolve(
-          Response.json({ installations: [{ id: 1001 }] }),
+          Response.json({
+            installations: [
+              {
+                id: 1001,
+                account: {
+                  id: 2001,
+                  login: "not-my-tempo",
+                  type: "Organization",
+                },
+              },
+            ],
+          }),
         );
       case "/user/installations/1001/repositories":
         return Promise.resolve(Response.json({ repositories: [{ id: 3001 }] }));
@@ -225,5 +241,127 @@ describe("account sign-in and sign-out", () => {
     );
 
     expect(stillActive.status).toBe(200);
+  });
+});
+
+describe("sign-in installation sync", () => {
+  beforeEach(resetAndSeedRepository);
+
+  const account = (id: number) => ({
+    id,
+    account: { id: id + 1000, login: `org-${id}`, type: "Organization" },
+  });
+
+  // The user sees stored installation 1001 and new installation 5005.
+  const accessFetch =
+    (repositoryIds: readonly number[]): typeof fetch =>
+    (input) => {
+      const path = new URL(String(input)).pathname;
+
+      switch (path) {
+        case "/login/oauth/access_token":
+          return Promise.resolve(Response.json({ access_token: "user-token" }));
+        case "/user":
+          return Promise.resolve(Response.json({ id: 4001, login: "neiman" }));
+        case "/user/installations":
+          return Promise.resolve(
+            Response.json({ installations: [account(1001), account(5005)] }),
+          );
+        case "/user/installations/1001/repositories":
+          return Promise.resolve(
+            Response.json({
+              repositories: repositoryIds.map((id) => ({ id })),
+            }),
+          );
+        case "/user/installations/5005/repositories":
+          return Promise.resolve(Response.json({ repositories: [] }));
+        default:
+          return Promise.resolve(new Response("Unexpected", { status: 500 }));
+      }
+    };
+
+  const signIn = async (
+    cookie: string,
+    options: { repositoryIds?: readonly number[]; failSync?: boolean } = {},
+  ) => {
+    const synced: number[] = [];
+
+    const githubAppLayer = Layer.merge(
+      Layer.succeed(
+        GitHubAppAuth,
+        GitHubAppAuth.of({
+          mintInstallationToken: (installationId) => {
+            synced.push(installationId);
+
+            return options.failSync === true
+              ? Effect.fail(
+                  new GitHubInstallationTokenError({ status: 503, body: "" }),
+                )
+              : Effect.succeed({ token: "ghs_sync", expiresAt: new Date() });
+          },
+        }),
+      ),
+      Layer.succeed(
+        GitHubInstallationClient,
+        GitHubInstallationClient.of({
+          listRepositories: () => Effect.succeed([]),
+        }),
+      ),
+    );
+
+    const routes = createAuthRoutes(
+      GitHubOAuthLive({
+        clientId: testEnv.GITHUB_OAUTH_CLIENT_ID,
+        clientSecret: testEnv.GITHUB_OAUTH_CLIENT_SECRET,
+        fetchImpl: accessFetch(options.repositoryIds ?? [3001]),
+      }),
+      githubAppLayer,
+    );
+
+    const response = await routes.request(
+      "https://example.com/callback?code=valid&state=expected",
+      { headers: { cookie: `nqmt_oauth_state=expected; ${cookie}` } },
+      testEnv,
+    );
+
+    return { response, synced };
+  };
+
+  it("syncs installations the user can see that are not stored yet", async () => {
+    const { response, synced } = await signIn("");
+
+    expect(response.headers.get("location")).toBe("/dashboard");
+    expect(synced).toEqual([5005]);
+  });
+
+  it("re-syncs a just-installed installation and returns to onboarding", async () => {
+    const { response, synced } = await signIn(
+      "nqmt_pending_installation=1001; nqmt_oauth_next=onboarding",
+    );
+
+    expect(response.headers.get("location")).toBe("/onboarding");
+    expect(synced).toEqual([1001, 5005]);
+    expect(response.headers.get("set-cookie")).toContain(
+      "nqmt_pending_installation=;",
+    );
+  });
+
+  it("does not sync a pending installation the user cannot see", async () => {
+    const { synced } = await signIn("nqmt_pending_installation=7777");
+
+    expect(synced).toEqual([5005]);
+  });
+
+  it("sends users without repositories to onboarding", async () => {
+    const { response } = await signIn("", { repositoryIds: [] });
+
+    expect(response.headers.get("location")).toBe("/onboarding");
+  });
+
+  it("signs the user in even when an installation sync fails", async () => {
+    const { response } = await signIn("", { failSync: true });
+
+    expect(response.status).toBe(302);
+    expect(responseCookie(response)).toMatch(/^nqmt_session=[a-f0-9]{64}$/);
   });
 });

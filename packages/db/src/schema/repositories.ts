@@ -16,6 +16,9 @@ export const repositories = sqliteTable(
     fullName: text("full_name").notNull(),
     defaultBranch: text("default_branch").notNull(),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    // Set when the installation loses access to the repository; cleared
+    // when an installation sync sees it again.
+    removedAt: integer("removed_at", { mode: "timestamp_ms" }),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),

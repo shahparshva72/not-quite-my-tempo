@@ -1,8 +1,13 @@
 import { Data, Effect, Inspectable, Match, Option } from "effect";
 import { Hono } from "hono";
-import { getCookie } from "hono/cookie";
+import { getCookie, setCookie } from "hono/cookie";
 import { logger } from "hono/logger";
-import { Database, DatabaseLive, makeLiveLayer } from "@not-quite-my-tempo/db";
+import {
+  Database,
+  DatabaseLive,
+  GitHubRepositoryRepository,
+  makeLiveLayer,
+} from "@not-quite-my-tempo/db";
 import { makeServiceInfo } from "@not-quite-my-tempo/core";
 import type { Context } from "hono";
 
@@ -12,19 +17,27 @@ import {
   listAccessibleRepositories,
   listRepositoryRuns,
   listRunFindings,
+  requireAccessibleRepository,
   usageSummary,
 } from "./application/read-api.js";
 import { createAuthRoutes } from "./auth/routes.js";
-import { SESSION_COOKIE, verifySession } from "./auth/session.js";
+import {
+  PENDING_INSTALLATION_COOKIE,
+  SESSION_COOKIE,
+  verifySession,
+} from "./auth/session.js";
 import type { SessionPayload } from "./auth/session.js";
 import {
   dashboardPage,
+  installationPendingPage,
   landingPage,
   notFoundPage,
+  onboardingPage,
   repositoryRunsPage,
   runFindingsPage,
 } from "./dashboard/views.js";
 import { GitHubAppAuthLive } from "./github/app-auth.js";
+import { GitHubInstallationClientLive } from "./github/installation-client.js";
 import { GitHubPullRequestClientLive } from "./github/pull-request-client.js";
 import { processGitHubWebhook } from "./github/webhook.js";
 import { logError } from "./logging.js";
@@ -35,6 +48,7 @@ type Bindings = Env & {
   readonly GITHUB_WEBHOOK_SECRET: string;
   readonly GITHUB_APP_ID: string;
   readonly GITHUB_APP_PRIVATE_KEY: string;
+  readonly GITHUB_APP_SLUG: string;
   readonly GITHUB_OAUTH_CLIENT_ID: string;
   readonly GITHUB_OAUTH_CLIENT_SECRET: string;
   readonly SESSION_SECRET: string;
@@ -59,7 +73,7 @@ const app = new Hono<{ Bindings: Bindings }>();
 
 const errorResponse = (
   c: AppContext,
-  status: 400 | 401 | 404 | 500,
+  status: 400 | 401 | 403 | 404 | 500,
   code: string,
   message: string,
 ) => c.json({ error: { code, message } }, status);
@@ -91,13 +105,6 @@ app.use("*", async (c, next) => {
     await logger()(c, next);
   }
 });
-
-app.get("/", (c) =>
-  c.json({
-    name: serviceInfo.name,
-    message: "Hono on Cloudflare Workers with D1 and Effect",
-  }),
-);
 
 app.get("/health", (c) =>
   Effect.runPromise(
@@ -136,6 +143,7 @@ app.post("/webhooks/github", (c) => {
         }),
       ),
       Effect.provide(GitHubPullRequestClientLive({})),
+      Effect.provide(GitHubInstallationClientLive({})),
       Effect.match({
         onFailure: (cause) =>
           Match.value(cause).pipe(
@@ -262,6 +270,106 @@ app.get("/dashboard/runs/:id", (c) =>
     );
   }),
 );
+
+app.get("/", (c) =>
+  withSessionPage(c, () => Promise.resolve(c.redirect("/dashboard"))),
+);
+
+app.get("/onboarding", (c) =>
+  withSessionPage(c, (session) => {
+    const appSlug = c.env.GITHUB_APP_SLUG;
+
+    if (appSlug === undefined || appSlug === "") {
+      return Promise.resolve(
+        internalError(c, new Error("GITHUB_APP_SLUG is not configured")),
+      );
+    }
+
+    return Effect.runPromise(
+      listAccessibleRepositories(session.repositoryIds).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) => internalError(c, cause),
+          onSuccess: (repositories) =>
+            c.html(
+              onboardingPage(
+                session.login,
+                `https://github.com/apps/${encodeURIComponent(appSlug)}/installations/new`,
+                repositories,
+              ),
+            ),
+        }),
+      ),
+    );
+  }),
+);
+
+// GitHub App "Setup URL". The installation_id here is untrusted: it is held
+// in a short-lived cookie until sign-in confirms the user can see it.
+app.get("/onboarding/callback", (c) => {
+  if (c.req.query("setup_action") === "request") {
+    return c.html(installationPendingPage());
+  }
+
+  const installationId = Number(c.req.query("installation_id"));
+
+  if (!Number.isInteger(installationId) || installationId <= 0) {
+    return c.redirect("/onboarding");
+  }
+
+  setCookie(c, PENDING_INSTALLATION_COOKIE, String(installationId), {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    path: "/",
+    maxAge: 600,
+  });
+
+  return c.redirect("/auth/login?next=onboarding");
+});
+
+app.post("/onboarding/repositories/:id", (c) => {
+  if (c.req.header("origin") !== new URL(c.req.url).origin) {
+    return Promise.resolve(
+      errorResponse(c, 403, "invalid_origin", "Same-origin request required"),
+    );
+  }
+
+  return withSessionPage(c, async (session) => {
+    const repositoryId = Number(c.req.param("id"));
+    const form = await c.req.parseBody();
+    const enabled = form["enabled"];
+
+    if (
+      !Number.isInteger(repositoryId) ||
+      (enabled !== "true" && enabled !== "false")
+    ) {
+      return c.html(notFoundPage(), 404);
+    }
+
+    return Effect.runPromise(
+      requireAccessibleRepository(session.repositoryIds, repositoryId).pipe(
+        Effect.flatMap((repository) =>
+          GitHubRepositoryRepository.setEnabled(
+            repository.id,
+            enabled === "true",
+          ),
+        ),
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                c.html(notFoundPage(), 404),
+              ),
+              Match.orElse((error) => internalError(c, error)),
+            ),
+          onSuccess: () => c.redirect("/onboarding", 303),
+        }),
+      ),
+    );
+  });
+});
 
 app.get("/api/me", (c) =>
   withSession(c, (session) =>

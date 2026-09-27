@@ -19,7 +19,7 @@ export class ResourceNotFoundError extends Data.TaggedError(
 export const listAccessibleRepositories = (repositoryIds: readonly number[]) =>
   GitHubRepositoryRepository.listByGithubRepositoryIds(repositoryIds);
 
-const requireAccessibleRepository = (
+export const requireAccessibleRepository = (
   repositoryIds: readonly number[],
   repositoryId: number,
 ) =>
@@ -28,6 +28,7 @@ const requireAccessibleRepository = (
       Option.match({
         onNone: () => new ResourceNotFoundError(),
         onSome: (repository) =>
+          repository.removedAt === null &&
           repositoryIds.includes(repository.githubRepositoryId)
             ? Effect.succeed(repository)
             : new ResourceNotFoundError(),

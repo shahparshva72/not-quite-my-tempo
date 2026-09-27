@@ -59,6 +59,25 @@ Create a GitHub App and configure its repository permissions:
 - **Contents: Read-only** to fetch unified diffs from private repositories.
 - Under **Subscribe to events**, enable **Pull request**.
 
+For self-service onboarding, also set in the App's settings:
+
+- **Callback URL**: `<worker-url>/auth/callback` (GitHub sign-in).
+- **Setup URL**: `<worker-url>/onboarding/callback`, with **Redirect on
+  update** enabled so repository changes return to onboarding too.
+- Leave **Request user authorization (OAuth) during installation**
+  unchecked; it disables the Setup URL.
+- Set `GITHUB_APP_SLUG` to the App's URL name (`github.com/apps/<slug>`).
+
+The onboarding flow is sign in → `/onboarding` → install on GitHub → Setup
+URL → a silent re-sign-in that verifies the new installation against the
+user's own `GET /user/installations` list and syncs its repositories →
+choose which repositories get reviews.
+
+GitHub always delivers `installation` and `installation_repositories` events
+to Apps. The Worker uses them to sync which repositories an installation can
+access (listing them through `GET /installation/repositories`) and to stop
+reviews for suspended or uninstalled installations and removed repositories.
+
 Install the App on the repository to review. After changing permissions,
 approve the updated permissions on the installation if GitHub prompts you.
 Set the webhook URL to `<worker-or-tunnel-url>/webhooks/github` and use the

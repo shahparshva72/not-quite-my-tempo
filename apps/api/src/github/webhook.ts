@@ -1,10 +1,12 @@
 import { Data, Effect, Match, Option } from "effect";
 
+import { handleInstallationEvent } from "../application/installation-sync.js";
 import {
   handleManualReviewCommand,
   handleReviewRequest,
 } from "../application/review-requests.js";
 import { logInfo } from "../logging.js";
+import { decodeInstallationBody } from "./installation-event.js";
 import { decodeIssueCommentBody } from "./manual-command.js";
 import { decodePullRequestBody } from "./review-request.js";
 import { verifyGitHubWebhookSignature } from "./signature.js";
@@ -17,7 +19,10 @@ type GitHubWebhookResult =
   | { readonly status: "ignored" }
   | { readonly status: "rate_limited" }
   | { readonly status: "already_processed"; readonly reviewRunId: number }
-  | { readonly status: "queued"; readonly reviewRunId: number };
+  | { readonly status: "queued"; readonly reviewRunId: number }
+  | { readonly status: "synced"; readonly repositoryCount: number }
+  | { readonly status: "suspended" }
+  | { readonly status: "removed" };
 
 const ignoredWebhook = Effect.succeed<GitHubWebhookResult>({
   status: "ignored",
@@ -69,6 +74,22 @@ export const processGitHubWebhook = (
             }),
           ),
         ),
+      ),
+      Match.when(
+        (event) =>
+          event === "installation" || event === "installation_repositories",
+        (event) =>
+          decodeInstallationBody(event, rawBody).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => ignoredWebhook,
+                onSome: (installationEvent) =>
+                  handleInstallationEvent(installationEvent).pipe(
+                    Effect.map((result): GitHubWebhookResult => result),
+                  ),
+              }),
+            ),
+          ),
       ),
       Match.orElse(() => ignoredWebhook),
     );

@@ -8,6 +8,11 @@ import {
 } from "../src/auth/github-oauth";
 import type { GitHubOAuthService } from "../src/auth/github-oauth";
 
+const installation = (id: number) => ({
+  id,
+  account: { id: id + 50_000, login: `org-${id}`, type: "Organization" },
+});
+
 const withOAuth = <A, E>(
   fetchImpl: typeof fetch,
   use: (oauth: GitHubOAuthService) => Effect.Effect<A, E>,
@@ -100,7 +105,7 @@ describe("GitHubOAuth", () => {
 
     const firstInstallationsPage = Array.from(
       { length: pageSize },
-      (_, index) => ({ id: 1000 + index }),
+      (_, index) => installation(1000 + index),
     );
 
     const firstRepositoriesPage = Array.from(
@@ -128,7 +133,9 @@ describe("GitHubOAuth", () => {
         if (page === "2") {
           return Promise.resolve(
             new Response(
-              JSON.stringify({ installations: [{ id: 2001 }, { id: 2002 }] }),
+              JSON.stringify({
+                installations: [installation(2001), installation(2002)],
+              }),
             ),
           );
         }
@@ -175,11 +182,18 @@ describe("GitHubOAuth", () => {
       return Promise.resolve(new Response("unexpected", { status: 500 }));
     };
 
-    const repositoryIds = await Effect.runPromise(
-      withOAuth(fetchImpl, (oauth) => oauth.fetchUserRepositoryIds("gho_user")),
+    const access = await Effect.runPromise(
+      withOAuth(fetchImpl, (oauth) => oauth.fetchUserAccess("gho_user")),
     );
 
-    expect(repositoryIds).toEqual([
+    expect(access.installations).toHaveLength(102);
+    expect(access.installations[101]).toEqual({
+      installationId: 2002,
+      accountId: 52_002,
+      accountLogin: "org-2002",
+      accountType: "Organization",
+    });
+    expect(access.repositoryIds).toEqual([
       ...firstRepositoriesPage.map(({ id }) => id),
       9100,
       9200,
@@ -216,7 +230,9 @@ describe("GitHubOAuth", () => {
       if (url.pathname === "/user/installations") {
         return Promise.resolve(
           new Response(
-            JSON.stringify({ installations: [{ id: 1001 }, { id: 2002 }] }),
+            JSON.stringify({
+              installations: [installation(1001), installation(2002)],
+            }),
           ),
         );
       }
@@ -241,9 +257,7 @@ describe("GitHubOAuth", () => {
 
     const error = await Effect.runPromise(
       Effect.flip(
-        withOAuth(fetchImpl, (oauth) =>
-          oauth.fetchUserRepositoryIds("gho_user"),
-        ),
+        withOAuth(fetchImpl, (oauth) => oauth.fetchUserAccess("gho_user")),
       ),
     );
 

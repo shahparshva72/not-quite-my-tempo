@@ -13,9 +13,32 @@ boundaries. Phases 1–11 below describe the original implementation plan;
 their historical descriptions are not the current release status. See
 [PROGRESS.md](./PROGRESS.md) and the manual test report for verification.
 
-Plans, billing, subscriptions, checkout, and paid entitlements are deferred
-outside the active scope. Keep usage visibility and operational rate limits
-to control abuse and model costs independently of monetization.
+### Product decisions (2026-09-28)
+
+- **Sign-in**: GitHub only. No email/password accounts.
+- **UI**: keep the server-rendered Hono dashboard; no separate SPA.
+- **Pricing**: the free tier is bring-your-own-key (the workspace stores its
+  own Gemini API key). The paid tier uses the platform's Gemini key. Every
+  new workspace gets **5 trial reviews** on the platform key before it must
+  add a key or subscribe.
+- Billing is built in Phase 16, after onboarding works (Phases 12–15). Keep
+  usage visibility and operational rate limits to control abuse and model
+  costs regardless of tier.
+
+### Recommended order
+
+1. Installation sync (Phase 13, first slice) — **done 2026-09-28**:
+   `installation` / `installation_repositories` webhooks reconcile the
+   stored repositories against `GET /installation/repositories`; suspended
+   or removed installations, removed repositories, and disabled
+   repositories no longer start reviews or appear in the dashboard.
+2. Onboarding flow (rest of Phase 13) — **done 2026-09-28**: install →
+   verified setup callback → repository selection → first-review guidance.
+3. Workspaces and memberships (rest of Phase 12), with CSRF protection
+   before any dashboard mutation.
+4. Dashboard management (Phase 14).
+5. Production readiness (Phase 15).
+6. BYOK, trial, and billing (Phase 16).
 
 ### Phase 12 — Accounts, sessions, and authorization
 
@@ -88,6 +111,27 @@ repositories from the dashboard, including failures and empty states.
 Acceptance: a new user can sign in, connect repositories, receive a review,
 manage access, and leave the service; another workspace cannot access their
 data. Operational failures have a tested recovery path.
+
+### Phase 16 — BYOK, trial reviews, and billing
+
+- Store a per-workspace Gemini API key encrypted at rest (AES-GCM with a
+  Worker secret as the key-encryption key). Validate it on save with a cheap
+  model call; never render it back, only its last four characters.
+- Choose the key per review run: the workspace key when present, otherwise
+  the platform key while the workspace is on a paid plan or has trial
+  reviews left. Record which key source each run used.
+- Trial: 5 platform-key reviews per workspace, decremented atomically when a
+  run is queued so concurrent webhooks cannot overspend. Runs skipped for
+  lack of a key post a clear "add a key or upgrade" message.
+- Paid plan: Stripe Checkout and Customer Portal; a signature-verified
+  Stripe webhook writes plan status onto the workspace. Past-due and
+  cancelled subscriptions fall back to the BYOK/trial rules.
+- Tie the trial and plan to the workspace, not the GitHub installation, so
+  reinstalling the App does not reset the trial.
+
+Acceptance: a new workspace gets exactly 5 platform-key reviews, a BYOK
+workspace never consumes platform usage, and a paying workspace keeps
+reviewing after the trial. Keys never appear in logs or HTML.
 
 Continue Phase 12 with workspace ownership/memberships and permission refresh.
 Persistent accounts, revocable sessions, repository access checks, and the

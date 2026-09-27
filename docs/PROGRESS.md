@@ -27,11 +27,46 @@ then this file for exactly where things stand and what to do next.
 | 9     | `.fletcher.json` + guard  | ✅ Done       |
 | 10    | Read API + GitHub OAuth   | ✅ Done       |
 | 11    | Dashboard UI              | 🟡 v1 shipped |
+| 12    | Accounts & authorization  | 🟡 Partial    |
+| 13    | GitHub onboarding         | ✅ Core done  |
+| 16    | BYOK, trial, billing      | ⬜ Planned    |
 
-**Next task:** continue Phase 12 with workspace ownership/memberships and
-automatic permission refresh. Persistent users, revocable sessions, and
-repository-level access are implemented and verified. This does not yet
-complete the SaaS account and onboarding foundation.
+**Next task:** workspaces and memberships (Phase 12): a workspace per
+GitHub account/org installation, owner/admin/member roles, and restricting
+repository toggles to admins. Then Phase 14 dashboard management. See
+PLAN.md "Recommended order".
+
+### Onboarding flow — 2026-09-28
+
+- `/` is a landing page (signed-in visitors redirect to `/dashboard`); the
+  service-metadata JSON moved off the root.
+- `/onboarding`: install link (`GITHUB_APP_SLUG`), repository list with
+  on/off toggles, and first-review guidance.
+- `/onboarding/callback` (GitHub Setup URL) holds `installation_id` in a
+  10-minute cookie and re-runs sign-in; the OAuth callback syncs it only if
+  it appears in the user's `/user/installations`, and also syncs any
+  visible installations not yet stored. Sync failures are logged and do not
+  block sign-in. `setup_action=request` shows a pending-approval page.
+- Sign-in redirects to `/onboarding` when requested (`/auth/login?next=
+onboarding`, allowlisted) or when the user has no repositories.
+- `POST /onboarding/repositories/:id` toggles `repositories.enabled`
+  (same-origin check, session repository access). Any user with GitHub
+  access to the repository can toggle it until Phase 12 adds roles.
+
+### Installation sync — 2026-09-28
+
+- `installation` (created/unsuspend/new_permissions_accepted) and
+  `installation_repositories` (added/removed) deliveries reconcile stored
+  repositories against `GET /installation/repositories`
+  (`apps/api/src/application/installation-sync.ts`).
+- `suspend` marks the installation `suspended`; `deleted` marks it
+  `removed` and sets `removed_at` on all its repositories. History is kept.
+- Migration `0003` adds `github_installations.status` and
+  `repositories.removed_at`. Pull request deliveries never change either,
+  so a late webhook cannot revive access.
+- `handleReviewRequest` skips (`ignored`) inactive installations, removed
+  repositories, and repositories with `enabled = false` (previously
+  unenforced). The read API and dashboard hide removed repositories.
 
 ### Active priorities (2026-09-18)
 
