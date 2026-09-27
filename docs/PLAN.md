@@ -5,7 +5,96 @@ production code review bot that reviews pull requests with the Gemini API and
 delivers feedback in the voice of Terence Fletcher from _Whiplash_ — exacting,
 theatrical, and obsessed with precision. Not quite my tempo.
 
-## Where we are today
+## Active roadmap — SaaS foundations (2026-09-18)
+
+The review engine and dashboard v1 are implemented. The next milestone is
+self-service onboarding with persistent accounts and correct access
+boundaries. Phases 1–11 below describe the original implementation plan;
+their historical descriptions are not the current release status. See
+[PROGRESS.md](./PROGRESS.md) and the manual test report for verification.
+
+Plans, billing, subscriptions, checkout, and paid entitlements are deferred
+outside the active scope. Keep usage visibility and operational rate limits
+to control abuse and model costs independently of monetization.
+
+### Phase 12 — Accounts, sessions, and authorization
+
+- Persist users using immutable GitHub user IDs; treat login and profile
+  fields as mutable. Keep GitHub sign-in as the initial login method.
+- Add revocable server-side sessions with expiry, logout, and session
+  invalidation. Complete OAuth error/cancellation handling and redirect
+  successful sign-in to onboarding or the dashboard.
+- Add workspaces and memberships with owner/admin/member permissions.
+  Define ownership and owner-transfer rules before exposing account writes.
+- Require both workspace membership and appropriate GitHub repository
+  access for repository data. An installation ID alone must not grant
+  access to every repository in that installation.
+- Define permission refresh and revocation behavior; protect mutations
+  against CSRF and verify isolation across users, workspaces, and private
+  repositories, including removed access and expired sessions.
+
+Acceptance: returning users retain their account across username changes;
+revoked sessions stop working; users cannot read or mutate resources outside
+their workspace and repository permissions.
+
+### Phase 13 — GitHub connections and self-service onboarding
+
+- Implement sign-in → create/select workspace → install/connect GitHub App
+  → select repositories → first-review guidance.
+- Verify the actor's authority to connect an installation to a workspace;
+  do not trust an installation ID supplied in a callback or request.
+- Discover and sync accessible repositories during onboarding, with
+  pagination, before the first pull-request webhook arrives.
+- Handle installation removal/suspension, repository selection changes,
+  and user authorization revocation. Reconcile missed events and prevent
+  disconnected repositories from starting new reviews.
+- Provide actionable pending-approval, empty, denied, disconnected, and
+  reconnect states for personal accounts and GitHub organizations.
+
+Acceptance: a new user can connect repositories without database edits or
+operator help; disconnecting access removes it from subsequent app actions.
+
+### Phase 14 — Dashboard and repository management
+
+- Fix the recorded comment-ID persistence defect, misleading empty success
+  messages, and mobile/long-text overflow, with regression coverage.
+- Persist review verdicts, summaries, and explicit skipped reasons; show
+  accurate queued/running/completed/failed/skipped states.
+- Add GitHub PR/comment links, run pagination, effective configuration,
+  and usage visibility without pricing or subscription UI.
+- Add authorized repository enable/disable and settings controls with a
+  documented precedence relative to repository-managed `.fletcher.json`.
+- Verify responsive layout, keyboard navigation, and accessible forms and
+  status messages in a browser.
+
+Acceptance: users can understand review outcomes and manage connected
+repositories from the dashboard, including failures and empty states.
+
+### Phase 15 — Production readiness and release verification
+
+- Add safe recovery for failed/stuck runs without duplicate GitHub posts,
+  operational alerts, and useful diagnostics with secrets excluded.
+- Enforce operational usage limits under concurrent requests; keep model
+  usage visible and handle provider quota failures clearly.
+- Define account/workspace deletion, data retention, and an audit trail for
+  access and settings changes; explain how source code is sent to the model
+  provider in onboarding and privacy documentation.
+- Complete credential rotation recorded in the manual test report, configure
+  production secrets and callback/webhook URLs, apply migrations, and verify
+  backup/recovery procedures before public onboarding.
+- Complete the pending live test cases and test the full onboarding journey
+  using separate users/workspaces with different repository permissions.
+
+Acceptance: a new user can sign in, connect repositories, receive a review,
+manage access, and leave the service; another workspace cannot access their
+data. Operational failures have a tested recovery path.
+
+Continue Phase 12 with workspace ownership/memberships and permission refresh.
+Persistent accounts, revocable sessions, repository access checks, and the
+OAuth redirect fix are implemented. Carry the remaining recorded defects
+into Phase 14. Billing is not a dependency or release gate for this roadmap.
+
+## Original baseline (before Phase 1)
 
 The plumbing already works end to end:
 

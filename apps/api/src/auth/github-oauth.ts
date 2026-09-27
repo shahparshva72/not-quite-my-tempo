@@ -9,34 +9,48 @@ const GITHUB_API_VERSION = "2022-11-28";
 const USER_AGENT = "not-quite-my-tempo";
 
 export class OAuthRequestError extends Data.TaggedError("OAuthRequestError")<{
-  readonly cause: unknown;
+  readonly message: string;
 }> {}
 
 export class OAuthResponseError extends Data.TaggedError("OAuthResponseError")<{
   readonly status: number;
-  readonly body: string;
 }> {}
 
 export type GitHubOAuthError = OAuthRequestError | OAuthResponseError;
 
 const AccessTokenResponse = Schema.Struct({
   access_token: Schema.NonEmptyString,
+  error: Schema.optional(Schema.NonEmptyString),
 });
 
-const UserResponse = Schema.Struct({ login: Schema.NonEmptyString });
+const GitHubId = Schema.Number.pipe(Schema.int(), Schema.positive());
+
+const UserResponse = Schema.Struct({
+  id: GitHubId,
+  login: Schema.NonEmptyString,
+});
 
 const UserInstallationsResponse = Schema.Struct({
-  installations: Schema.Array(Schema.Struct({ id: Schema.Number })),
+  installations: Schema.Array(Schema.Struct({ id: GitHubId })),
 });
+
+const UserRepositoriesResponse = Schema.Struct({
+  repositories: Schema.Array(Schema.Struct({ id: GitHubId })),
+});
+
+export interface GitHubUser {
+  readonly githubUserId: number;
+  readonly login: string;
+}
 
 export interface GitHubOAuthService {
   readonly exchangeCode: (
     code: string,
   ) => Effect.Effect<string, GitHubOAuthError>;
-  readonly fetchUserLogin: (
+  readonly fetchUser: (
     accessToken: string,
-  ) => Effect.Effect<string, GitHubOAuthError>;
-  readonly fetchUserInstallationIds: (
+  ) => Effect.Effect<GitHubUser, GitHubOAuthError>;
+  readonly fetchUserRepositoryIds: (
     accessToken: string,
   ) => Effect.Effect<readonly number[], GitHubOAuthError>;
 }
@@ -71,28 +85,34 @@ const oauthRequest = (
 
     const response = yield* Effect.tryPromise({
       try: () => fetchImpl(url, init),
-      catch: (cause) => new OAuthRequestError({ cause }),
-    });
-
-    const body = yield* Effect.tryPromise({
-      try: () => response.text(),
-      catch: (cause) => new OAuthRequestError({ cause }),
+      catch: () =>
+        new OAuthRequestError({ message: "GitHub OAuth request failed" }),
     });
 
     if (!response.ok) {
-      return yield* new OAuthResponseError({
-        status: response.status,
-        body,
-      });
+      return yield* new OAuthResponseError({ status: response.status });
     }
 
-    return body;
+    const body = yield* Effect.tryPromise({
+      try: () => response.text(),
+      catch: () =>
+        new OAuthRequestError({
+          message: "GitHub OAuth response could not be read",
+        }),
+    });
+
+    return { body, status: response.status };
   });
 
 const decodeBody = <A, I>(schema: Schema.Schema<A, I>, body: string) =>
   Schema.decodeUnknown(Schema.parseJson(schema))(body).pipe(
-    Effect.mapError((cause) => new OAuthRequestError({ cause })),
+    Effect.mapError(
+      () =>
+        new OAuthRequestError({ message: "GitHub OAuth response was invalid" }),
+    ),
   );
+
+const PAGE_SIZE = 100;
 
 export const GitHubOAuthLive = (config: GitHubOAuthConfig) => {
   const baseUrl = config.baseUrl ?? GITHUB_BASE_URL;
@@ -128,35 +148,93 @@ export const GitHubOAuthLive = (config: GitHubOAuthConfig) => {
             },
           );
 
-          const decoded = yield* decodeBody(AccessTokenResponse, body);
+          const decoded = yield* decodeBody(
+            AccessTokenResponse,
+            body.body,
+          ).pipe(
+            Effect.mapError(
+              () => new OAuthResponseError({ status: body.status }),
+            ),
+          );
+
+          if (decoded.error !== undefined) {
+            return yield* new OAuthResponseError({ status: body.status });
+          }
 
           return decoded.access_token;
         }),
-      fetchUserLogin: (accessToken) =>
+      fetchUser: (accessToken) =>
         Effect.gen(function* () {
-          const body = yield* oauthRequest(config, `${apiBaseUrl}/user`, {
+          const response = yield* oauthRequest(config, `${apiBaseUrl}/user`, {
             method: "GET",
             headers: apiHeaders(accessToken),
           });
 
-          const decoded = yield* decodeBody(UserResponse, body);
+          const decoded = yield* decodeBody(UserResponse, response.body);
 
-          return decoded.login;
+          return {
+            githubUserId: decoded.id,
+            login: decoded.login,
+          };
         }),
-      fetchUserInstallationIds: (accessToken) =>
+      fetchUserRepositoryIds: (accessToken) =>
         Effect.gen(function* () {
-          const body = yield* oauthRequest(
-            config,
-            `${apiBaseUrl}/user/installations`,
-            {
-              method: "GET",
-              headers: apiHeaders(accessToken),
-            },
-          );
+          const repositoryIds = new Set<number>();
+          let installationPage = 1;
 
-          const decoded = yield* decodeBody(UserInstallationsResponse, body);
+          while (true) {
+            const installationsResponse = yield* oauthRequest(
+              config,
+              `${apiBaseUrl}/user/installations?per_page=${PAGE_SIZE}&page=${installationPage}`,
+              {
+                method: "GET",
+                headers: apiHeaders(accessToken),
+              },
+            );
 
-          return decoded.installations.map((installation) => installation.id);
+            const installations = yield* decodeBody(
+              UserInstallationsResponse,
+              installationsResponse.body,
+            );
+
+            for (const installation of installations.installations) {
+              let repositoryPage = 1;
+
+              while (true) {
+                const repositoriesResponse = yield* oauthRequest(
+                  config,
+                  `${apiBaseUrl}/user/installations/${installation.id}/repositories?per_page=${PAGE_SIZE}&page=${repositoryPage}`,
+                  {
+                    method: "GET",
+                    headers: apiHeaders(accessToken),
+                  },
+                );
+
+                const repositories = yield* decodeBody(
+                  UserRepositoriesResponse,
+                  repositoriesResponse.body,
+                );
+
+                for (const repository of repositories.repositories) {
+                  repositoryIds.add(repository.id);
+                }
+
+                if (repositories.repositories.length < PAGE_SIZE) {
+                  break;
+                }
+
+                repositoryPage += 1;
+              }
+            }
+
+            if (installations.installations.length < PAGE_SIZE) {
+              break;
+            }
+
+            installationPage += 1;
+          }
+
+          return [...repositoryIds];
         }),
     }),
   );

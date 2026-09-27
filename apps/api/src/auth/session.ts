@@ -1,20 +1,26 @@
-import { Clock, Data, Effect, Option, Schema } from "effect";
+import { SessionRepository } from "@not-quite-my-tempo/db";
+import type { DatabaseError } from "@not-quite-my-tempo/db";
+import { Clock, Data, Effect, Option } from "effect";
 
 export const SESSION_COOKIE = "nqmt_session";
 
 export const OAUTH_STATE_COOKIE = "nqmt_oauth_state";
 
-const SESSION_TTL_MILLIS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_TTL_MILLIS = 60 * 60 * 1000;
 
 export const SESSION_TTL_SECONDS = SESSION_TTL_MILLIS / 1000;
 
-const SessionPayload = Schema.Struct({
-  login: Schema.NonEmptyString,
-  installationIds: Schema.Array(Schema.Number),
-  expiresAt: Schema.Number,
-});
+const SESSION_TOKEN_BYTES = 32;
 
-export type SessionPayload = typeof SessionPayload.Type;
+const SESSION_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
+
+export interface SessionPayload {
+  readonly userId: number;
+  readonly githubUserId: number;
+  readonly login: string;
+  readonly repositoryIds: readonly number[];
+  readonly expiresAt: Date;
+}
 
 export class SessionError extends Data.TaggedError("SessionError")<{
   readonly cause: unknown;
@@ -22,32 +28,17 @@ export class SessionError extends Data.TaggedError("SessionError")<{
 
 const textEncoder = new TextEncoder();
 
-const base64UrlEncode = (bytes: Uint8Array) => {
-  let binary = "";
+const bytesToHex = (bytes: Uint8Array) =>
+  Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
+const createToken = () => {
+  const bytes = new Uint8Array(SESSION_TOKEN_BYTES);
+  crypto.getRandomValues(bytes);
 
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replaceAll("=", "");
+  return bytesToHex(bytes);
 };
 
-const base64UrlDecode = (segment: string) => {
-  const base64 = segment.replaceAll("-", "+").replaceAll("_", "/");
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-
-  return bytes;
-};
-
-const hmacKey = (secret: string, usage: "sign" | "verify") =>
+const hmacKey = (secret: string) =>
   Effect.tryPromise({
     try: () =>
       crypto.subtle.importKey(
@@ -55,91 +46,99 @@ const hmacKey = (secret: string, usage: "sign" | "verify") =>
         textEncoder.encode(secret),
         { name: "HMAC", hash: "SHA-256" },
         false,
-        [usage],
+        ["sign"],
       ),
     catch: (cause) => new SessionError({ cause }),
   });
 
-/**
- * Creates a signed session cookie value:
- * `base64url(payload).base64url(hmac-sha256(payload))`.
- */
-export const createSession = (
-  secret: string,
-  login: string,
-  installationIds: readonly number[],
-) =>
+const tokenHash = (secret: string, token: string) =>
   Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis;
+    const key = yield* hmacKey(secret);
 
-    const payload: SessionPayload = {
-      login,
-      installationIds,
-      expiresAt: now + SESSION_TTL_MILLIS,
-    };
-
-    const encodedPayload = base64UrlEncode(
-      textEncoder.encode(JSON.stringify(payload)),
-    );
-
-    const key = yield* hmacKey(secret, "sign");
-
-    const signature = yield* Effect.tryPromise({
-      try: () =>
-        crypto.subtle.sign("HMAC", key, textEncoder.encode(encodedPayload)),
+    const digest = yield* Effect.tryPromise({
+      try: () => crypto.subtle.sign("HMAC", key, textEncoder.encode(token)),
       catch: (cause) => new SessionError({ cause }),
     });
 
-    return `${encodedPayload}.${base64UrlEncode(new Uint8Array(signature))}`;
+    return bytesToHex(new Uint8Array(digest));
   });
 
-/**
- * Verifies a session cookie value. Any failure — malformed value, bad
- * signature, expired payload, or a missing secret — resolves to `None`; the
- * caller treats that as "not signed in".
- */
+const isSessionToken = (value: string): boolean =>
+  SESSION_TOKEN_PATTERN.test(value);
+
+export const createSession = (
+  secret: string,
+  userId: number,
+  repositoryIds: readonly number[],
+) =>
+  Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    const token = createToken();
+    const sessionRepository = yield* SessionRepository;
+
+    yield* sessionRepository.create({
+      tokenHash: yield* tokenHash(secret, token),
+      userId,
+      repositoryIds,
+      expiresAt: new Date(now + SESSION_TTL_MILLIS),
+    });
+
+    return token;
+  });
+
 export const verifySession = (
   secret: string | undefined,
   cookieValue: string | undefined,
-): Effect.Effect<Option.Option<SessionPayload>> =>
+): Effect.Effect<
+  Option.Option<SessionPayload>,
+  SessionError | DatabaseError,
+  SessionRepository
+> =>
   Effect.gen(function* () {
     if (
       secret === undefined ||
       secret === "" ||
       cookieValue === undefined ||
-      !cookieValue.includes(".")
+      !isSessionToken(cookieValue)
     ) {
       return Option.none<SessionPayload>();
     }
 
-    const separator = cookieValue.indexOf(".");
-    const encodedPayload = cookieValue.slice(0, separator);
-    const encodedSignature = cookieValue.slice(separator + 1);
+    const sessionRepository = yield* SessionRepository;
 
-    const key = yield* hmacKey(secret, "verify");
+    const session = yield* sessionRepository.findByTokenHash(
+      yield* tokenHash(secret, cookieValue),
+    );
 
-    const valid = yield* Effect.tryPromise({
-      try: () =>
-        crypto.subtle.verify(
-          "HMAC",
-          key,
-          base64UrlDecode(encodedSignature),
-          textEncoder.encode(encodedPayload),
-        ),
-      catch: (cause) => new SessionError({ cause }),
-    });
-
-    if (!valid) {
+    if (Option.isNone(session)) {
       return Option.none<SessionPayload>();
     }
 
-    const payload = yield* Schema.decodeUnknown(
-      Schema.parseJson(SessionPayload),
-    )(new TextDecoder().decode(base64UrlDecode(encodedPayload))).pipe(
-      Effect.option,
-    );
-
     const now = yield* Clock.currentTimeMillis;
 
-    return Option.filter(payload, (session) => session.expiresAt > now);
-  }).pipe(Effect.catchAll(() => Effect.succeed(Option.none<SessionPayload>())));
+    if (session.value.expiresAt.getTime() <= now) {
+      return Option.none<SessionPayload>();
+    }
+
+    return Option.some({
+      userId: session.value.userId,
+      githubUserId: session.value.githubUserId,
+      login: session.value.login,
+      repositoryIds: session.value.repositoryIds,
+      expiresAt: session.value.expiresAt,
+    });
+  });
+
+export const revokeSession = (
+  secret: string,
+  cookieValue: string | undefined,
+): Effect.Effect<void, SessionError | DatabaseError, SessionRepository> =>
+  Effect.gen(function* () {
+    if (cookieValue === undefined || !isSessionToken(cookieValue)) {
+      return;
+    }
+
+    const sessionRepository = yield* SessionRepository;
+
+    yield* sessionRepository.revoke(yield* tokenHash(secret, cookieValue));
+  });

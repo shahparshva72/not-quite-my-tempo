@@ -1,12 +1,9 @@
 import { env } from "cloudflare:workers";
-import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import app from "../src/index";
 
-import { createSession } from "../src/auth/session";
 import { resetAndSeedRepository } from "./database";
-
-const TEST_SESSION_SECRET = "test-session-secret";
+import { sessionCookie, TEST_SESSION_SECRET } from "./authentication";
 
 const testEnv = { ...env, SESSION_SECRET: TEST_SESSION_SECRET };
 
@@ -45,15 +42,11 @@ describe("Worker", () => {
     expect(response.status).toBe(401);
   });
 
-  it("serves accessible repositories for a signed session", async () => {
+  it("serves accessible repositories for a stored session", async () => {
     await resetAndSeedRepository();
 
-    const sessionCookie = await Effect.runPromise(
-      createSession(TEST_SESSION_SECRET, "neiman", [1001]),
-    );
-
     const response = await request("/api/repositories", {
-      headers: { cookie: `nqmt_session=${sessionCookie}` },
+      headers: { cookie: await sessionCookie([3001]) },
     });
 
     expect(response.status).toBe(200);
@@ -68,15 +61,29 @@ describe("Worker", () => {
     });
   });
 
-  it("hides repositories from other installations", async () => {
+  it("returns the current persistent account without exposing session credentials", async () => {
+    await resetAndSeedRepository();
+    const cookie = await sessionCookie([3001]);
+
+    const response = await request("/api/me", { headers: { cookie } });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+
+    const body = await response.json();
+
+    expect(body).toEqual({
+      user: { id: expect.any(Number), githubUserId: 4001, login: "neiman" },
+      session: { expiresAt: expect.any(String) },
+    });
+    expect((await request("/api/me")).status).toBe(401);
+  });
+
+  it("hides inaccessible repositories", async () => {
     await resetAndSeedRepository();
 
-    const sessionCookie = await Effect.runPromise(
-      createSession(TEST_SESSION_SECRET, "neiman", [9999]),
-    );
-
     const runsResponse = await request("/api/repositories/1/runs", {
-      headers: { cookie: `nqmt_session=${sessionCookie}` },
+      headers: { cookie: await sessionCookie([9999]) },
     });
 
     expect(runsResponse.status).toBe(404);

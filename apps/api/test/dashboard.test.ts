@@ -5,11 +5,9 @@ import { makeLiveLayer, ReviewRunRepository } from "@not-quite-my-tempo/db";
 import type { GeminiReviewResult } from "@not-quite-my-tempo/gemini";
 
 import app from "../src/index";
-import { createSession } from "../src/auth/session";
 import { persistReviewFindings } from "../src/application/review-workflow";
 import { resetAndSeedRepository } from "./database";
-
-const TEST_SESSION_SECRET = "test-session-secret";
+import { sessionCookie, TEST_SESSION_SECRET } from "./authentication";
 
 const testEnv = { ...env, SESSION_SECRET: TEST_SESSION_SECRET };
 
@@ -19,14 +17,6 @@ const request = (path: string, cookie?: string) =>
     cookie === undefined ? undefined : { headers: { cookie } },
     testEnv,
   );
-
-const sessionCookie = async (installationIds: readonly number[]) => {
-  const value = await Effect.runPromise(
-    createSession(TEST_SESSION_SECRET, "neiman", installationIds),
-  );
-
-  return `nqmt_session=${value}`;
-};
 
 const reviewResult: GeminiReviewResult = {
   review: {
@@ -81,7 +71,7 @@ describe("dashboard", () => {
   it("lists repositories with usage for a signed-in user", async () => {
     await seedRun();
 
-    const response = await request("/dashboard", await sessionCookie([1001]));
+    const response = await request("/dashboard", await sessionCookie([3001]));
 
     expect(response.status).toBe(200);
     const body = await response.text();
@@ -95,7 +85,7 @@ describe("dashboard", () => {
 
     const response = await request(
       "/dashboard/repositories/1",
-      await sessionCookie([1001]),
+      await sessionCookie([3001]),
     );
 
     expect(response.status).toBe(200);
@@ -110,7 +100,7 @@ describe("dashboard", () => {
 
     const response = await request(
       `/dashboard/runs/${run.id}`,
-      await sessionCookie([1001]),
+      await sessionCookie([3001]),
     );
 
     expect(response.status).toBe(200);
@@ -120,7 +110,50 @@ describe("dashboard", () => {
     expect(body).toContain("warning");
   });
 
-  it("hides other installations' repositories behind a 404 page", async () => {
+  it("does not praise failed or skipped runs without findings", async () => {
+    const [failed, skipped] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reviewRuns = yield* ReviewRunRepository;
+
+        const failedRun = yield* reviewRuns.create({
+          repositoryId: 1,
+          pullRequestNumber: 43,
+          headSha: "fail123",
+          trigger: "opened",
+        });
+
+        yield* reviewRuns.markFailed(failedRun.id, "diff_too_large", "big");
+
+        const skippedRun = yield* reviewRuns.create({
+          repositoryId: 1,
+          pullRequestNumber: 44,
+          headSha: "skip123",
+          trigger: "opened",
+        });
+
+        yield* reviewRuns.markCompleted(skippedRun.id);
+
+        return [failedRun, skippedRun] as const;
+      }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+    );
+
+    const cookie = await sessionCookie([3001]);
+
+    const failedBody = await (
+      await request(`/dashboard/runs/${failed.id}`, cookie)
+    ).text();
+
+    const skippedBody = await (
+      await request(`/dashboard/runs/${skipped.id}`, cookie)
+    ).text();
+
+    expect(failedBody).toContain("The review failed");
+    expect(failedBody).not.toContain("Good job");
+    expect(skippedBody).toContain("Review skipped");
+    expect(skippedBody).not.toContain("Good job");
+  });
+
+  it("hides inaccessible repositories behind a 404 page", async () => {
     await seedRun();
 
     const response = await request(

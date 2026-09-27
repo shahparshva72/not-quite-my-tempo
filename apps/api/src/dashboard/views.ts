@@ -29,7 +29,8 @@ const styles = `
   h1 .drum { margin-right: 0.5rem; }
   h2 { font-size: 1rem; margin-top: 2rem; }
   a { color: #d9a441; }
-  table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+  .table-wrap { overflow-x: auto; margin-top: 1rem; }
+  table { border-collapse: collapse; width: 100%; }
   th, td {
     text-align: left; padding: 0.45rem 0.75rem;
     border-bottom: 1px solid #2c262c; vertical-align: top;
@@ -42,13 +43,26 @@ const styles = `
   .severity-critical { color: #d9534f; font-weight: 700; }
   .severity-warning { color: #d9a441; }
   .severity-suggestion { color: #9a8f85; }
-  .meta { color: #9a8f85; font-size: 0.85rem; }
+  .meta {
+    color: #9a8f85; font-size: 0.85rem; overflow-wrap: anywhere;
+  }
+  td { overflow-wrap: anywhere; }
+  td.finding { min-width: 16rem; }
+  @media (max-width: 40rem) {
+    body { padding: 1rem; }
+    th, td { padding: 0.4rem 0.5rem; }
+  }
   .signin {
     display: inline-block; margin-top: 1.5rem; padding: 0.6rem 1.2rem;
     background: #d9a441; color: #131013; text-decoration: none;
     font-weight: 700; border-radius: 4px;
   }
   nav { margin-bottom: 0.5rem; }
+  .signout { display: inline; }
+  .signout button {
+    border: 0; padding: 0; background: none; color: #d9a441;
+    font: inherit; text-decoration: underline; cursor: pointer;
+  }
 `;
 
 const layout = (title: string, content: HtmlContent) => html`<!doctype html>
@@ -96,40 +110,45 @@ export const dashboardPage = (
 ) =>
   layout(
     "Repositories",
-    html`<p class="meta">
-        Signed in as ${login} · <a href="/auth/logout">sign out</a>
-      </p>
+    html`<div class="meta">
+        Signed in as ${login} ·
+        <form class="signout" method="post" action="/auth/logout">
+          <button type="submit">sign out</button>
+        </form>
+      </div>
       <h2>Repositories</h2>
       ${
         usage.length === 0
           ? html`<p>No repositories yet. Install the GitHub App on one.</p>`
-          : html`<table>
-              <thead>
-                <tr>
-                  <th>Repository</th>
-                  <th class="num">Runs</th>
-                  <th class="num">Input tokens</th>
-                  <th class="num">Output tokens</th>
-                  <th class="num">Total tokens</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${usage.map(
-                  (row) =>
-                    html`<tr>
-                      <td>
-                        <a href="/dashboard/repositories/${row.repositoryId}">
-                          ${row.fullName}
-                        </a>
-                      </td>
-                      <td class="num">${row.runCount}</td>
-                      <td class="num">${row.inputTokens}</td>
-                      <td class="num">${row.outputTokens}</td>
-                      <td class="num">${row.totalTokens}</td>
-                    </tr>`,
-                )}
-              </tbody>
-            </table>`
+          : html`<div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Repository</th>
+                    <th class="num">Runs</th>
+                    <th class="num">Input tokens</th>
+                    <th class="num">Output tokens</th>
+                    <th class="num">Total tokens</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${usage.map(
+                    (row) =>
+                      html`<tr>
+                        <td>
+                          <a href="/dashboard/repositories/${row.repositoryId}">
+                            ${row.fullName}
+                          </a>
+                        </td>
+                        <td class="num">${row.runCount}</td>
+                        <td class="num">${row.inputTokens}</td>
+                        <td class="num">${row.outputTokens}</td>
+                        <td class="num">${row.totalTokens}</td>
+                      </tr>`,
+                  )}
+                </tbody>
+              </table>
+            </div>`
       }`,
   );
 
@@ -144,39 +163,59 @@ export const repositoryRunsPage = (
       ${
         runs.length === 0
           ? html`<p>No review runs yet.</p>`
-          : html`<table>
-              <thead>
-                <tr>
-                  <th>Run</th>
-                  <th>PR</th>
-                  <th>Trigger</th>
-                  <th>Status</th>
-                  <th>Error</th>
-                  <th>Model</th>
-                  <th class="num">Tokens</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${runs.map(
-                  (run) =>
-                    html`<tr>
-                      <td>
-                        <a href="/dashboard/runs/${run.id}">#${run.id}</a>
-                      </td>
-                      <td>#${run.pullRequestNumber}</td>
-                      <td>${run.trigger}</td>
-                      <td class="status-${run.status}">${run.status}</td>
-                      <td>${run.errorCode ?? ""}</td>
-                      <td>${run.model ?? ""}</td>
-                      <td class="num">${run.totalTokens ?? ""}</td>
-                      <td class="meta">${formatDate(run.createdAt)}</td>
-                    </tr>`,
-                )}
-              </tbody>
-            </table>`
+          : html`<div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Run</th>
+                    <th>PR</th>
+                    <th>Trigger</th>
+                    <th>Status</th>
+                    <th>Error</th>
+                    <th>Model</th>
+                    <th class="num">Tokens</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${runs.map(
+                    (run) =>
+                      html`<tr>
+                        <td>
+                          <a href="/dashboard/runs/${run.id}">#${run.id}</a>
+                        </td>
+                        <td>#${run.pullRequestNumber}</td>
+                        <td>${run.trigger}</td>
+                        <td class="status-${run.status}">${run.status}</td>
+                        <td>${run.errorCode ?? ""}</td>
+                        <td>${run.model ?? ""}</td>
+                        <td class="num">${run.totalTokens ?? ""}</td>
+                        <td class="meta">${formatDate(run.createdAt)}</td>
+                      </tr>`,
+                  )}
+                </tbody>
+              </table>
+            </div>`
       }`,
   );
+
+// Only praise a run that was actually reviewed; a completed run without a
+// model was skipped by `.fletcher.json`.
+const emptyFindingsMessage = (run: ReviewRun) => {
+  switch (run.status) {
+    case "queued":
+    case "running":
+      return "Review in progress. No findings yet.";
+    case "failed":
+      return "The review failed before producing findings.";
+    case "cancelled":
+      return "The review was cancelled.";
+    case "completed":
+      return run.model === null
+        ? "Review skipped: disabled by .fletcher.json."
+        : "No findings. ...Good job.";
+  }
+};
 
 export const runFindingsPage = (run: ReviewRun, findings: readonly Finding[]) =>
   layout(
@@ -193,38 +232,40 @@ export const runFindingsPage = (run: ReviewRun, findings: readonly Finding[]) =>
       </p>
       ${
         findings.length === 0
-          ? html`<p>No findings. ...Good job.</p>`
-          : html`<table>
-              <thead>
-                <tr>
-                  <th>Severity</th>
-                  <th>Location</th>
-                  <th>Finding</th>
-                  <th class="num">Confidence</th>
-                  <th class="num">Comment</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${findings.map(
-                  (finding) =>
-                    html`<tr>
-                      <td class="severity-${finding.severity}">
-                        ${finding.severity}
-                      </td>
-                      <td>
-                        ${finding.filePath}${finding.line === null ? "" : `:${finding.line}`}
-                      </td>
-                      <td>
-                        ${finding.title === null ? "" : html`<strong>${finding.title}</strong><br />`}
-                        ${finding.message}
-                      </td>
-                      <td class="num">
-                        ${finding.confidence === null ? "" : finding.confidence.toFixed(2)}
-                      </td>
-                      <td class="num">${finding.githubCommentId ?? ""}</td>
-                    </tr>`,
-                )}
-              </tbody>
-            </table>`
+          ? html`<p>${emptyFindingsMessage(run)}</p>`
+          : html`<div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Severity</th>
+                    <th>Location</th>
+                    <th>Finding</th>
+                    <th class="num">Confidence</th>
+                    <th class="num">Comment</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${findings.map(
+                    (finding) =>
+                      html`<tr>
+                        <td class="severity-${finding.severity}">
+                          ${finding.severity}
+                        </td>
+                        <td>
+                          ${finding.filePath}${finding.line === null ? "" : `:${finding.line}`}
+                        </td>
+                        <td class="finding">
+                          ${finding.title === null ? "" : html`<strong>${finding.title}</strong><br />`}
+                          ${finding.message}
+                        </td>
+                        <td class="num">
+                          ${finding.confidence === null ? "" : finding.confidence.toFixed(2)}
+                        </td>
+                        <td class="num">${finding.githubCommentId ?? ""}</td>
+                      </tr>`,
+                  )}
+                </tbody>
+              </table>
+            </div>`
       }`,
   );

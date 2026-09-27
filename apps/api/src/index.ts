@@ -1,6 +1,6 @@
 import { Data, Effect, Inspectable, Match, Option } from "effect";
 import { Hono } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { getCookie } from "hono/cookie";
 import { logger } from "hono/logger";
 import { Database, DatabaseLive, makeLiveLayer } from "@not-quite-my-tempo/db";
 import { makeServiceInfo } from "@not-quite-my-tempo/core";
@@ -14,18 +14,8 @@ import {
   listRunFindings,
   usageSummary,
 } from "./application/read-api.js";
-import {
-  authorizeUrl,
-  GitHubOAuth,
-  GitHubOAuthLive,
-} from "./auth/github-oauth.js";
-import {
-  createSession,
-  OAUTH_STATE_COOKIE,
-  SESSION_COOKIE,
-  SESSION_TTL_SECONDS,
-  verifySession,
-} from "./auth/session.js";
+import { createAuthRoutes } from "./auth/routes.js";
+import { SESSION_COOKIE, verifySession } from "./auth/session.js";
 import type { SessionPayload } from "./auth/session.js";
 import {
   dashboardPage,
@@ -84,7 +74,23 @@ const internalError = (c: AppContext, cause: unknown) => {
   return errorResponse(c, 500, "internal_error", "Internal server error");
 };
 
-app.use("*", logger());
+app.use("*", async (c, next) => {
+  const path = c.req.path;
+
+  if (
+    path.startsWith("/api/") ||
+    path === "/dashboard" ||
+    path.startsWith("/dashboard/")
+  ) {
+    c.header("Cache-Control", "no-store");
+  }
+
+  if (path.startsWith("/auth/")) {
+    await next();
+  } else {
+    await logger()(c, next);
+  }
+});
 
 app.get("/", (c) =>
   c.json({
@@ -152,87 +158,16 @@ app.post("/webhooks/github", (c) => {
   );
 });
 
-const stateCookieOptions = {
-  httpOnly: true,
-  secure: true,
-  sameSite: "Lax",
-  path: "/",
-  maxAge: 600,
-} as const;
-
-app.get("/auth/login", (c) => {
-  const state = crypto.randomUUID();
-
-  setCookie(c, OAUTH_STATE_COOKIE, state, stateCookieOptions);
-
-  return c.redirect(authorizeUrl(c.env.GITHUB_OAUTH_CLIENT_ID, state));
-});
-
-app.get("/auth/callback", (c) => {
-  const code = c.req.query("code");
-  const state = c.req.query("state");
-  const expectedState = getCookie(c, OAUTH_STATE_COOKIE);
-
-  if (
-    code === undefined ||
-    state === undefined ||
-    expectedState === undefined ||
-    state !== expectedState
-  ) {
-    return Promise.resolve(
-      errorResponse(c, 401, "invalid_oauth_state", "OAuth state mismatch"),
-    );
-  }
-
-  return Effect.runPromise(
-    Effect.gen(function* () {
-      const oauth = yield* GitHubOAuth;
-
-      const accessToken = yield* oauth.exchangeCode(code);
-      const login = yield* oauth.fetchUserLogin(accessToken);
-
-      const installationIds =
-        yield* oauth.fetchUserInstallationIds(accessToken);
-
-      return yield* createSession(c.env.SESSION_SECRET, login, installationIds);
-    }).pipe(
-      Effect.provide(
-        GitHubOAuthLive({
-          clientId: c.env.GITHUB_OAUTH_CLIENT_ID,
-          clientSecret: c.env.GITHUB_OAUTH_CLIENT_SECRET,
-        }),
-      ),
-      Effect.match({
-        onFailure: (cause) => internalError(c, cause),
-        onSuccess: (sessionCookie) => {
-          deleteCookie(c, OAUTH_STATE_COOKIE, { path: "/" });
-          setCookie(c, SESSION_COOKIE, sessionCookie, {
-            httpOnly: true,
-            secure: true,
-            sameSite: "Lax",
-            path: "/",
-            maxAge: SESSION_TTL_SECONDS,
-          });
-
-          return c.redirect("/");
-        },
-      }),
-    ),
-  );
-});
-
-app.get("/auth/logout", (c) => {
-  deleteCookie(c, SESSION_COOKIE, { path: "/" });
-
-  return c.redirect("/");
-});
+app.route("/auth", createAuthRoutes());
 
 const withSession = (
   c: AppContext,
   handle: (session: SessionPayload) => Promise<Response>,
 ) =>
   Effect.runPromise(
-    verifySession(c.env.SESSION_SECRET, getCookie(c, SESSION_COOKIE)),
+    verifySession(c.env.SESSION_SECRET, getCookie(c, SESSION_COOKIE)).pipe(
+      Effect.provide(makeLiveLayer(c.env.DB)),
+    ),
   ).then(
     Option.match({
       onNone: () =>
@@ -248,7 +183,9 @@ const withSessionPage = (
   handle: (session: SessionPayload) => Promise<Response | Promise<Response>>,
 ): Promise<Response> =>
   Effect.runPromise(
-    verifySession(c.env.SESSION_SECRET, getCookie(c, SESSION_COOKIE)),
+    verifySession(c.env.SESSION_SECRET, getCookie(c, SESSION_COOKIE)).pipe(
+      Effect.provide(makeLiveLayer(c.env.DB)),
+    ),
   )
     .then(
       Option.match({
@@ -261,7 +198,7 @@ const withSessionPage = (
 app.get("/dashboard", (c) =>
   withSessionPage(c, (session) =>
     Effect.runPromise(
-      usageSummary(session.installationIds).pipe(
+      usageSummary(session.repositoryIds).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),
@@ -281,7 +218,7 @@ app.get("/dashboard/repositories/:id", (c) =>
     }
 
     return Effect.runPromise(
-      listRepositoryRuns(session.installationIds, repositoryId).pipe(
+      listRepositoryRuns(session.repositoryIds, repositoryId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -308,7 +245,7 @@ app.get("/dashboard/runs/:id", (c) =>
     }
 
     return Effect.runPromise(
-      listRunFindings(session.installationIds, reviewRunId).pipe(
+      listRunFindings(session.repositoryIds, reviewRunId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -326,10 +263,25 @@ app.get("/dashboard/runs/:id", (c) =>
   }),
 );
 
+app.get("/api/me", (c) =>
+  withSession(c, (session) =>
+    Promise.resolve(
+      c.json({
+        user: {
+          id: session.userId,
+          githubUserId: session.githubUserId,
+          login: session.login,
+        },
+        session: { expiresAt: session.expiresAt },
+      }),
+    ),
+  ),
+);
+
 app.get("/api/repositories", (c) =>
   withSession(c, (session) =>
     Effect.runPromise(
-      listAccessibleRepositories(session.installationIds).pipe(
+      listAccessibleRepositories(session.repositoryIds).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),
@@ -351,7 +303,7 @@ app.get("/api/repositories/:id/runs", (c) =>
     }
 
     return Effect.runPromise(
-      listRepositoryRuns(session.installationIds, repositoryId).pipe(
+      listRepositoryRuns(session.repositoryIds, repositoryId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -379,7 +331,7 @@ app.get("/api/runs/:id/findings", (c) =>
     }
 
     return Effect.runPromise(
-      listRunFindings(session.installationIds, reviewRunId).pipe(
+      listRunFindings(session.repositoryIds, reviewRunId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -399,7 +351,7 @@ app.get("/api/runs/:id/findings", (c) =>
 app.get("/api/usage", (c) =>
   withSession(c, (session) =>
     Effect.runPromise(
-      usageSummary(session.installationIds).pipe(
+      usageSummary(session.repositoryIds).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),

@@ -379,10 +379,12 @@ export const postReviewToGitHub = (
     yield* Effect.forEach(
       postedComments,
       (comment) => {
+        // The per-review comments endpoint returns `line: null`, so only
+        // compare lines when GitHub supplies one.
         const match = anchored.find(
           ({ finding, line }) =>
             finding.filePath === comment.path &&
-            line === comment.line &&
+            (comment.line === null || line === comment.line) &&
             buildFindingCommentBody(finding) === comment.body,
         );
 
