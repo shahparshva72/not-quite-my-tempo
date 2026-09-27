@@ -565,17 +565,43 @@ headSha }` via `Schema` decode). Tagged errors:
   and summary are not persisted anywhere (needs a new migration +
   `test/setup.ts` extension) so the most interesting column can't be shown;
   no deep-links to the GitHub PR or posted comments; no pagination past 25
-  runs; effective `.fletcher.json` not displayed. Partial browser verification
-  found overflow and misleading empty states; accessibility verification
-  remains pending. See `docs/MANUAL_TEST_RESULTS_2026-09-14.md` for evidence.
+  runs; effective `.fletcher.json` not displayed. Accessibility verification
+  remains pending. Overflow and empty-state defects were fixed 2026-09-28.
 - Live verification used `shahparshva72/cv#14` with an isolated arithmetic
   fixture. It confirmed a `not_my_tempo` verdict and a correctly anchored
   critical finding on line 4.
+
+## E2E re-test and fixes — 2026-09-28
+
+Local Worker on an isolated D1, signed webhook deliveries replayed for
+fixture PRs 15–20 in `shahparshva72/cv`, real GitHub and Gemini calls.
+All four 2026-09-14 defects are now resolved:
+
+- **Comment IDs (fixed).** Root cause: `GET /pulls/{n}/reviews/{id}/comments`
+  returns `line: null` (only `GET /pulls/{n}/comments` includes it), so the
+  write-back match never succeeded. Matching now ignores a null line; the
+  test stub mirrors GitHub's real shape. Live: run 12 stored comment
+  `4116771873`.
+- **OAuth redirect (fixed earlier)** — callback lands on `/dashboard`.
+- **Empty states (fixed).** Failed, skipped (completed without a model),
+  in-progress, and cancelled runs get distinct messages; only reviewed runs
+  get "...Good job."
+- **Mobile overflow (fixed).** Tables scroll within `.table-wrap`; long
+  text wraps. All dashboard pages measure 390px at a 390px viewport.
+
+Passed live: routes/auth guards, webhook signature and schema checks,
+idempotent redelivery, full review on PR 16, disabled/ignore/threshold/
+oversized/malformed config fixtures, `/fletcher again` and its guards,
+read-API isolation, dashboard sign-out revocation. Not exercised live:
+browser OAuth, tunnel redelivery, intensity tone, rate-cap saturation.
+Gemini `gemini-3.8-flash` intermittently returned 503 (correctly recorded
+as `gemini_error`); retries succeeded.
 
 ## Manual test findings — 2026-09-14
 
 Latest results: [detailed test report](./MANUAL_TEST_RESULTS_2026-09-14.md).
 Partial verification with four confirmed defects; not release sign-off.
+All four were resolved on 2026-09-28 (see the section above).
 No application code changed. The initial notes below predate live testing;
 the detailed report supersedes their pending statuses.
 

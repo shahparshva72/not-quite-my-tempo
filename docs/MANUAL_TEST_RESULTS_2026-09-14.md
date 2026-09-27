@@ -3,6 +3,7 @@
 Playbook: [MANUAL_TESTING.md](./MANUAL_TESTING.md).
 
 **Partial verification: four confirmed defects; not release sign-off.**
+All four defects were resolved on 2026-09-28; see `PROGRESS.md`.
 No application source or real secrets were changed. Tests used local D1,
 the local Worker, real GitHub/Gemini calls, and the user-authorized private
 test repository `shahparshva72/cv`. Luna subagents ran the gates and initial

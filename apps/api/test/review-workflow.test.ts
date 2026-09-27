@@ -398,7 +398,8 @@ describe("postReviewToGitHub", () => {
                   {
                     id: 9001,
                     path: "src/tempo.ts",
-                    line: 14,
+                    // GitHub's per-review comments endpoint omits `line`.
+                    line: null,
                     body: anchoredCommentBody,
                   },
                 ],

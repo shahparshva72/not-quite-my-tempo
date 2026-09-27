@@ -110,6 +110,49 @@ describe("dashboard", () => {
     expect(body).toContain("warning");
   });
 
+  it("does not praise failed or skipped runs without findings", async () => {
+    const [failed, skipped] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reviewRuns = yield* ReviewRunRepository;
+
+        const failedRun = yield* reviewRuns.create({
+          repositoryId: 1,
+          pullRequestNumber: 43,
+          headSha: "fail123",
+          trigger: "opened",
+        });
+
+        yield* reviewRuns.markFailed(failedRun.id, "diff_too_large", "big");
+
+        const skippedRun = yield* reviewRuns.create({
+          repositoryId: 1,
+          pullRequestNumber: 44,
+          headSha: "skip123",
+          trigger: "opened",
+        });
+
+        yield* reviewRuns.markCompleted(skippedRun.id);
+
+        return [failedRun, skippedRun] as const;
+      }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+    );
+
+    const cookie = await sessionCookie([3001]);
+
+    const failedBody = await (
+      await request(`/dashboard/runs/${failed.id}`, cookie)
+    ).text();
+
+    const skippedBody = await (
+      await request(`/dashboard/runs/${skipped.id}`, cookie)
+    ).text();
+
+    expect(failedBody).toContain("The review failed");
+    expect(failedBody).not.toContain("Good job");
+    expect(skippedBody).toContain("Review skipped");
+    expect(skippedBody).not.toContain("Good job");
+  });
+
   it("hides inaccessible repositories behind a 404 page", async () => {
     await seedRun();
 
