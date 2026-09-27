@@ -52,7 +52,8 @@ describe("onboarding", () => {
       "https://github.com/apps/fletcher-test/installations/new",
     );
     expect(body).toContain("not-my-tempo/app");
-    expect(body).toContain("Turn off reviews for not-my-tempo/app");
+    expect(body).toContain('aria-label="Reviews for not-my-tempo/app"');
+    expect(body).toContain('aria-checked="true"');
   });
 
   it("shows install guidance when the user has no repositories", async () => {
@@ -93,6 +94,20 @@ describe("onboarding", () => {
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("/onboarding");
     expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("shows a switched-off repository as off", async () => {
+    await env.DB.prepare(
+      "UPDATE repositories SET enabled = 0 WHERE id = 1",
+    ).run();
+    const cookie = await sessionCookie([3001]);
+
+    const body = await (
+      await request("/onboarding", { headers: { cookie } })
+    ).text();
+
+    expect(body).toContain('aria-checked="false"');
+    expect(body).toContain("Reviews off");
   });
 
   it("turns reviews off and back on for an accessible repository", async () => {

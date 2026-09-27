@@ -151,6 +151,26 @@ describe("account sign-in and sign-out", () => {
     expect(await env.DB.prepare("SELECT id FROM users").first()).toBeNull();
   });
 
+  it("shows browsers a sign-in page instead of a JSON error", async () => {
+    const response = await authRoutes(identityFetch("neiman")).request(
+      "https://example.com/callback?error=access_denied&state=expected",
+      {
+        headers: {
+          cookie: "nqmt_oauth_state=expected",
+          accept: "text/html,application/xhtml+xml",
+        },
+      },
+      testEnv,
+    );
+
+    const body = await response.text();
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(body).toContain("GitHub sign-in didn&#39;t finish");
+    expect(body).toContain('href="/auth/login"');
+  });
+
   it("rejects invalid state before making a GitHub request", async () => {
     let calls = 0;
 

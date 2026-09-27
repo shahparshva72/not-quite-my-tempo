@@ -162,6 +162,8 @@ describe("dashboard", () => {
     );
 
     expect(response.status).toBe(404);
-    await expect(response.text()).resolves.toContain("Not my chart");
+    await expect(response.text()).resolves.toContain(
+      "This page doesn&#39;t exist",
+    );
   });
 });
