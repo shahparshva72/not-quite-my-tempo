@@ -27,11 +27,31 @@ then this file for exactly where things stand and what to do next.
 | 9     | `.fletcher.json` + guard  | ✅ Done       |
 | 10    | Read API + GitHub OAuth   | ✅ Done       |
 | 11    | Dashboard UI              | 🟡 v1 shipped |
+| 12    | Accounts & authorization  | 🟡 Partial    |
+| 13    | GitHub onboarding         | 🟡 Sync done  |
+| 16    | BYOK, trial, billing      | ⬜ Planned    |
 
-**Next task:** continue Phase 12 with workspace ownership/memberships and
-automatic permission refresh. Persistent users, revocable sessions, and
-repository-level access are implemented and verified. This does not yet
-complete the SaaS account and onboarding foundation.
+**Next task:** build the onboarding flow (Phase 13): an "Install on
+GitHub" link with a signed `state`, a Setup URL callback that verifies the
+`installation_id` against `GET /user/installations` for the signed-in user,
+then repository selection and first-review guidance. Installation sync
+(below) already keeps repositories current. Workspaces/memberships
+(Phase 12) follow; see PLAN.md "Recommended order".
+
+### Installation sync — 2026-09-28
+
+- `installation` (created/unsuspend/new_permissions_accepted) and
+  `installation_repositories` (added/removed) deliveries reconcile stored
+  repositories against `GET /installation/repositories`
+  (`apps/api/src/application/installation-sync.ts`).
+- `suspend` marks the installation `suspended`; `deleted` marks it
+  `removed` and sets `removed_at` on all its repositories. History is kept.
+- Migration `0003` adds `github_installations.status` and
+  `repositories.removed_at`. Pull request deliveries never change either,
+  so a late webhook cannot revive access.
+- `handleReviewRequest` skips (`ignored`) inactive installations, removed
+  repositories, and repositories with `enabled = false` (previously
+  unenforced). The read API and dashboard hide removed repositories.
 
 ### Active priorities (2026-09-18)
 

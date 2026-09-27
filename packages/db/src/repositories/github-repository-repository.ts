@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 
 import { databaseEffect } from "../errors.js";
@@ -12,6 +12,11 @@ export type UpsertGitHubRepositoryInput = Pick<
   "installationId" | "githubRepositoryId" | "owner" | "name" | "defaultBranch"
 >;
 
+export type InstallationRepositoryInput = Omit<
+  UpsertGitHubRepositoryInput,
+  "installationId"
+>;
+
 export class GitHubRepositoryRepository extends Effect.Service<GitHubRepositoryRepository>()(
   "@not-quite-my-tempo/db/GitHubRepositoryRepository",
   {
@@ -19,29 +24,78 @@ export class GitHubRepositoryRepository extends Effect.Service<GitHubRepositoryR
     effect: Effect.gen(function* () {
       const { client } = yield* Database;
 
+      const upsertStatement = (
+        input: UpsertGitHubRepositoryInput,
+        restore: boolean,
+      ) =>
+        client
+          .insert(repositories)
+          .values({
+            ...input,
+            fullName: `${input.owner}/${input.name}`,
+          })
+          .onConflictDoUpdate({
+            target: repositories.githubRepositoryId,
+            set: {
+              installationId: input.installationId,
+              owner: input.owner,
+              name: input.name,
+              fullName: `${input.owner}/${input.name}`,
+              defaultBranch: input.defaultBranch,
+              removedAt: restore ? null : sql`${repositories.removedAt}`,
+              updatedAt: new Date(),
+            },
+          })
+          .returning();
+
       return {
         upsert: (input: UpsertGitHubRepositoryInput) =>
           databaseEffect("repositories.upsert", () =>
-            client
-              .insert(repositories)
-              .values({
-                ...input,
-                fullName: `${input.owner}/${input.name}`,
-              })
-              .onConflictDoUpdate({
-                target: repositories.githubRepositoryId,
-                set: {
-                  installationId: input.installationId,
-                  owner: input.owner,
-                  name: input.name,
-                  fullName: `${input.owner}/${input.name}`,
-                  defaultBranch: input.defaultBranch,
-                  updatedAt: new Date(),
-                },
-              })
-              .returning()
-              .get(),
+            upsertStatement(input, false).get(),
           ),
+        /**
+         * Reconciles an installation's repositories with the full list GitHub
+         * reports: listed repositories are upserted and restored, the rest
+         * of the installation's repositories are marked removed.
+         */
+        syncForInstallation: (
+          installationId: number,
+          inputs: readonly InstallationRepositoryInput[],
+        ) =>
+          databaseEffect("repositories.sync_for_installation", () => {
+            const now = new Date();
+
+            return client.batch([
+              client
+                .update(repositories)
+                .set({ removedAt: now, updatedAt: now })
+                .where(
+                  and(
+                    eq(repositories.installationId, installationId),
+                    isNull(repositories.removedAt),
+                    sql`${repositories.githubRepositoryId} not in (select value from json_each(${JSON.stringify(inputs.map((input) => input.githubRepositoryId))}))`,
+                  ),
+                ),
+              ...inputs.map((input) =>
+                upsertStatement({ ...input, installationId }, true),
+              ),
+            ]);
+          }).pipe(Effect.asVoid),
+        removeAllForInstallation: (installationId: number) =>
+          databaseEffect("repositories.remove_all_for_installation", () => {
+            const now = new Date();
+
+            return client
+              .update(repositories)
+              .set({ removedAt: now, updatedAt: now })
+              .where(
+                and(
+                  eq(repositories.installationId, installationId),
+                  isNull(repositories.removedAt),
+                ),
+              )
+              .run();
+          }).pipe(Effect.asVoid),
         listByGithubRepositoryIds: (githubRepositoryIds: readonly number[]) =>
           githubRepositoryIds.length === 0
             ? Effect.succeed<readonly GitHubRepository[]>([])
@@ -50,7 +104,10 @@ export class GitHubRepositoryRepository extends Effect.Service<GitHubRepositoryR
                   .select()
                   .from(repositories)
                   .where(
-                    sql`${repositories.githubRepositoryId} in (select value from json_each(${JSON.stringify(githubRepositoryIds)}))`,
+                    and(
+                      isNull(repositories.removedAt),
+                      sql`${repositories.githubRepositoryId} in (select value from json_each(${JSON.stringify(githubRepositoryIds)}))`,
+                    ),
                   )
                   .all(),
               ),

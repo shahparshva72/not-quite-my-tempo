@@ -28,6 +28,7 @@ const requireAccessibleRepository = (
       Option.match({
         onNone: () => new ResourceNotFoundError(),
         onSome: (repository) =>
+          repository.removedAt === null &&
           repositoryIds.includes(repository.githubRepositoryId)
             ? Effect.succeed(repository)
             : new ResourceNotFoundError(),

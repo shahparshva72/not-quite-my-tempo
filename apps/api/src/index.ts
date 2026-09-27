@@ -25,6 +25,7 @@ import {
   runFindingsPage,
 } from "./dashboard/views.js";
 import { GitHubAppAuthLive } from "./github/app-auth.js";
+import { GitHubInstallationClientLive } from "./github/installation-client.js";
 import { GitHubPullRequestClientLive } from "./github/pull-request-client.js";
 import { processGitHubWebhook } from "./github/webhook.js";
 import { logError } from "./logging.js";
@@ -136,6 +137,7 @@ app.post("/webhooks/github", (c) => {
         }),
       ),
       Effect.provide(GitHubPullRequestClientLive({})),
+      Effect.provide(GitHubInstallationClientLive({})),
       Effect.match({
         onFailure: (cause) =>
           Match.value(cause).pipe(

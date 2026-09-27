@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { databaseEffect } from "../errors.js";
@@ -6,13 +7,19 @@ import { Database } from "../services/database.js";
 
 export type GitHubInstallation = typeof githubInstallations.$inferSelect;
 
+export type GitHubInstallationStatus = GitHubInstallation["status"];
+
 export type UpsertGitHubInstallationInput = Pick<
   GitHubInstallation,
   | "githubInstallationId"
   | "githubAccountId"
   | "githubAccountLogin"
   | "accountType"
->;
+> & {
+  // Omitted by pull request deliveries so a late event cannot revive a
+  // suspended or removed installation; installation webhooks set it.
+  readonly status?: GitHubInstallationStatus;
+};
 
 export class GitHubInstallationRepository extends Effect.Service<GitHubInstallationRepository>()(
   "@not-quite-my-tempo/db/GitHubInstallationRepository",
@@ -33,6 +40,7 @@ export class GitHubInstallationRepository extends Effect.Service<GitHubInstallat
                   githubAccountId: input.githubAccountId,
                   githubAccountLogin: input.githubAccountLogin,
                   accountType: input.accountType,
+                  status: input.status ?? sql`${githubInstallations.status}`,
                   updatedAt: new Date(),
                 },
               })

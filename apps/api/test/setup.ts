@@ -4,8 +4,9 @@ import { beforeAll } from "vitest";
 import migration0000 from "../../../packages/db/drizzle/0000_spooky_kinsey_walden.sql?raw";
 import migration0001 from "../../../packages/db/drizzle/0001_abandoned_lorna_dane.sql?raw";
 import migration0002 from "../../../packages/db/drizzle/0002_good_metal_master.sql?raw";
+import migration0003 from "../../../packages/db/drizzle/0003_opposite_union_jack.sql?raw";
 
-const migrations = [migration0000, migration0001, migration0002];
+const migrations = [migration0000, migration0001, migration0002, migration0003];
 
 beforeAll(async () => {
   const statements = migrations.flatMap((migration) =>
