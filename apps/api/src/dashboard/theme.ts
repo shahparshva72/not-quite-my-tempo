@@ -178,6 +178,31 @@ section.band { padding: 3rem 0; border-top: 1px solid var(--staff); }
 .message { padding: clamp(2rem, 8vw, 6rem) 0; max-width: 40rem; }
 .message .page-title { font-size: clamp(2.2rem, 6vw, 3.5rem); font-variation-settings: "wdth" 62; }
 
+/* Entry lists: repositories on the dashboard, reviews on a repository */
+.page-head {
+  display: flex; flex-wrap: wrap; gap: 0.5rem 2rem;
+  align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem;
+}
+.page-head .page-title { margin-bottom: 0; }
+.page-head form { align-self: center; }
+.entries { list-style: none; margin: 0 0 2rem; padding: 0; max-width: 56rem; }
+.entry {
+  display: grid; grid-template-columns: 3rem minmax(0, 1fr); gap: 1rem;
+  padding: 1.1rem 0; border-bottom: 1px solid var(--staff);
+}
+.entries .entry:first-child { border-top: 1px solid var(--staff); }
+.entry-mark { padding-top: 0.1rem; }
+.entry p { margin: 0; max-width: none; }
+.entry-title {
+  display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: baseline;
+  font-weight: 600; overflow-wrap: anywhere;
+}
+.entry-title a { font-size: 1.2rem; font-weight: 700; }
+.entry-title span { font-weight: 400; }
+.entry-detail { margin-top: 0.25rem; }
+.state-active { color: var(--brass); }
+.state-failed { color: var(--red-pencil); }
+
 /* Tables on dashboard pages */
 .table-wrap { overflow-x: auto; margin-top: 1rem; }
 table.data { border-collapse: collapse; width: 100%; }

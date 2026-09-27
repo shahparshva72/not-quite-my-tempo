@@ -83,8 +83,12 @@ export const rehearsalStep = (
  * Review on/off control. A real form post, so it works without JavaScript;
  * the button is a switch whose accessible name is the repository.
  */
-export const reviewSwitch = (repository: GitHubRepository) =>
+export const reviewSwitch = (
+  repository: GitHubRepository,
+  returnTo: "onboarding" | "repository",
+) =>
   html`<form method="post" action="/onboarding/repositories/${repository.id}">
+    <input type="hidden" name="return" value="${returnTo}" />
     <input
       type="hidden"
       name="enabled"
@@ -116,3 +120,126 @@ export const messagePage = (
       ${body}
     </div>`,
   );
+
+const failureReasons = new Map<string, string>([
+  [
+    "github_auth_error",
+    "Fletcher couldn't sign in to GitHub for this repository",
+  ],
+  ["diff_fetch_error", "GitHub didn't send the pull request's changes"],
+  ["diff_too_large", "the pull request is too large to review"],
+  ["post_review_error", "GitHub didn't accept the review comments"],
+  ["gemini_error", "the Gemini API didn't return a review"],
+  ["db_error", "a storage error on our side"],
+  ["review_run_not_found", "a storage error on our side"],
+]);
+
+/** Why a review failed, in words a repository owner can act on. */
+export const failureReason = (errorCode: string | null) =>
+  failureReasons.get(errorCode ?? "") ?? "an unexpected error on our side";
+
+const triggerLabels = new Map<string, string>([
+  ["opened", "Opened"],
+  ["synchronize", "New push"],
+  ["reopened", "Reopened"],
+  ["manual", "Asked again"],
+]);
+
+export const triggerLabel = (trigger: string) =>
+  triggerLabels.get(trigger) ?? trigger;
+
+const numberFormat = new Intl.NumberFormat("en-US");
+
+export const formatNumber = (value: number) => numberFormat.format(value);
+
+const plural = (value: number, unit: string) =>
+  `${value} ${unit}${value === 1 ? "" : "s"} ago`;
+
+/**
+ * "just now", "5 minutes ago", "3 days ago"; older than 30 days falls back
+ * to the date. The exact time stays available in the title attribute.
+ */
+export const relativeTime = (date: Date, now: Date) => {
+  const minutes = Math.floor((now.getTime() - date.getTime()) / 60_000);
+
+  const label =
+    minutes < 1
+      ? "just now"
+      : minutes < 60
+        ? plural(minutes, "minute")
+        : minutes < 60 * 24
+          ? plural(Math.floor(minutes / 60), "hour")
+          : minutes < 60 * 24 * 30
+            ? plural(Math.floor(minutes / (60 * 24)), "day")
+            : date.toISOString().slice(0, 10);
+
+  return html`<time
+    datetime="${date.toISOString()}"
+    title="${date.toISOString().replace("T", " ").slice(0, 16)} UTC"
+    >${label}</time
+  >`;
+};
+
+export interface ReviewCounts {
+  readonly critical: number;
+  readonly warning: number;
+  readonly suggestion: number;
+}
+
+const countPhrase = (counts: ReviewCounts) =>
+  [
+    counts.critical > 0 ? `${counts.critical} critical` : null,
+    counts.warning > 0
+      ? `${counts.warning} warning${counts.warning === 1 ? "" : "s"}`
+      : null,
+    counts.suggestion > 0
+      ? `${counts.suggestion} suggestion${counts.suggestion === 1 ? "" : "s"}`
+      : null,
+  ]
+    .filter((part) => part !== null)
+    .join(", ");
+
+const loudest = (counts: ReviewCounts): FindingSeverity | null =>
+  counts.critical > 0
+    ? "critical"
+    : counts.warning > 0
+      ? "warning"
+      : counts.suggestion > 0
+        ? "suggestion"
+        : null;
+
+export interface ReviewOutcomeRun {
+  readonly status: string;
+  readonly model: string | null;
+  readonly errorCode: string | null;
+}
+
+/**
+ * The mark column and one-line result for a review: its loudest finding as
+ * a dynamic mark plus counts, or the run's state in plain words.
+ */
+export const reviewOutcome = (run: ReviewOutcomeRun, counts: ReviewCounts) => {
+  // Only a finished review has a verdict worth marking.
+  const mark =
+    run.status === "completed" && run.model !== null ? loudest(counts) : null;
+
+  const text =
+    run.status === "queued" || run.status === "running"
+      ? html`<span class="state-active">Reviewing now</span>`
+      : run.status === "failed"
+        ? html`<span class="state-failed"
+            >Failed: ${failureReason(run.errorCode)}</span
+          >`
+        : run.status === "cancelled"
+          ? html`<span class="quiet">Cancelled</span>`
+          : run.model === null
+            ? html`<span class="quiet">Skipped by .fletcher.json</span>`
+            : mark === null
+              ? html`<span>No findings</span>`
+              : html`<span>${countPhrase(counts)}</span>`;
+
+  return {
+    mark: mark === null ? html`` : dynamicMark(mark),
+    text,
+  };
+};

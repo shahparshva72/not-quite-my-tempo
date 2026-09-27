@@ -5,22 +5,21 @@ import type {
   ReviewRun,
 } from "@not-quite-my-tempo/db";
 
+import type {
+  RepositoryOverview,
+  ReviewSummary,
+} from "../application/read-api.js";
 import {
   dynamicMark,
+  formatNumber,
   layout,
   messagePage,
   rehearsalStep,
+  relativeTime,
+  reviewOutcome,
   reviewSwitch,
+  triggerLabel,
 } from "./components.js";
-
-export interface RepositoryUsageRow {
-  readonly repositoryId: number;
-  readonly fullName: string;
-  readonly runCount: number;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly totalTokens: number;
-}
 
 const sampleReview = html`<figure class="sample">
   <figcaption class="fine">
@@ -115,107 +114,128 @@ export const signInErrorPage = (explanation: string) =>
       <a class="btn" href="/auth/login">Sign in with GitHub</a>`,
   );
 
-const formatDate = (date: Date) =>
-  date.toISOString().replace("T", " ").slice(0, 16);
+const pullRequestUrl = (fullName: string, pullRequestNumber: number) =>
+  `https://github.com/${fullName}/pull/${pullRequestNumber}`;
+
+const repositoryRow = (
+  { repository, latest }: RepositoryOverview,
+  now: Date,
+) => {
+  const outcome =
+    latest === null ? null : reviewOutcome(latest.run, latest.counts);
+
+  return html`<li class="entry">
+    <span class="entry-mark">${outcome === null ? "" : outcome.mark}</span>
+    <div>
+      <p class="entry-title">
+        <a href="/dashboard/repositories/${repository.id}"
+          >${repository.fullName}</a
+        >
+        <span class="quiet"
+          >${repository.enabled ? "Reviews on" : "Reviews off"}</span
+        >
+      </p>
+      <p class="entry-detail">
+        ${
+          latest === null || outcome === null
+            ? html`<span class="quiet">No reviews yet</span>`
+            : html`<a href="/dashboard/runs/${latest.run.id}"
+                  >Pull request ${latest.run.pullRequestNumber}</a
+                >,
+                <span class="quiet"
+                  >${relativeTime(latest.run.createdAt, now)}</span
+                >: ${outcome.text}`
+        }
+      </p>
+    </div>
+  </li>`;
+};
 
 export const dashboardPage = (
   login: string,
-  usage: readonly RepositoryUsageRow[],
+  overview: {
+    readonly repositories: readonly RepositoryOverview[];
+    readonly totals: {
+      readonly reviewCount: number;
+      readonly totalTokens: number;
+    };
+  },
+  now: Date,
 ) =>
   layout(
     "Your repositories",
     login,
-    html`<h1 class="page-title">Your repositories</h1>
-      <p>
+    html`<div class="page-head">
+        <h1 class="page-title">Your repositories</h1>
         <a href="/onboarding">Choose which repositories Fletcher reviews</a>
-      </p>
+      </div>
       ${
-        usage.length === 0
+        overview.repositories.length === 0
           ? html`<p>
                 Install Fletcher on a repository to get your first review.
               </p>
               <a class="btn" href="/onboarding">Set up Fletcher</a>`
-          : html`<div class="table-wrap">
-              <table class="data">
-                <thead>
-                  <tr>
-                    <th>Repository</th>
-                    <th class="num">Runs</th>
-                    <th class="num">Input tokens</th>
-                    <th class="num">Output tokens</th>
-                    <th class="num">Total tokens</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${usage.map(
-                    (row) =>
-                      html`<tr>
-                        <td>
-                          <a href="/dashboard/repositories/${row.repositoryId}">
-                            ${row.fullName}
-                          </a>
-                        </td>
-                        <td class="num">${row.runCount}</td>
-                        <td class="num">${row.inputTokens}</td>
-                        <td class="num">${row.outputTokens}</td>
-                        <td class="num">${row.totalTokens}</td>
-                      </tr>`,
-                  )}
-                </tbody>
-              </table>
-            </div>`
+          : html`<ul class="entries">
+                ${overview.repositories.map((entry) => repositoryRow(entry, now))}
+              </ul>
+              <p class="fine">
+                ${formatNumber(overview.totals.reviewCount)}
+                ${overview.totals.reviewCount === 1 ? "review" : "reviews"} so
+                far, using ${formatNumber(overview.totals.totalTokens)} Gemini
+                tokens.
+              </p>`
       }`,
   );
+
+const reviewRow = (
+  repository: GitHubRepository,
+  { run, counts }: ReviewSummary,
+  now: Date,
+) => {
+  const outcome = reviewOutcome(run, counts);
+
+  return html`<li class="entry">
+    <span class="entry-mark">${outcome.mark}</span>
+    <div>
+      <p class="entry-title">
+        <a href="/dashboard/runs/${run.id}"
+          >Pull request ${run.pullRequestNumber}</a
+        >
+        ${outcome.text}
+      </p>
+      <p class="entry-detail quiet">
+        ${triggerLabel(run.trigger)}, ${relativeTime(run.createdAt, now)}.
+        <a href="${pullRequestUrl(repository.fullName, run.pullRequestNumber)}"
+          >View on GitHub</a
+        >
+      </p>
+    </div>
+  </li>`;
+};
 
 export const repositoryRunsPage = (
   login: string,
   repository: GitHubRepository,
-  runs: readonly ReviewRun[],
+  reviews: readonly ReviewSummary[],
+  now: Date,
 ) =>
   layout(
     repository.fullName,
     login,
     html`<p class="crumbs"><a href="/dashboard">Your repositories</a></p>
-      <h1 class="page-title">${repository.fullName}</h1>
+      <div class="page-head">
+        <h1 class="page-title">${repository.fullName}</h1>
+        ${reviewSwitch(repository, "repository")}
+      </div>
       ${
-        runs.length === 0
+        reviews.length === 0
           ? html`<p>
               No reviews yet. Open a pull request and Fletcher reviews it within
               a minute.
             </p>`
-          : html`<div class="table-wrap">
-              <table class="data">
-                <thead>
-                  <tr>
-                    <th>Run</th>
-                    <th>PR</th>
-                    <th>Trigger</th>
-                    <th>Status</th>
-                    <th>Error</th>
-                    <th>Model</th>
-                    <th class="num">Tokens</th>
-                    <th>Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${runs.map(
-                    (run) =>
-                      html`<tr>
-                        <td>
-                          <a href="/dashboard/runs/${run.id}">#${run.id}</a>
-                        </td>
-                        <td>#${run.pullRequestNumber}</td>
-                        <td>${run.trigger}</td>
-                        <td class="status-${run.status}">${run.status}</td>
-                        <td>${run.errorCode ?? ""}</td>
-                        <td>${run.model ?? ""}</td>
-                        <td class="num">${run.totalTokens ?? ""}</td>
-                        <td class="quiet">${formatDate(run.createdAt)}</td>
-                      </tr>`,
-                  )}
-                </tbody>
-              </table>
-            </div>`
+          : html`<ul class="entries">
+              ${reviews.map((review) => reviewRow(repository, review, now))}
+            </ul>`
       }`,
   );
 
@@ -333,7 +353,7 @@ export const onboardingPage = (
                         (repository) =>
                           html`<tr>
                             <td>${repository.fullName}</td>
-                            <td>${reviewSwitch(repository)}</td>
+                            <td>${reviewSwitch(repository, "onboarding")}</td>
                           </tr>`,
                       )}
                     </tbody>

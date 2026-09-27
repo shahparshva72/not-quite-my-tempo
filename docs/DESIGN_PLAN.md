@@ -294,10 +294,10 @@ Server-rendered Hono `html` templates stay. No framework and no build step.
    - Serve the CSS inline as today (it stays under 10KB); revisit a cached
      `/assets/app.css` if it grows.
    - Check the contrast targets.
-2. **Landing, onboarding, and message pages.** Landing hero with the staff
+2. **Landing, onboarding, and message pages** (done 2026-09-28). Landing hero with the staff
    and pencil, onboarding with rehearsal marks and switches, and HTML error
    pages for sign-in failures.
-3. **Dashboard and repository pages.** Last-review summary per repository,
+3. **Dashboard and repository pages** (done 2026-09-28). Last-review summary per repository,
    pull-request rows, and plain status wording.
 4. **Review page.** Needs the Phase 14 migration for `verdict` and
    `summary`, and PR/comment URLs built from `owner`, `name`, and

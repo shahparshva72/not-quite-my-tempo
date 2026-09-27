@@ -14,9 +14,11 @@ import type { Context } from "hono";
 import { ReviewWorkflowLive } from "./application/review-requests.js";
 import type { ReviewWorkflowParams } from "./application/review-requests.js";
 import {
+  dashboardOverview,
   listAccessibleRepositories,
   listRepositoryRuns,
   listRunFindings,
+  repositoryReviewHistory,
   requireAccessibleRepository,
   usageSummary,
 } from "./application/read-api.js";
@@ -206,11 +208,12 @@ const withSessionPage = (
 app.get("/dashboard", (c) =>
   withSessionPage(c, (session) =>
     Effect.runPromise(
-      usageSummary(session.repositoryIds).pipe(
+      dashboardOverview(session.repositoryIds).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),
-          onSuccess: (usage) => c.html(dashboardPage(session.login, usage)),
+          onSuccess: (overview) =>
+            c.html(dashboardPage(session.login, overview, new Date())),
         }),
       ),
     ),
@@ -226,7 +229,7 @@ app.get("/dashboard/repositories/:id", (c) =>
     }
 
     return Effect.runPromise(
-      listRepositoryRuns(session.repositoryIds, repositoryId).pipe(
+      repositoryReviewHistory(session.repositoryIds, repositoryId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -236,8 +239,15 @@ app.get("/dashboard/repositories/:id", (c) =>
               ),
               Match.orElse((error) => internalError(c, error)),
             ),
-          onSuccess: ({ repository, runs }) =>
-            c.html(repositoryRunsPage(session.login, repository, runs)),
+          onSuccess: ({ repository, reviews }) =>
+            c.html(
+              repositoryRunsPage(
+                session.login,
+                repository,
+                reviews,
+                new Date(),
+              ),
+            ),
         }),
       ),
     );
@@ -340,6 +350,12 @@ app.post("/onboarding/repositories/:id", (c) => {
     const form = await c.req.parseBody();
     const enabled = form["enabled"];
 
+    // Only two known pages; anything else goes back to onboarding.
+    const returnTo =
+      form["return"] === "repository"
+        ? `/dashboard/repositories/${repositoryId}`
+        : "/onboarding";
+
     if (
       !Number.isInteger(repositoryId) ||
       (enabled !== "true" && enabled !== "false")
@@ -364,7 +380,7 @@ app.post("/onboarding/repositories/:id", (c) => {
               ),
               Match.orElse((error) => internalError(c, error)),
             ),
-          onSuccess: () => c.redirect("/onboarding", 303),
+          onSuccess: () => c.redirect(returnTo, 303),
         }),
       ),
     );

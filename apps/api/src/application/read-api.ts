@@ -4,6 +4,11 @@ import {
   GitHubRepositoryRepository,
   ReviewRunRepository,
 } from "@not-quite-my-tempo/db";
+import type {
+  FindingSeverityCount,
+  GitHubRepository,
+  ReviewRun,
+} from "@not-quite-my-tempo/db";
 
 const RUNS_PAGE_SIZE = 25;
 
@@ -98,3 +103,90 @@ export const usageSummary = (repositoryIds: readonly number[]) =>
       };
     });
   });
+
+export interface SeverityCounts {
+  readonly critical: number;
+  readonly warning: number;
+  readonly suggestion: number;
+}
+
+/** A review run with how many findings of each severity it produced. */
+export interface ReviewSummary {
+  readonly run: ReviewRun;
+  readonly counts: SeverityCounts;
+}
+
+const summarize = (
+  runs: readonly ReviewRun[],
+  counts: readonly FindingSeverityCount[],
+): readonly ReviewSummary[] =>
+  runs.map((run) => {
+    const countOf = (severity: FindingSeverityCount["severity"]) =>
+      counts.find(
+        (entry) => entry.reviewRunId === run.id && entry.severity === severity,
+      )?.findingCount ?? 0;
+
+    return {
+      run,
+      counts: {
+        critical: countOf("critical"),
+        warning: countOf("warning"),
+        suggestion: countOf("suggestion"),
+      },
+    };
+  });
+
+const summarizeRuns = (runs: readonly ReviewRun[]) =>
+  FindingRepository.severityCountsByReviewRunIds(
+    runs.map((run) => run.id),
+  ).pipe(Effect.map((counts) => summarize(runs, counts)));
+
+export interface RepositoryOverview {
+  readonly repository: GitHubRepository;
+  readonly latest: ReviewSummary | null;
+}
+
+/**
+ * Dashboard data: each accessible repository with its most recent review,
+ * plus all-time totals across them.
+ */
+export const dashboardOverview = (repositoryIds: readonly number[]) =>
+  Effect.gen(function* () {
+    const repositories = yield* listAccessibleRepositories(repositoryIds);
+    const ids = repositories.map((repository) => repository.id);
+
+    const latestRuns = yield* ReviewRunRepository.latestByRepositoryIds(ids);
+    const latest = yield* summarizeRuns(latestRuns);
+    const usage = yield* ReviewRunRepository.usageByRepositoryIds(ids);
+
+    const overview: readonly RepositoryOverview[] = repositories.map(
+      (repository) => ({
+        repository,
+        latest:
+          latest.find(
+            (summary) => summary.run.repositoryId === repository.id,
+          ) ?? null,
+      }),
+    );
+
+    return {
+      repositories: overview,
+      totals: {
+        reviewCount: usage.reduce((sum, entry) => sum + entry.runCount, 0),
+        totalTokens: usage.reduce((sum, entry) => sum + entry.totalTokens, 0),
+      },
+    };
+  });
+
+/** Repository page data: its recent reviews with finding counts. */
+export const repositoryReviewHistory = (
+  repositoryIds: readonly number[],
+  repositoryId: number,
+) =>
+  listRepositoryRuns(repositoryIds, repositoryId).pipe(
+    Effect.flatMap(({ repository, runs }) =>
+      summarizeRuns(runs).pipe(
+        Effect.map((reviews) => ({ repository, reviews })),
+      ),
+    ),
+  );

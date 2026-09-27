@@ -124,6 +124,23 @@ describe("onboarding", () => {
     expect(await repositoryEnabled()).toBe(1);
   });
 
+  it("returns a toggle from the repository page to that page", async () => {
+    const cookie = await sessionCookie([3001]);
+
+    const response = await request("/onboarding/repositories/1", {
+      method: "POST",
+      headers: {
+        cookie,
+        origin: "https://example.com",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: "enabled=false&return=repository",
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/dashboard/repositories/1");
+  });
+
   it("refuses to change repositories outside the session's access", async () => {
     const cookie = await sessionCookie([9999]);
 

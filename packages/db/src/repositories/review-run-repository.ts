@@ -193,6 +193,19 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
               .limit(limit)
               .all(),
           ),
+        /** The most recent run of each listed repository that has one. */
+        latestByRepositoryIds: (repositoryIds: readonly number[]) =>
+          repositoryIds.length === 0
+            ? Effect.succeed<readonly ReviewRun[]>([])
+            : databaseEffect("review_runs.latest_by_repository_ids", () =>
+                client
+                  .select()
+                  .from(reviewRuns)
+                  .where(
+                    sql`${reviewRuns.id} in (select max(id) from review_runs where repository_id in (select value from json_each(${JSON.stringify(repositoryIds)})) group by repository_id)`,
+                  )
+                  .all(),
+              ),
         usageByRepositoryIds: (repositoryIds: readonly number[]) =>
           repositoryIds.length === 0
             ? Effect.succeed<readonly RepositoryUsageSummary[]>([])

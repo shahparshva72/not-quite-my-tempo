@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { count, eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 
 import { databaseEffect } from "../errors.js";
@@ -17,6 +17,12 @@ export interface CreateFindingInput {
   readonly confidence: number | null;
   readonly title: string | null;
   readonly message: string;
+}
+
+export interface FindingSeverityCount {
+  readonly reviewRunId: number;
+  readonly severity: FindingSeverity;
+  readonly findingCount: number;
 }
 
 export class FindingRepository extends Effect.Service<FindingRepository>()(
@@ -48,6 +54,23 @@ export class FindingRepository extends Effect.Service<FindingRepository>()(
               .where(eq(findings.reviewRunId, reviewRunId))
               .all(),
           ),
+        severityCountsByReviewRunIds: (reviewRunIds: readonly number[]) =>
+          reviewRunIds.length === 0
+            ? Effect.succeed<readonly FindingSeverityCount[]>([])
+            : databaseEffect("findings.severity_counts_by_review_run_ids", () =>
+                client
+                  .select({
+                    reviewRunId: findings.reviewRunId,
+                    severity: findings.severity,
+                    findingCount: count(),
+                  })
+                  .from(findings)
+                  .where(
+                    sql`${findings.reviewRunId} in (select value from json_each(${JSON.stringify(reviewRunIds)}))`,
+                  )
+                  .groupBy(findings.reviewRunId, findings.severity)
+                  .all(),
+              ),
         setGithubCommentId: (id: number, githubCommentId: number) =>
           databaseEffect("findings.set_github_comment_id", () =>
             client
