@@ -1,5 +1,6 @@
 import { Effect, Layer, Option } from "effect";
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { makeLiveLayer, UserRepository } from "@not-quite-my-tempo/db";
 
@@ -8,6 +9,7 @@ import { GitHubAppAuthLive } from "../github/app-auth.js";
 import type { GitHubAppAuth } from "../github/app-auth.js";
 import { GitHubInstallationClientLive } from "../github/installation-client.js";
 import type { GitHubInstallationClient } from "../github/installation-client.js";
+import { signInErrorPage } from "../dashboard/views.js";
 import { logError } from "../logging.js";
 
 import { authorizeUrl, GitHubOAuth, GitHubOAuthLive } from "./github-oauth.js";
@@ -50,6 +52,21 @@ const cookieOptions = {
   sameSite: "Lax",
   path: "/",
 } as const;
+
+/**
+ * Sign-in failures for a person in a browser get a page with a way back
+ * in; other clients keep the JSON error body.
+ */
+const signInError = (
+  c: Context,
+  status: 400 | 401 | 500,
+  code: string,
+  message: string,
+  explanation: string,
+) =>
+  (c.req.header("accept") ?? "").includes("text/html")
+    ? c.html(signInErrorPage(explanation), status)
+    : c.json({ error: { code, message } }, status);
 
 export const createAuthRoutes = (
   oauthLayer?: Layer.Layer<GitHubOAuth>,
@@ -99,40 +116,34 @@ export const createAuthRoutes = (
       expectedState === undefined ||
       state !== expectedState
     ) {
-      return c.json(
-        {
-          error: {
-            code: "invalid_oauth_state",
-            message: "OAuth state mismatch",
-          },
-        },
+      return signInError(
+        c,
         401,
+        "invalid_oauth_state",
+        "OAuth state mismatch",
+        "The sign-in link expired or was opened in another tab. Start again from here.",
       );
     }
 
     if (c.req.query("error") !== undefined) {
-      return c.json(
-        {
-          error: {
-            code: "oauth_denied",
-            message: "GitHub sign-in was not completed. Try signing in again.",
-          },
-        },
+      return signInError(
+        c,
         401,
+        "oauth_denied",
+        "GitHub sign-in was not completed. Try signing in again.",
+        "GitHub sign-in was cancelled. Fletcher needs it to show your repositories.",
       );
     }
 
     const code = c.req.query("code");
 
     if (code === undefined || code === "") {
-      return c.json(
-        {
-          error: {
-            code: "invalid_oauth_callback",
-            message: "GitHub authorization code is missing",
-          },
-        },
+      return signInError(
+        c,
         400,
+        "invalid_oauth_callback",
+        "GitHub authorization code is missing",
+        "GitHub didn't send a sign-in code. Start again from here.",
       );
     }
 
@@ -187,14 +198,12 @@ export const createAuthRoutes = (
         ),
         Effect.match({
           onFailure: () =>
-            c.json(
-              {
-                error: {
-                  code: "oauth_failed",
-                  message: "GitHub sign-in failed. Try signing in again.",
-                },
-              },
+            signInError(
+              c,
               500,
+              "oauth_failed",
+              "GitHub sign-in failed. Try signing in again.",
+              "GitHub didn't answer as expected. Wait a minute, then sign in again.",
             ),
           onSuccess: ({ sessionCookie, destination }) => {
             setCookie(c, SESSION_COOKIE, sessionCookie, {

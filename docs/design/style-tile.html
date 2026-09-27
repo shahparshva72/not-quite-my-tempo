@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en" data-palette="stage-light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rehearsal Score style tile</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=Bodoni+Moda:ital,opsz,wght@1,6..96,700..900&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* Dark only. Stage light is the chosen palette; the others stay for comparison. */
+      [data-palette="midnight"] {
+        color-scheme: dark;
+        --paper: #141a2e;
+        --surface: #1d2440;
+        --ink: #eceef5;
+        --graphite: #9ca3bf;
+        --staff: #323b60;
+        --red-pencil: #ff6b5e;
+        --brass: #e6b450;
+        --brass-ink: #141a2e;
+        --measure: 38rem;
+      }
+      [data-palette="band-room"] {
+        --paper: #1a1411;
+        --surface: #241c17;
+        --ink: #f2e9de;
+        --graphite: #b5a797;
+        --staff: #3d3129;
+        --red-pencil: #f0605a;
+        --brass: #dda64a;
+        --brass-ink: #1a1411;
+      }
+      :root,
+      [data-palette="stage-light"] {
+        color-scheme: dark;
+        --measure: 38rem;
+        --paper: #0e1c1c;
+        --surface: #152828;
+        --ink: #e7f0ed;
+        --graphite: #93aea9;
+        --staff: #29413f;
+        --red-pencil: #ff6461;
+        --brass: #edb94e;
+        --brass-ink: #0e1c1c;
+      }
+      .palettes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+        padding: 0.75rem clamp(1rem, 4vw, 3rem);
+        border-bottom: 1px solid var(--staff);
+        color: var(--graphite);
+        font-size: 0.9rem;
+      }
+      .palettes button {
+        font: inherit;
+        color: var(--ink);
+        background: var(--surface);
+        border: 1px solid var(--staff);
+        border-radius: 2px;
+        padding: 0.3rem 0.7rem;
+        cursor: pointer;
+      }
+      .palettes button[aria-pressed="true"] {
+        border-color: var(--brass);
+      }
+      .swatches {
+        display: inline-flex;
+        gap: 0.25rem;
+        margin-left: auto;
+      }
+      .swatches i {
+        width: 1.1rem;
+        height: 1.1rem;
+        border: 1px solid var(--staff);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: "Archivo", system-ui, sans-serif;
+        font-variation-settings: "wdth" 100;
+        font-size: 1.0625rem;
+        line-height: 1.55;
+      }
+      a {
+        color: inherit;
+      }
+      :focus-visible {
+        outline: 3px solid var(--brass);
+        outline-offset: 3px;
+      }
+
+      /* Top bar */
+      .bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1.25rem clamp(1rem, 4vw, 3rem);
+      }
+      .wordmark {
+        font-weight: 800;
+        font-variation-settings: "wdth" 125;
+        letter-spacing: -0.01em;
+        text-decoration: none;
+        font-size: 1.05rem;
+      }
+      .btn {
+        display: inline-block;
+        padding: 0.7rem 1.2rem;
+        border-radius: 2px;
+        background: var(--brass);
+        color: var(--brass-ink);
+        font-weight: 700;
+        text-decoration: none;
+        border: 0;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .btn-quiet {
+        background: none;
+        color: var(--ink);
+        padding: 0.5rem 0;
+        text-decoration: underline;
+        text-underline-offset: 0.2em;
+        font-weight: 600;
+      }
+
+      /* Hero on the staff */
+      .hero {
+        position: relative;
+        overflow: hidden;
+        padding: clamp(2rem, 6vw, 5rem) clamp(1rem, 4vw, 3rem) 4rem;
+        display: grid;
+        gap: 3rem;
+        grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+        align-items: center;
+      }
+      .hero > * {
+        position: relative;
+        z-index: 1;
+      }
+      /* Five staff lines drawn through the headline, bleeding to the left edge */
+      .on-staff {
+        position: relative;
+        display: block;
+      }
+      .on-staff::before {
+        content: "";
+        position: absolute;
+        z-index: -1;
+        left: calc(-1 * clamp(1rem, 4vw, 3rem));
+        right: -100vw;
+        top: 0.02em;
+        height: calc(0.88em + 1px);
+        background: repeating-linear-gradient(
+          to bottom,
+          var(--staff) 0 1px,
+          transparent 1px 0.22em
+        );
+      }
+      h1 {
+        margin: 0;
+        font-weight: 900;
+        line-height: 0.88;
+        font-variation-settings: "wdth" 62;
+        font-size: clamp(3.5rem, 11vw, 8.5rem);
+        letter-spacing: -0.01em;
+      }
+      .lede {
+        max-width: var(--measure);
+        font-size: 1.2rem;
+        margin: 1.5rem 0 2rem;
+      }
+      .fine {
+        color: var(--graphite);
+        font-size: 0.9rem;
+        margin-top: 1rem;
+      }
+
+      /* Sample review: the one bold element */
+      .review {
+        background: var(--surface);
+        border: 1px solid var(--staff);
+        padding: 1.25rem 1.25rem 1.5rem;
+        border-radius: 2px;
+      }
+      .review-head {
+        color: var(--graphite);
+        font-size: 0.9rem;
+        margin: 0 0 0.75rem;
+      }
+      .review-head strong {
+        color: var(--ink);
+      }
+      /* Specific enough to survive the later font shorthands on pre/code. */
+      body pre,
+      body code {
+        font-variant-ligatures: none;
+        font-feature-settings:
+          "calt" 0,
+          "liga" 0;
+      }
+      figure {
+        margin: 0;
+      }
+      pre {
+        margin: 0;
+        font:
+          0.85rem/1.7 "JetBrains Mono",
+          ui-monospace,
+          monospace;
+        overflow-x: auto;
+      }
+      .ln {
+        color: var(--graphite);
+        display: inline-block;
+        width: 2.2em;
+      }
+      .flagged {
+        position: relative;
+        display: inline-block;
+      }
+      .pencil {
+        position: absolute;
+        left: -0.8rem;
+        top: -0.45rem;
+        width: calc(100% + 1.6rem);
+        height: calc(100% + 0.9rem);
+        overflow: visible;
+        pointer-events: none;
+      }
+      .pencil ellipse {
+        fill: none;
+        stroke: var(--red-pencil);
+        stroke-width: 2.2;
+        stroke-linecap: round;
+        stroke-dasharray: 420;
+        stroke-dashoffset: 420;
+        animation: draw 900ms 400ms cubic-bezier(0.6, 0.1, 0.3, 1) forwards;
+      }
+      @keyframes draw {
+        to {
+          stroke-dashoffset: 0;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pencil ellipse {
+          animation: none;
+          stroke-dashoffset: 0;
+        }
+      }
+      .note {
+        display: grid;
+        grid-template-columns: 3rem 1fr;
+        gap: 0.75rem;
+        margin-top: 1.25rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--staff);
+      }
+      .dyn {
+        font-family: "Bodoni Moda", serif;
+        font-style: italic;
+        font-weight: 900;
+        font-size: 1.9rem;
+        line-height: 1;
+        letter-spacing: -0.04em;
+      }
+      .dyn-ff {
+        color: var(--red-pencil);
+      }
+      .dyn-mf {
+        color: var(--brass);
+      }
+      .dyn-p {
+        color: var(--graphite);
+      }
+      .note p {
+        margin: 0;
+      }
+      .note .title {
+        font-weight: 700;
+      }
+      code {
+        font:
+          0.9em "JetBrains Mono",
+          ui-monospace,
+          monospace;
+      }
+
+      /* Sections */
+      section.tile {
+        padding: 3rem clamp(1rem, 4vw, 3rem);
+        border-top: 1px solid var(--staff);
+      }
+      .caption {
+        color: var(--graphite);
+        font-size: 0.9rem;
+        margin: 0 0 1.5rem;
+      }
+      h2 {
+        font-size: 1.9rem;
+        line-height: 1.1;
+        margin: 0 0 1.5rem;
+        font-weight: 800;
+        font-variation-settings: "wdth" 75;
+      }
+
+      /* Rehearsal marks for the onboarding sequence */
+      .steps {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 2rem;
+        max-width: 46rem;
+      }
+      .step {
+        display: grid;
+        grid-template-columns: 3rem 1fr;
+        gap: 1.25rem;
+      }
+      .mark {
+        width: 2.6rem;
+        height: 2.6rem;
+        display: grid;
+        place-items: center;
+        border: 2px solid var(--ink);
+        font-weight: 900;
+        font-size: 1.3rem;
+      }
+      .step.done .mark {
+        background: var(--ink);
+        color: var(--paper);
+      }
+      .step h3 {
+        margin: 0.2rem 0 0.35rem;
+        font-size: 1.2rem;
+      }
+      .step p {
+        margin: 0 0 0.75rem;
+        max-width: var(--measure);
+      }
+
+      /* Repository list with switches */
+      .repos {
+        width: 100%;
+        max-width: 46rem;
+        border-collapse: collapse;
+        margin-top: 0.5rem;
+      }
+      .repos td {
+        padding: 0.7rem 0;
+        border-bottom: 1px solid var(--staff);
+      }
+      .repos td:last-child {
+        text-align: right;
+      }
+      .switch {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.6rem;
+        font: inherit;
+        background: none;
+        border: 0;
+        color: var(--ink);
+        cursor: pointer;
+        padding: 0.25rem;
+      }
+      .track {
+        width: 2.6rem;
+        height: 1.4rem;
+        border-radius: 1rem;
+        background: var(--staff);
+        position: relative;
+        transition: background 150ms;
+      }
+      .track::after {
+        content: "";
+        position: absolute;
+        top: 0.2rem;
+        left: 0.2rem;
+        width: 1rem;
+        height: 1rem;
+        border-radius: 50%;
+        background: var(--surface);
+        transition: transform 150ms;
+      }
+      .switch[aria-checked="true"] .track {
+        background: var(--ink);
+      }
+      .switch[aria-checked="true"] .track::after {
+        transform: translateX(1.2rem);
+      }
+
+      /* Findings as score annotations */
+      .findings {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        max-width: 52rem;
+      }
+      .finding {
+        display: grid;
+        grid-template-columns: 3rem 1fr;
+        gap: 0.75rem 1rem;
+        padding: 1.25rem 0;
+        border-bottom: 1px solid var(--staff);
+      }
+      .where {
+        font:
+          0.85rem "JetBrains Mono",
+          ui-monospace,
+          monospace;
+        color: var(--graphite);
+      }
+      .finding p {
+        margin: 0.3rem 0 0;
+        max-width: var(--measure);
+      }
+      .verdict {
+        font-weight: 900;
+        font-variation-settings: "wdth" 62;
+        font-size: 3rem;
+        line-height: 1;
+        margin: 0 0 0.5rem;
+        color: var(--red-pencil);
+      }
+
+      @media (max-width: 52rem) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="palettes" role="group" aria-label="Palette">
+      Palette:
+      <button type="button" data-set="midnight" aria-pressed="false">
+        Midnight score
+      </button>
+      <button type="button" data-set="band-room" aria-pressed="false">
+        Band room
+      </button>
+      <button type="button" data-set="stage-light" aria-pressed="true">
+        Stage light (chosen)
+      </button>
+      <span class="swatches" aria-hidden="true">
+        <i style="background: var(--paper)"></i>
+        <i style="background: var(--surface)"></i>
+        <i style="background: var(--ink)"></i>
+        <i style="background: var(--graphite)"></i>
+        <i style="background: var(--red-pencil)"></i>
+        <i style="background: var(--brass)"></i>
+      </span>
+    </div>
+    <header class="bar">
+      <a class="wordmark" href="#">Not Quite My Tempo</a>
+      <a class="btn-quiet" href="#">Sign in</a>
+    </header>
+
+    <main>
+      <div class="hero">
+        <div>
+          <h1><span class="on-staff">Not quite my tempo.</span></h1>
+          <p class="lede">
+            Fletcher reviews every pull request you open. He marks what's wrong
+            on the exact line and tells you how to fix it. He is not gentle, but
+            he is right.
+          </p>
+          <a class="btn" href="#">Sign in with GitHub</a>
+          <p class="fine">
+            Free with your own Gemini API key. Your first 5 reviews are on us.
+          </p>
+        </div>
+
+        <figure class="review" aria-label="Example review comment">
+          <p class="review-head">
+            <strong>src/tempo.ts</strong> in pull request 42
+          </p>
+          <pre><span class="ln">12</span>export const beatLength = (bar: Bar) =&gt; {
+<span class="ln">13</span>  const beats = bar.signature.beats;
+<span class="ln">14</span>  <span class="flagged">return bar.duration / beats;<svg class="pencil" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><ellipse cx="50" cy="20" rx="48" ry="17" transform="rotate(-2 50 20)"/></svg></span>
+<span class="ln">15</span>};</pre>
+          <div class="note">
+            <span class="dyn dyn-ff" title="Critical">ff</span>
+            <div>
+              <p class="title">Were you rushing or were you dragging?</p>
+              <p>
+                A 0/4 signature divides by zero here. Reject a bar with no beats
+                before you divide.
+              </p>
+            </div>
+          </div>
+        </figure>
+      </div>
+
+      <section class="tile">
+        <p class="caption">
+          Onboarding. The boxed letters are rehearsal marks, the way a score
+          labels its sections in order.
+        </p>
+        <ol class="steps">
+          <li class="step done">
+            <span class="mark" aria-hidden="true">A</span>
+            <div>
+              <h3>Install Fletcher on GitHub</h3>
+              <p>
+                Installed on not-my-tempo. You can add or remove repositories on
+                GitHub at any time.
+              </p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="mark" aria-hidden="true">B</span>
+            <div>
+              <h3>Choose which repositories get reviews</h3>
+              <table class="repos">
+                <tbody>
+                  <tr>
+                    <td>not-my-tempo/app</td>
+                    <td>
+                      <button class="switch" role="switch" aria-checked="true">
+                        <span>Reviews on</span><span class="track"></span>
+                      </button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>not-my-tempo/site</td>
+                    <td>
+                      <button class="switch" role="switch" aria-checked="false">
+                        <span>Reviews off</span><span class="track"></span>
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </li>
+          <li class="step">
+            <span class="mark" aria-hidden="true">C</span>
+            <div>
+              <h3>Open a pull request</h3>
+              <p>
+                Fletcher reviews it within a minute. Comment
+                <code>/fletcher again</code> to ask for another review.
+              </p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section class="tile">
+        <p class="caption">
+          A review. The verdict leads, and each finding carries a dynamic mark
+          for how loud it is: ff critical, mf warning, p suggestion.
+        </p>
+        <p class="verdict">Not quite my tempo.</p>
+        <p class="review-head">
+          Pull request 42 in not-my-tempo/app, reviewed 2 minutes ago
+        </p>
+        <ol class="findings">
+          <li class="finding">
+            <span class="dyn dyn-ff" title="Critical">ff</span>
+            <div>
+              <span class="where">src/tempo.ts:14</span>
+              <p class="title">
+                <strong>Division by zero on an empty bar</strong>
+              </p>
+              <p>
+                A 0/4 signature divides by zero. Reject bars with no beats
+                before you divide.
+              </p>
+            </div>
+          </li>
+          <li class="finding">
+            <span class="dyn dyn-mf" title="Warning">mf</span>
+            <div>
+              <span class="where">src/metronome.ts:31</span>
+              <p class="title"><strong>Timer drifts on every tick</strong></p>
+              <p>
+                Each <code>setTimeout</code> adds its own delay. Schedule from a
+                start time instead.
+              </p>
+            </div>
+          </li>
+          <li class="finding">
+            <span class="dyn dyn-p" title="Suggestion">p</span>
+            <div>
+              <span class="where">src/tempo.ts:3</span>
+              <p class="title"><strong>Name the magic 60</strong></p>
+              <p>
+                Call it <code>SECONDS_PER_MINUTE</code> so the next reader
+                doesn't guess.
+              </p>
+            </div>
+          </li>
+        </ol>
+      </section>
+    </main>
+    <script>
+      const setPalette = (name) => {
+        document.documentElement.dataset.palette = name;
+        document
+          .querySelectorAll("[data-set]")
+          .forEach((button) =>
+            button.setAttribute(
+              "aria-pressed",
+              String(button.dataset.set === name),
+            ),
+          );
+      };
+      document
+        .querySelectorAll("[data-set]")
+        .forEach((button) =>
+          button.addEventListener("click", () =>
+            setPalette(button.dataset.set),
+          ),
+        );
+      const requested = new URLSearchParams(location.search).get("palette");
+      if (requested) setPalette(requested);
+    </script>
+  </body>
+</html>

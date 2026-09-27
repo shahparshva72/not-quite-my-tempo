@@ -14,10 +14,13 @@ import type { Context } from "hono";
 import { ReviewWorkflowLive } from "./application/review-requests.js";
 import type { ReviewWorkflowParams } from "./application/review-requests.js";
 import {
+  dashboardOverview,
   listAccessibleRepositories,
   listRepositoryRuns,
   listRunFindings,
+  repositoryReviewHistory,
   requireAccessibleRepository,
+  reviewDetail,
   usageSummary,
 } from "./application/read-api.js";
 import { createAuthRoutes } from "./auth/routes.js";
@@ -206,11 +209,12 @@ const withSessionPage = (
 app.get("/dashboard", (c) =>
   withSessionPage(c, (session) =>
     Effect.runPromise(
-      usageSummary(session.repositoryIds).pipe(
+      dashboardOverview(session.repositoryIds).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),
-          onSuccess: (usage) => c.html(dashboardPage(session.login, usage)),
+          onSuccess: (overview) =>
+            c.html(dashboardPage(session.login, overview, new Date())),
         }),
       ),
     ),
@@ -222,22 +226,29 @@ app.get("/dashboard/repositories/:id", (c) =>
     const repositoryId = Number(c.req.param("id"));
 
     if (!Number.isInteger(repositoryId)) {
-      return Promise.resolve(c.html(notFoundPage(), 404));
+      return Promise.resolve(c.html(notFoundPage(session.login), 404));
     }
 
     return Effect.runPromise(
-      listRepositoryRuns(session.repositoryIds, repositoryId).pipe(
+      repositoryReviewHistory(session.repositoryIds, repositoryId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
             Match.value(cause).pipe(
               Match.tag("ResourceNotFoundError", () =>
-                c.html(notFoundPage(), 404),
+                c.html(notFoundPage(session.login), 404),
               ),
               Match.orElse((error) => internalError(c, error)),
             ),
-          onSuccess: ({ repository, runs }) =>
-            c.html(repositoryRunsPage(repository, runs)),
+          onSuccess: ({ repository, reviews }) =>
+            c.html(
+              repositoryRunsPage(
+                session.login,
+                repository,
+                reviews,
+                new Date(),
+              ),
+            ),
         }),
       ),
     );
@@ -249,22 +260,30 @@ app.get("/dashboard/runs/:id", (c) =>
     const reviewRunId = Number(c.req.param("id"));
 
     if (!Number.isInteger(reviewRunId)) {
-      return Promise.resolve(c.html(notFoundPage(), 404));
+      return Promise.resolve(c.html(notFoundPage(session.login), 404));
     }
 
     return Effect.runPromise(
-      listRunFindings(session.repositoryIds, reviewRunId).pipe(
+      reviewDetail(session.repositoryIds, reviewRunId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
             Match.value(cause).pipe(
               Match.tag("ResourceNotFoundError", () =>
-                c.html(notFoundPage(), 404),
+                c.html(notFoundPage(session.login), 404),
               ),
               Match.orElse((error) => internalError(c, error)),
             ),
-          onSuccess: ({ run, findings }) =>
-            c.html(runFindingsPage(run, findings)),
+          onSuccess: ({ repository, run, findings }) =>
+            c.html(
+              runFindingsPage(
+                session.login,
+                repository,
+                run,
+                findings,
+                new Date(),
+              ),
+            ),
         }),
       ),
     );
@@ -340,11 +359,17 @@ app.post("/onboarding/repositories/:id", (c) => {
     const form = await c.req.parseBody();
     const enabled = form["enabled"];
 
+    // Only two known pages; anything else goes back to onboarding.
+    const returnTo =
+      form["return"] === "repository"
+        ? `/dashboard/repositories/${repositoryId}`
+        : "/onboarding";
+
     if (
       !Number.isInteger(repositoryId) ||
       (enabled !== "true" && enabled !== "false")
     ) {
-      return c.html(notFoundPage(), 404);
+      return c.html(notFoundPage(session.login), 404);
     }
 
     return Effect.runPromise(
@@ -360,11 +385,11 @@ app.post("/onboarding/repositories/:id", (c) => {
           onFailure: (cause) =>
             Match.value(cause).pipe(
               Match.tag("ResourceNotFoundError", () =>
-                c.html(notFoundPage(), 404),
+                c.html(notFoundPage(session.login), 404),
               ),
               Match.orElse((error) => internalError(c, error)),
             ),
-          onSuccess: () => c.redirect("/onboarding", 303),
+          onSuccess: () => c.redirect(returnTo, 303),
         }),
       ),
     );

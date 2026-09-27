@@ -127,6 +127,8 @@ describe("review workflow program", () => {
     });
     expect(Option.getOrNull(result.updatedRun)).toMatchObject({
       model: "gemini-3.8-flash",
+      verdict: "almost",
+      summary: "Not quite my tempo.",
       inputTokens: 1200,
       outputTokens: 300,
       totalTokens: 1500,

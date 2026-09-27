@@ -6,6 +6,7 @@ import {
   reviewRuns,
   reviewRunStatuses,
   reviewRunTriggers,
+  reviewVerdicts,
 } from "../schema/review-runs.js";
 import { repositories } from "../schema/repositories.js";
 import { Database } from "../services/database.js";
@@ -24,6 +25,15 @@ export interface RepositoryUsageSummary {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly totalTokens: number;
+}
+
+export type ReviewRunVerdict = (typeof reviewVerdicts)[number];
+
+export interface ReviewRunResult {
+  readonly model: string;
+  readonly usage: ReviewRunUsage;
+  readonly verdict: ReviewRunVerdict;
+  readonly summary: string;
 }
 
 export type ReviewRunStatus = (typeof reviewRunStatuses)[number];
@@ -169,15 +179,17 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
               .returning()
               .get(),
           ).pipe(Effect.map(Option.fromNullable)),
-        recordModelUsage: (id: number, model: string, usage: ReviewRunUsage) =>
-          databaseEffect("review_runs.record_model_usage", () =>
+        recordReviewResult: (id: number, result: ReviewRunResult) =>
+          databaseEffect("review_runs.record_review_result", () =>
             client
               .update(reviewRuns)
               .set({
-                model,
-                inputTokens: usage.inputTokens,
-                outputTokens: usage.outputTokens,
-                totalTokens: usage.totalTokens,
+                model: result.model,
+                verdict: result.verdict,
+                summary: result.summary,
+                inputTokens: result.usage.inputTokens,
+                outputTokens: result.usage.outputTokens,
+                totalTokens: result.usage.totalTokens,
               })
               .where(eq(reviewRuns.id, id))
               .returning()
@@ -193,6 +205,19 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
               .limit(limit)
               .all(),
           ),
+        /** The most recent run of each listed repository that has one. */
+        latestByRepositoryIds: (repositoryIds: readonly number[]) =>
+          repositoryIds.length === 0
+            ? Effect.succeed<readonly ReviewRun[]>([])
+            : databaseEffect("review_runs.latest_by_repository_ids", () =>
+                client
+                  .select()
+                  .from(reviewRuns)
+                  .where(
+                    sql`${reviewRuns.id} in (select max(id) from review_runs where repository_id in (select value from json_each(${JSON.stringify(repositoryIds)})) group by repository_id)`,
+                  )
+                  .all(),
+              ),
         usageByRepositoryIds: (repositoryIds: readonly number[]) =>
           repositoryIds.length === 0
             ? Effect.succeed<readonly RepositoryUsageSummary[]>([])

@@ -77,7 +77,36 @@ describe("dashboard", () => {
     const body = await response.text();
     expect(body).toContain("not-my-tempo/app");
     expect(body).toContain("/dashboard/repositories/1");
-    expect(body).toContain("1200");
+    expect(body).toContain("Reviews on");
+    expect(body).toContain("Pull request 42");
+    expect(body).toContain("Reviewing now");
+    expect(body).toContain("1,200 Gemini");
+  });
+
+  it("summarizes a completed review by its loudest finding", async () => {
+    const run = await seedRun();
+
+    await Effect.runPromise(
+      ReviewRunRepository.markCompleted(run.id).pipe(
+        Effect.provide(makeLiveLayer(env.DB)),
+      ),
+    );
+
+    const body = await (
+      await request("/dashboard", await sessionCookie([3001]))
+    ).text();
+
+    expect(body).toContain("1 warning");
+    expect(body).toContain('class="dyn dyn-warning"');
+  });
+
+  it("explains an empty dashboard with a way to start", async () => {
+    const body = await (
+      await request("/dashboard", await sessionCookie([]))
+    ).text();
+
+    expect(body).toContain("Install Fletcher on a repository");
+    expect(body).toContain('href="/onboarding"');
   });
 
   it("shows a repository's runs", async () => {
@@ -90,9 +119,11 @@ describe("dashboard", () => {
 
     expect(response.status).toBe(200);
     const body = await response.text();
-    expect(body).toContain("#42");
-    expect(body).toContain("queued");
-    expect(body).toContain("gemini-3.8-flash");
+    expect(body).toContain("Pull request 42");
+    expect(body).toContain("Reviewing now");
+    expect(body).toContain("Opened");
+    expect(body).toContain("https://github.com/not-my-tempo/app/pull/42");
+    expect(body).toContain('aria-label="Reviews for not-my-tempo/app"');
   });
 
   it("shows a run's findings", async () => {
@@ -108,6 +139,66 @@ describe("dashboard", () => {
     expect(body).toContain("Off-by-one in beat subdivision");
     expect(body).toContain("src/tempo.ts:14");
     expect(body).toContain("warning");
+  });
+
+  it("leads a completed review with the stored verdict and summary", async () => {
+    const run = await seedRun();
+
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE review_runs SET status = 'completed' WHERE id = ?",
+      ).bind(run.id),
+      env.DB.prepare(
+        `INSERT INTO findings (review_run_id, file_path, line, severity, message, github_comment_id)
+         VALUES (?, 'src/metronome.ts', 3, 'critical', 'Division by zero.', 555)`,
+      ).bind(run.id),
+    ]);
+
+    const body = await (
+      await request(`/dashboard/runs/${run.id}`, await sessionCookie([3001]))
+    ).text();
+
+    expect(body).toContain('class="verdict verdict-verdict">Almost.');
+    expect(body).toContain("Not quite my tempo.");
+    expect(body).toContain("2 findings");
+    expect(body.indexOf("src/metronome.ts:3")).toBeLessThan(
+      body.indexOf("src/tempo.ts:14"),
+    );
+    expect(body).toContain(
+      "https://github.com/not-my-tempo/app/pull/42#discussion_r555",
+    );
+  });
+
+  it("infers a verdict for reviews stored before verdicts were saved", async () => {
+    const run = await seedRun();
+
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE review_runs SET status = 'completed', verdict = NULL, summary = NULL WHERE id = ?",
+      ).bind(run.id),
+      env.DB.prepare(
+        "UPDATE findings SET severity = 'critical' WHERE review_run_id = ?",
+      ).bind(run.id),
+    ]);
+
+    const body = await (
+      await request(`/dashboard/runs/${run.id}`, await sessionCookie([3001]))
+    ).text();
+
+    expect(body).toContain(
+      'class="verdict verdict-failed">Not quite my tempo.',
+    );
+  });
+
+  it("shows a review in progress without a verdict", async () => {
+    const run = await seedRun();
+
+    const body = await (
+      await request(`/dashboard/runs/${run.id}`, await sessionCookie([3001]))
+    ).text();
+
+    expect(body).toContain("Reviewing now");
+    expect(body).not.toContain("Almost.");
   });
 
   it("does not praise failed or skipped runs without findings", async () => {
@@ -147,6 +238,15 @@ describe("dashboard", () => {
       await request(`/dashboard/runs/${skipped.id}`, cookie)
     ).text();
 
+    const historyBody = await (
+      await request("/dashboard/repositories/1", cookie)
+    ).text();
+
+    expect(historyBody).toContain(
+      "Failed: the pull request is too large to review",
+    );
+    expect(historyBody).toContain("Skipped by .fletcher.json");
+    expect(historyBody).not.toContain("No findings");
     expect(failedBody).toContain("The review failed");
     expect(failedBody).not.toContain("Good job");
     expect(skippedBody).toContain("Review skipped");
@@ -162,6 +262,8 @@ describe("dashboard", () => {
     );
 
     expect(response.status).toBe(404);
-    await expect(response.text()).resolves.toContain("Not my chart");
+    await expect(response.text()).resolves.toContain(
+      "This page doesn&#39;t exist",
+    );
   });
 });

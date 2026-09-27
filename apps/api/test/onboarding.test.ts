@@ -52,7 +52,8 @@ describe("onboarding", () => {
       "https://github.com/apps/fletcher-test/installations/new",
     );
     expect(body).toContain("not-my-tempo/app");
-    expect(body).toContain("Turn off reviews for not-my-tempo/app");
+    expect(body).toContain('aria-label="Reviews for not-my-tempo/app"');
+    expect(body).toContain('aria-checked="true"');
   });
 
   it("shows install guidance when the user has no repositories", async () => {
@@ -95,6 +96,20 @@ describe("onboarding", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
   });
 
+  it("shows a switched-off repository as off", async () => {
+    await env.DB.prepare(
+      "UPDATE repositories SET enabled = 0 WHERE id = 1",
+    ).run();
+    const cookie = await sessionCookie([3001]);
+
+    const body = await (
+      await request("/onboarding", { headers: { cookie } })
+    ).text();
+
+    expect(body).toContain('aria-checked="false"');
+    expect(body).toContain("Reviews off");
+  });
+
   it("turns reviews off and back on for an accessible repository", async () => {
     const cookie = await sessionCookie([3001]);
 
@@ -107,6 +122,23 @@ describe("onboarding", () => {
     await toggle(1, "true", cookie);
 
     expect(await repositoryEnabled()).toBe(1);
+  });
+
+  it("returns a toggle from the repository page to that page", async () => {
+    const cookie = await sessionCookie([3001]);
+
+    const response = await request("/onboarding/repositories/1", {
+      method: "POST",
+      headers: {
+        cookie,
+        origin: "https://example.com",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: "enabled=false&return=repository",
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/dashboard/repositories/1");
   });
 
   it("refuses to change repositories outside the session's access", async () => {

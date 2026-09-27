@@ -36,6 +36,16 @@ GitHub account/org installation, owner/admin/member roles, and restricting
 repository toggles to admins. Then Phase 14 dashboard management. See
 PLAN.md "Recommended order".
 
+### Rehearsal Score redesign — 2026-09-28
+
+- Every server-rendered page now follows docs/DESIGN_PLAN.md (dark "Stage
+  light" palette, Archivo / Bodoni Moda / JetBrains Mono, dynamic marks for
+  severity, rehearsal marks for onboarding). Theme and shared components live
+  in `apps/api/src/dashboard/theme.ts` and `components.ts`.
+- Migration `0004` stores each review's `verdict` and `summary` on
+  `review_runs` (Phase 14 item); older runs infer a verdict from findings.
+- Sign-in failures render an HTML page for browsers; JSON for other clients.
+
 ### Onboarding flow — 2026-09-28
 
 - `/` is a landing page (signed-in visitors redirect to `/dashboard`); the
