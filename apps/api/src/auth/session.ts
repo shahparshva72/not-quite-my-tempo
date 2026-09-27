@@ -6,6 +6,12 @@ export const SESSION_COOKIE = "nqmt_session";
 
 export const OAUTH_STATE_COOKIE = "nqmt_oauth_state";
 
+export const OAUTH_NEXT_COOKIE = "nqmt_oauth_next";
+
+// Installation ID from GitHub's post-install redirect, held until the next
+// sign-in verifies it against the user's own installations.
+export const PENDING_INSTALLATION_COOKIE = "nqmt_pending_installation";
+
 const SESSION_TTL_MILLIS = 60 * 60 * 1000;
 
 export const SESSION_TTL_SECONDS = SESSION_TTL_MILLIS / 1000;

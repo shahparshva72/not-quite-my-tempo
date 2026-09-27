@@ -32,8 +32,8 @@ their historical descriptions are not the current release status. See
    stored repositories against `GET /installation/repositories`; suspended
    or removed installations, removed repositories, and disabled
    repositories no longer start reviews or appear in the dashboard.
-2. Onboarding flow (rest of Phase 13): install → verified setup callback →
-   repository selection → first-review guidance.
+2. Onboarding flow (rest of Phase 13) — **done 2026-09-28**: install →
+   verified setup callback → repository selection → first-review guidance.
 3. Workspaces and memberships (rest of Phase 12), with CSRF protection
    before any dashboard mutation.
 4. Dashboard management (Phase 14).

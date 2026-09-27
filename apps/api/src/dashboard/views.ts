@@ -58,8 +58,14 @@ const styles = `
     font-weight: 700; border-radius: 4px;
   }
   nav { margin-bottom: 0.5rem; }
+  code {
+    padding: 0.05rem 0.3rem; background: #221d22; border-radius: 3px;
+  }
+  .status-disabled { color: #9a8f85; }
+  .status-enabled { color: #7fb069; }
+  .inline-form { display: inline; }
   .signout { display: inline; }
-  .signout button {
+  .inline-form button, .signout button {
     border: 0; padding: 0; background: none; color: #d9a441;
     font: inherit; text-decoration: underline; cursor: pointer;
   }
@@ -88,10 +94,18 @@ const layout = (title: string, content: HtmlContent) => html`<!doctype html>
 
 export const landingPage = () =>
   layout(
-    "Sign in",
+    "Code review with tempo",
     html`<p>
         Fletcher reviews your pull requests. He is not gentle, but he is right.
       </p>
+      <ul>
+        <li>Reviews every pull request you open and every push to it.</li>
+        <li>Inline comments on the changed lines, each with a concrete fix.</li>
+        <li>
+          Comment <code>/fletcher again</code> on a pull request to request
+          another review.
+        </li>
+      </ul>
       <a class="signin" href="/auth/login">Sign in with GitHub</a>`,
   );
 
@@ -117,9 +131,13 @@ export const dashboardPage = (
         </form>
       </div>
       <h2>Repositories</h2>
+      <p class="meta"><a href="/onboarding">Manage repositories</a></p>
       ${
         usage.length === 0
-          ? html`<p>No repositories yet. Install the GitHub App on one.</p>`
+          ? html`<p>
+              No repositories yet.
+              <a href="/onboarding">Set up Fletcher on a repository.</a>
+            </p>`
           : html`<div class="table-wrap">
               <table>
                 <thead>
@@ -268,4 +286,97 @@ export const runFindingsPage = (run: ReviewRun, findings: readonly Finding[]) =>
               </table>
             </div>`
       }`,
+  );
+
+const repositoryToggle = (repository: GitHubRepository) =>
+  html`<form
+    class="inline-form"
+    method="post"
+    action="/onboarding/repositories/${repository.id}"
+  >
+    <input
+      type="hidden"
+      name="enabled"
+      value="${repository.enabled ? "false" : "true"}"
+    />
+    <button
+      type="submit"
+      aria-label="${repository.enabled ? "Turn off" : "Turn on"} reviews for ${repository.fullName}"
+    >
+      ${repository.enabled ? "turn off" : "turn on"}
+    </button>
+  </form>`;
+
+export const onboardingPage = (
+  login: string,
+  installUrl: string,
+  repositories: readonly GitHubRepository[],
+) =>
+  layout(
+    "Set up",
+    html`<div class="meta">
+        Signed in as ${login} · <a href="/dashboard">dashboard</a>
+      </div>
+      <h2>1. Install Fletcher on GitHub</h2>
+      <p>
+        Pick a personal account or organization, then the repositories Fletcher
+        may review. You come back here when GitHub is done.
+      </p>
+      <a class="signin" href="${installUrl}">
+        ${repositories.length === 0 ? "Install on GitHub" : "Add or remove repositories on GitHub"}
+      </a>
+      <h2>2. Choose which repositories get reviews</h2>
+      ${
+        repositories.length === 0
+          ? html`<p>
+              No repositories yet. After you install Fletcher, the repositories
+              you selected appear here.
+            </p>`
+          : html`<div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Repository</th>
+                    <th>Reviews</th>
+                    <th>Change</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${repositories.map(
+                    (repository) =>
+                      html`<tr>
+                        <td>${repository.fullName}</td>
+                        <td
+                          class="status-${repository.enabled ? "enabled" : "disabled"}"
+                        >
+                          ${repository.enabled ? "on" : "off"}
+                        </td>
+                        <td>${repositoryToggle(repository)}</td>
+                      </tr>`,
+                  )}
+                </tbody>
+              </table>
+            </div>`
+      }
+      <h2>3. Open a pull request</h2>
+      <p>
+        Fletcher reviews new pull requests and every push to them in
+        repositories with reviews turned on. Comment
+        <code>/fletcher again</code> on a pull request to request another
+        review, and add a <code>.fletcher.json</code> file to the repository to
+        tune what he reviews.
+      </p>`,
+  );
+
+export const installationPendingPage = () =>
+  layout(
+    "Waiting for approval",
+    html`<p>
+        Your request to install Fletcher was sent to the organization's owners.
+        GitHub notifies you when one of them approves it.
+      </p>
+      <p>
+        After approval, <a href="/auth/login?next=onboarding">sign in again</a>
+        to choose repositories.
+      </p>`,
   );

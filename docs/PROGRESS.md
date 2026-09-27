@@ -28,15 +28,30 @@ then this file for exactly where things stand and what to do next.
 | 10    | Read API + GitHub OAuth   | ✅ Done       |
 | 11    | Dashboard UI              | 🟡 v1 shipped |
 | 12    | Accounts & authorization  | 🟡 Partial    |
-| 13    | GitHub onboarding         | 🟡 Sync done  |
+| 13    | GitHub onboarding         | ✅ Core done  |
 | 16    | BYOK, trial, billing      | ⬜ Planned    |
 
-**Next task:** build the onboarding flow (Phase 13): an "Install on
-GitHub" link with a signed `state`, a Setup URL callback that verifies the
-`installation_id` against `GET /user/installations` for the signed-in user,
-then repository selection and first-review guidance. Installation sync
-(below) already keeps repositories current. Workspaces/memberships
-(Phase 12) follow; see PLAN.md "Recommended order".
+**Next task:** workspaces and memberships (Phase 12): a workspace per
+GitHub account/org installation, owner/admin/member roles, and restricting
+repository toggles to admins. Then Phase 14 dashboard management. See
+PLAN.md "Recommended order".
+
+### Onboarding flow — 2026-09-28
+
+- `/` is a landing page (signed-in visitors redirect to `/dashboard`); the
+  service-metadata JSON moved off the root.
+- `/onboarding`: install link (`GITHUB_APP_SLUG`), repository list with
+  on/off toggles, and first-review guidance.
+- `/onboarding/callback` (GitHub Setup URL) holds `installation_id` in a
+  10-minute cookie and re-runs sign-in; the OAuth callback syncs it only if
+  it appears in the user's `/user/installations`, and also syncs any
+  visible installations not yet stored. Sync failures are logged and do not
+  block sign-in. `setup_action=request` shows a pending-approval page.
+- Sign-in redirects to `/onboarding` when requested (`/auth/login?next=
+onboarding`, allowlisted) or when the user has no repositories.
+- `POST /onboarding/repositories/:id` toggles `repositories.enabled`
+  (same-origin check, session repository access). Any user with GitHub
+  access to the repository can toggle it until Phase 12 adds roles.
 
 ### Installation sync — 2026-09-28
 

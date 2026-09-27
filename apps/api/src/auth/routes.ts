@@ -1,15 +1,21 @@
-import { Effect } from "effect";
-import type { Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { makeLiveLayer, UserRepository } from "@not-quite-my-tempo/db";
 
+import { syncUserInstallations } from "../application/installation-sync.js";
+import { GitHubAppAuthLive } from "../github/app-auth.js";
+import type { GitHubAppAuth } from "../github/app-auth.js";
+import { GitHubInstallationClientLive } from "../github/installation-client.js";
+import type { GitHubInstallationClient } from "../github/installation-client.js";
 import { logError } from "../logging.js";
 
 import { authorizeUrl, GitHubOAuth, GitHubOAuthLive } from "./github-oauth.js";
 import {
   createSession,
+  OAUTH_NEXT_COOKIE,
   OAUTH_STATE_COOKIE,
+  PENDING_INSTALLATION_COOKIE,
   revokeSession,
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
@@ -19,8 +25,24 @@ interface AuthBindings {
   readonly DB: D1Database;
   readonly GITHUB_OAUTH_CLIENT_ID: string;
   readonly GITHUB_OAUTH_CLIENT_SECRET: string;
+  readonly GITHUB_APP_ID: string;
+  readonly GITHUB_APP_PRIVATE_KEY: string;
   readonly SESSION_SECRET: string;
 }
+
+// Post-sign-in destinations a login link may request; anything else falls
+// back to the default so `next` cannot become an open redirect.
+const signInDestinations = new Map<string, string>([
+  ["onboarding", "/onboarding"],
+]);
+
+const pendingInstallationId = (value: string | undefined) => {
+  const installationId = Number(value);
+
+  return Number.isInteger(installationId) && installationId > 0
+    ? Option.some(installationId)
+    : Option.none<number>();
+};
 
 const cookieOptions = {
   httpOnly: true,
@@ -29,7 +51,10 @@ const cookieOptions = {
   path: "/",
 } as const;
 
-export const createAuthRoutes = (oauthLayer?: Layer.Layer<GitHubOAuth>) => {
+export const createAuthRoutes = (
+  oauthLayer?: Layer.Layer<GitHubOAuth>,
+  githubAppLayer?: Layer.Layer<GitHubAppAuth | GitHubInstallationClient>,
+) => {
   const routes = new Hono<{ Bindings: AuthBindings }>();
 
   routes.use("*", async (c, next) => {
@@ -47,14 +72,27 @@ export const createAuthRoutes = (oauthLayer?: Layer.Layer<GitHubOAuth>) => {
       maxAge: 600,
     });
 
+    const next = c.req.query("next");
+
+    if (next !== undefined && signInDestinations.has(next)) {
+      setCookie(c, OAUTH_NEXT_COOKIE, next, { ...cookieOptions, maxAge: 600 });
+    }
+
     return c.redirect(authorizeUrl(c.env.GITHUB_OAUTH_CLIENT_ID, state));
   });
 
   routes.get("/callback", async (c) => {
     const state = c.req.query("state");
     const expectedState = getCookie(c, OAUTH_STATE_COOKIE);
+    const next = signInDestinations.get(getCookie(c, OAUTH_NEXT_COOKIE) ?? "");
+
+    const pendingInstallation = pendingInstallationId(
+      getCookie(c, PENDING_INSTALLATION_COOKIE),
+    );
 
     deleteCookie(c, OAUTH_STATE_COOKIE, { path: "/" });
+    deleteCookie(c, OAUTH_NEXT_COOKIE, { path: "/" });
+    deleteCookie(c, PENDING_INSTALLATION_COOKIE, { path: "/" });
 
     if (
       state === undefined ||
@@ -103,19 +141,28 @@ export const createAuthRoutes = (oauthLayer?: Layer.Layer<GitHubOAuth>) => {
         const oauth = yield* GitHubOAuth;
         const accessToken = yield* oauth.exchangeCode(code);
         const identity = yield* oauth.fetchUser(accessToken);
-        const repositoryIds = yield* oauth.fetchUserRepositoryIds(accessToken);
+        const access = yield* oauth.fetchUserAccess(accessToken);
         const user = yield* UserRepository.upsert(identity);
+
+        yield* syncUserInstallations(access.installations, pendingInstallation);
 
         yield* revokeSession(
           c.env.SESSION_SECRET,
           getCookie(c, SESSION_COOKIE),
         );
 
-        return yield* createSession(
+        const sessionCookie = yield* createSession(
           c.env.SESSION_SECRET,
           user.id,
-          repositoryIds,
+          access.repositoryIds,
         );
+
+        return {
+          sessionCookie,
+          destination:
+            next ??
+            (access.repositoryIds.length === 0 ? "/onboarding" : "/dashboard"),
+        };
       }).pipe(
         Effect.provide(
           oauthLayer ??
@@ -123,6 +170,16 @@ export const createAuthRoutes = (oauthLayer?: Layer.Layer<GitHubOAuth>) => {
               clientId: c.env.GITHUB_OAUTH_CLIENT_ID,
               clientSecret: c.env.GITHUB_OAUTH_CLIENT_SECRET,
             }),
+        ),
+        Effect.provide(
+          githubAppLayer ??
+            Layer.merge(
+              GitHubAppAuthLive({
+                appId: c.env.GITHUB_APP_ID,
+                privateKey: c.env.GITHUB_APP_PRIVATE_KEY,
+              }),
+              GitHubInstallationClientLive({}),
+            ),
         ),
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.tapError((error) =>
@@ -139,13 +196,13 @@ export const createAuthRoutes = (oauthLayer?: Layer.Layer<GitHubOAuth>) => {
               },
               500,
             ),
-          onSuccess: (sessionCookie) => {
+          onSuccess: ({ sessionCookie, destination }) => {
             setCookie(c, SESSION_COOKIE, sessionCookie, {
               ...cookieOptions,
               maxAge: SESSION_TTL_SECONDS,
             });
 
-            return c.redirect("/dashboard");
+            return c.redirect(destination);
           },
         }),
       ),

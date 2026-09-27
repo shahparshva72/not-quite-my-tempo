@@ -1,4 +1,4 @@
-import { Effect, Match } from "effect";
+import { Effect, Match, Option } from "effect";
 import {
   GitHubInstallationRepository,
   GitHubRepositoryRepository,
@@ -7,11 +7,14 @@ import type { GitHubInstallationStatus } from "@not-quite-my-tempo/db";
 
 import { GitHubAppAuth } from "../github/app-auth.js";
 import { GitHubInstallationClient } from "../github/installation-client.js";
-import type { InstallationEvent } from "../github/installation-event.js";
-import { logInfo } from "../logging.js";
+import type {
+  InstallationEvent,
+  InstallationIdentity,
+} from "../github/installation-event.js";
+import { logError, logInfo } from "../logging.js";
 
 const upsertInstallation = (
-  event: InstallationEvent,
+  event: InstallationIdentity,
   status: GitHubInstallationStatus,
 ) =>
   GitHubInstallationRepository.upsert({
@@ -22,7 +25,11 @@ const upsertInstallation = (
     status,
   });
 
-const syncInstallation = (event: InstallationEvent) =>
+/**
+ * Marks the installation active and reconciles its repositories with the
+ * list GitHub reports. Idempotent, so webhooks and sign-in can both run it.
+ */
+export const syncInstallation = (event: InstallationIdentity) =>
   Effect.gen(function* () {
     const auth = yield* GitHubAppAuth;
     const client = yield* GitHubInstallationClient;
@@ -81,3 +88,46 @@ export const handleInstallationEvent = (event: InstallationEvent) =>
     ),
     Match.exhaustive,
   );
+
+/**
+ * Syncs, during sign-in, the installations GitHub says this user can see
+ * that are not stored yet, plus the one they just installed or changed.
+ * Only installations from the user's own `/user/installations` list are
+ * synced, so an `installation_id` from a redirect cannot claim someone
+ * else's installation. Failures are logged, not raised: the installation
+ * webhooks sync the same state and sign-in must not depend on them.
+ */
+export const syncUserInstallations = (
+  installations: readonly InstallationIdentity[],
+  pendingInstallationId: Option.Option<number>,
+) =>
+  Effect.gen(function* () {
+    const stored =
+      yield* GitHubInstallationRepository.listByGithubInstallationIds(
+        installations.map((installation) => installation.installationId),
+      );
+
+    const storedIds = new Set(
+      stored.map((installation) => installation.githubInstallationId),
+    );
+
+    const toSync = installations.filter(
+      (installation) =>
+        !storedIds.has(installation.installationId) ||
+        Option.contains(pendingInstallationId, installation.installationId),
+    );
+
+    yield* Effect.forEach(
+      toSync,
+      (installation) =>
+        syncInstallation(installation).pipe(
+          Effect.catchAll((error) =>
+            logError("github_installation_sign_in_sync_failed", {
+              installationId: installation.installationId,
+              errorCode: error._tag,
+            }),
+          ),
+        ),
+      { discard: true },
+    );
+  });

@@ -19,7 +19,7 @@ export class ResourceNotFoundError extends Data.TaggedError(
 export const listAccessibleRepositories = (repositoryIds: readonly number[]) =>
   GitHubRepositoryRepository.listByGithubRepositoryIds(repositoryIds);
 
-const requireAccessibleRepository = (
+export const requireAccessibleRepository = (
   repositoryIds: readonly number[],
   repositoryId: number,
 ) =>

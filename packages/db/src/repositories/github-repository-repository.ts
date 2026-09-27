@@ -111,6 +111,14 @@ export class GitHubRepositoryRepository extends Effect.Service<GitHubRepositoryR
                   )
                   .all(),
               ),
+        setEnabled: (id: number, enabled: boolean) =>
+          databaseEffect("repositories.set_enabled", () =>
+            client
+              .update(repositories)
+              .set({ enabled, updatedAt: new Date() })
+              .where(eq(repositories.id, id))
+              .run(),
+          ).pipe(Effect.asVoid),
         findById: (id: number) =>
           databaseEffect("repositories.find_by_id", () =>
             client

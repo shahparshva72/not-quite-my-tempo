@@ -47,6 +47,22 @@ export class GitHubInstallationRepository extends Effect.Service<GitHubInstallat
               .returning()
               .get(),
           ),
+        listByGithubInstallationIds: (
+          githubInstallationIds: readonly number[],
+        ) =>
+          githubInstallationIds.length === 0
+            ? Effect.succeed<readonly GitHubInstallation[]>([])
+            : databaseEffect(
+                "github_installations.list_by_github_installation_ids",
+                () =>
+                  client
+                    .select()
+                    .from(githubInstallations)
+                    .where(
+                      sql`${githubInstallations.githubInstallationId} in (select value from json_each(${JSON.stringify(githubInstallationIds)}))`,
+                    )
+                    .all(),
+              ),
       };
     }),
   },

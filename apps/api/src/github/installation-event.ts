@@ -9,12 +9,15 @@ import { GitHubId, InvalidGitHubPayloadError } from "./review-request.js";
  */
 export type InstallationEventEffect = "sync" | "suspend" | "remove";
 
-export interface InstallationEvent {
-  readonly effect: InstallationEventEffect;
+export interface InstallationIdentity {
   readonly installationId: number;
   readonly accountId: number;
   readonly accountLogin: string;
   readonly accountType: string;
+}
+
+export interface InstallationEvent extends InstallationIdentity {
+  readonly effect: InstallationEventEffect;
 }
 
 const installationActions = new Map<string, InstallationEventEffect>([

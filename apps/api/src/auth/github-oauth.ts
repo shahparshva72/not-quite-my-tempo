@@ -31,7 +31,16 @@ const UserResponse = Schema.Struct({
 });
 
 const UserInstallationsResponse = Schema.Struct({
-  installations: Schema.Array(Schema.Struct({ id: GitHubId })),
+  installations: Schema.Array(
+    Schema.Struct({
+      id: GitHubId,
+      account: Schema.Struct({
+        id: GitHubId,
+        login: Schema.NonEmptyString,
+        type: Schema.NonEmptyString,
+      }),
+    }),
+  ),
 });
 
 const UserRepositoriesResponse = Schema.Struct({
@@ -43,6 +52,22 @@ export interface GitHubUser {
   readonly login: string;
 }
 
+export interface UserInstallation {
+  readonly installationId: number;
+  readonly accountId: number;
+  readonly accountLogin: string;
+  readonly accountType: string;
+}
+
+/**
+ * What the signed-in user can reach through the GitHub App: the
+ * installations visible to them and the union of their repositories.
+ */
+export interface UserAccess {
+  readonly installations: readonly UserInstallation[];
+  readonly repositoryIds: readonly number[];
+}
+
 export interface GitHubOAuthService {
   readonly exchangeCode: (
     code: string,
@@ -50,9 +75,9 @@ export interface GitHubOAuthService {
   readonly fetchUser: (
     accessToken: string,
   ) => Effect.Effect<GitHubUser, GitHubOAuthError>;
-  readonly fetchUserRepositoryIds: (
+  readonly fetchUserAccess: (
     accessToken: string,
-  ) => Effect.Effect<readonly number[], GitHubOAuthError>;
+  ) => Effect.Effect<UserAccess, GitHubOAuthError>;
 }
 
 export class GitHubOAuth extends Context.Tag(
@@ -177,8 +202,9 @@ export const GitHubOAuthLive = (config: GitHubOAuthConfig) => {
             login: decoded.login,
           };
         }),
-      fetchUserRepositoryIds: (accessToken) =>
+      fetchUserAccess: (accessToken) =>
         Effect.gen(function* () {
+          const userInstallations: UserInstallation[] = [];
           const repositoryIds = new Set<number>();
           let installationPage = 1;
 
@@ -198,6 +224,13 @@ export const GitHubOAuthLive = (config: GitHubOAuthConfig) => {
             );
 
             for (const installation of installations.installations) {
+              userInstallations.push({
+                installationId: installation.id,
+                accountId: installation.account.id,
+                accountLogin: installation.account.login,
+                accountType: installation.account.type,
+              });
+
               let repositoryPage = 1;
 
               while (true) {
@@ -234,7 +267,10 @@ export const GitHubOAuthLive = (config: GitHubOAuthConfig) => {
             installationPage += 1;
           }
 
-          return [...repositoryIds];
+          return {
+            installations: userInstallations,
+            repositoryIds: [...repositoryIds],
+          };
         }),
     }),
   );
