@@ -18,6 +18,9 @@ export const reviewRunStatuses = [
   "cancelled",
 ] as const;
 
+// Mirrors ReviewVerdict in @not-quite-my-tempo/gemini (kept dependency-free).
+export const reviewVerdicts = ["not_my_tempo", "almost", "good_job"] as const;
+
 export const reviewRunTriggers = [
   "opened",
   "synchronize",
@@ -37,6 +40,10 @@ export const reviewRuns = sqliteTable(
     status: text("status", { enum: reviewRunStatuses }).notNull(),
     trigger: text("trigger", { enum: reviewRunTriggers }).notNull(),
     model: text("model"),
+    // Set with the model when Gemini returns a review; null for runs that
+    // were skipped, failed, or predate verdict storage.
+    verdict: text("verdict", { enum: reviewVerdicts }),
+    summary: text("summary"),
     startedAt: integer("started_at", { mode: "timestamp_ms" }),
     completedAt: integer("completed_at", { mode: "timestamp_ms" }),
     errorCode: text("error_code"),

@@ -20,6 +20,7 @@ import {
   listRunFindings,
   repositoryReviewHistory,
   requireAccessibleRepository,
+  reviewDetail,
   usageSummary,
 } from "./application/read-api.js";
 import { createAuthRoutes } from "./auth/routes.js";
@@ -263,7 +264,7 @@ app.get("/dashboard/runs/:id", (c) =>
     }
 
     return Effect.runPromise(
-      listRunFindings(session.repositoryIds, reviewRunId).pipe(
+      reviewDetail(session.repositoryIds, reviewRunId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -273,8 +274,16 @@ app.get("/dashboard/runs/:id", (c) =>
               ),
               Match.orElse((error) => internalError(c, error)),
             ),
-          onSuccess: ({ run, findings }) =>
-            c.html(runFindingsPage(session.login, run, findings)),
+          onSuccess: ({ repository, run, findings }) =>
+            c.html(
+              runFindingsPage(
+                session.login,
+                repository,
+                run,
+                findings,
+                new Date(),
+              ),
+            ),
         }),
       ),
     );

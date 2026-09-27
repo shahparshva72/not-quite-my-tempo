@@ -203,6 +203,33 @@ section.band { padding: 3rem 0; border-top: 1px solid var(--staff); }
 .state-active { color: var(--brass); }
 .state-failed { color: var(--red-pencil); }
 
+/* Review page */
+.verdict {
+  margin: 0.5rem 0 1rem; font-weight: 900; line-height: 0.95;
+  font-variation-settings: "wdth" 62; font-size: clamp(2.6rem, 8vw, 4.5rem);
+}
+.verdict-failed { color: var(--red-pencil); }
+.verdict-active { color: var(--brass); }
+.verdict-quiet { color: var(--graphite); }
+.summary { margin: 1.5rem 0 2rem; }
+.findings-heading { margin-top: 2.5rem; }
+.findings { list-style: none; margin: 0; padding: 0; max-width: 52rem; }
+.finding { padding: 1.25rem 0; border-top: 1px solid var(--staff); }
+.finding h3 { margin: 0.35rem 0; }
+.finding-where {
+  display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: baseline;
+  color: var(--graphite); font-size: 0.9rem;
+}
+.finding-where .code { overflow-wrap: anywhere; }
+.details {
+  display: flex; flex-wrap: wrap; gap: 0.5rem 2rem; margin: 3rem 0 0;
+  padding-top: 1rem; border-top: 1px solid var(--staff);
+  color: var(--graphite); font-size: 0.9rem;
+}
+.details div { display: flex; gap: 0.5rem; }
+.details dt { font-weight: 600; }
+.details dd { margin: 0; color: var(--ink); }
+
 /* Tables on dashboard pages */
 .table-wrap { overflow-x: auto; margin-top: 1rem; }
 table.data { border-collapse: collapse; width: 100%; }

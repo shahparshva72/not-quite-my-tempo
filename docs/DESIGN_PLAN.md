@@ -299,10 +299,10 @@ Server-rendered Hono `html` templates stay. No framework and no build step.
    pages for sign-in failures.
 3. **Dashboard and repository pages** (done 2026-09-28). Last-review summary per repository,
    pull-request rows, and plain status wording.
-4. **Review page.** Needs the Phase 14 migration for `verdict` and
+4. **Review page** (done 2026-09-28; migration `0004` adds `verdict` and `summary`). Needs the Phase 14 migration for `verdict` and
    `summary`, and PR/comment URLs built from `owner`, `name`, and
    `githubCommentId`.
-5. **Verification.**
+5. **Verification** (done 2026-09-28 for all pages at 375px and desktop, plus keyboard focus).
    - Screenshots at 375px and 1280px.
    - Keyboard-only pass.
    - Reduced-motion check.

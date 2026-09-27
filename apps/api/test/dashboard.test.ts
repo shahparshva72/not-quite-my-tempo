@@ -141,6 +141,66 @@ describe("dashboard", () => {
     expect(body).toContain("warning");
   });
 
+  it("leads a completed review with the stored verdict and summary", async () => {
+    const run = await seedRun();
+
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE review_runs SET status = 'completed' WHERE id = ?",
+      ).bind(run.id),
+      env.DB.prepare(
+        `INSERT INTO findings (review_run_id, file_path, line, severity, message, github_comment_id)
+         VALUES (?, 'src/metronome.ts', 3, 'critical', 'Division by zero.', 555)`,
+      ).bind(run.id),
+    ]);
+
+    const body = await (
+      await request(`/dashboard/runs/${run.id}`, await sessionCookie([3001]))
+    ).text();
+
+    expect(body).toContain('class="verdict verdict-verdict">Almost.');
+    expect(body).toContain("Not quite my tempo.");
+    expect(body).toContain("2 findings");
+    expect(body.indexOf("src/metronome.ts:3")).toBeLessThan(
+      body.indexOf("src/tempo.ts:14"),
+    );
+    expect(body).toContain(
+      "https://github.com/not-my-tempo/app/pull/42#discussion_r555",
+    );
+  });
+
+  it("infers a verdict for reviews stored before verdicts were saved", async () => {
+    const run = await seedRun();
+
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE review_runs SET status = 'completed', verdict = NULL, summary = NULL WHERE id = ?",
+      ).bind(run.id),
+      env.DB.prepare(
+        "UPDATE findings SET severity = 'critical' WHERE review_run_id = ?",
+      ).bind(run.id),
+    ]);
+
+    const body = await (
+      await request(`/dashboard/runs/${run.id}`, await sessionCookie([3001]))
+    ).text();
+
+    expect(body).toContain(
+      'class="verdict verdict-failed">Not quite my tempo.',
+    );
+  });
+
+  it("shows a review in progress without a verdict", async () => {
+    const run = await seedRun();
+
+    const body = await (
+      await request(`/dashboard/runs/${run.id}`, await sessionCookie([3001]))
+    ).text();
+
+    expect(body).toContain("Reviewing now");
+    expect(body).not.toContain("Almost.");
+  });
+
   it("does not praise failed or skipped runs without findings", async () => {
     const [failed, skipped] = await Effect.runPromise(
       Effect.gen(function* () {

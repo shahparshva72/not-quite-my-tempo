@@ -11,6 +11,7 @@ import type {
 } from "../application/read-api.js";
 import {
   dynamicMark,
+  failureReason,
   formatNumber,
   layout,
   messagePage,
@@ -239,82 +240,153 @@ export const repositoryRunsPage = (
       }`,
   );
 
-// Only praise a run that was actually reviewed; a completed run without a
-// model was skipped by `.fletcher.json`.
-const emptyFindingsMessage = (run: ReviewRun) => {
+const verdictHeadlines = {
+  not_my_tempo: "Not quite my tempo.",
+  almost: "Almost.",
+  good_job: "…Good job.",
+} as const;
+
+// Runs reviewed before verdicts were stored fall back to their loudest
+// finding, matching the rubric Fletcher uses for verdicts.
+const inferredVerdict = (findings: readonly Finding[]) =>
+  findings.some((finding) => finding.severity === "critical")
+    ? "not_my_tempo"
+    : findings.length > 0
+      ? "almost"
+      : "good_job";
+
+/** Headline and one explanatory line for a run's current state. */
+const reviewHeadline = (run: ReviewRun, findings: readonly Finding[]) => {
   switch (run.status) {
     case "queued":
     case "running":
-      return "Review in progress. No findings yet.";
+      return {
+        headline: "Reviewing now",
+        tone: "active",
+        note: "Fletcher is reading this pull request. Reload in a minute for his review.",
+      };
     case "failed":
-      return "The review failed before producing findings.";
+      return {
+        headline: "Review failed",
+        tone: "failed",
+        note: html`The review failed because ${failureReason(run.errorCode)}.
+          Comment <code>/fletcher again</code> on the pull request to retry.`,
+      };
     case "cancelled":
-      return "The review was cancelled.";
-    case "completed":
-      return run.model === null
-        ? "Review skipped: disabled by .fletcher.json."
-        : "No findings. ...Good job.";
+      return { headline: "Review cancelled", tone: "quiet", note: null };
+    case "completed": {
+      if (run.model === null) {
+        return {
+          headline: "Review skipped",
+          tone: "quiet",
+          note: "This repository's .fletcher.json turns reviews off.",
+        };
+      }
+
+      const verdict = run.verdict ?? inferredVerdict(findings);
+
+      return {
+        headline: verdictHeadlines[verdict],
+        tone: verdict === "not_my_tempo" ? "failed" : "verdict",
+        note: null,
+      };
+    }
   }
 };
 
+const findingLocation = (finding: Finding) =>
+  finding.line === null
+    ? finding.filePath
+    : `${finding.filePath}:${finding.line}`;
+
+const findingItem = (
+  repository: GitHubRepository,
+  run: ReviewRun,
+  finding: Finding,
+) =>
+  html`<li class="annotation finding">
+    ${dynamicMark(finding.severity)}
+    <div>
+      <p class="finding-where">
+        <span class="code">${findingLocation(finding)}</span>
+        ${
+          finding.githubCommentId === null
+            ? ""
+            : html`<a
+                href="${pullRequestUrl(repository.fullName, run.pullRequestNumber)}#discussion_r${finding.githubCommentId}"
+                >View comment on GitHub</a
+              >`
+        }
+      </p>
+      ${finding.title === null ? "" : html`<h3>${finding.title}</h3>`}
+      <p>${finding.message}</p>
+    </div>
+  </li>`;
+
 export const runFindingsPage = (
   login: string,
+  repository: GitHubRepository,
   run: ReviewRun,
   findings: readonly Finding[],
-) =>
-  layout(
-    `Review of pull request ${run.pullRequestNumber}`,
+  now: Date,
+) => {
+  const { headline, tone, note } = reviewHeadline(run, findings);
+
+  return layout(
+    `Pull request ${run.pullRequestNumber}: ${headline}`,
     login,
     html`<p class="crumbs">
-        <a href="/dashboard/repositories/${run.repositoryId}">All reviews</a>
+        <a href="/dashboard/repositories/${repository.id}"
+          >${repository.fullName}</a
+        >
       </p>
-      <h1 class="page-title">
-        Review of pull request #${run.pullRequestNumber}
-      </h1>
+      <h1 class="verdict verdict-${tone}">${headline}</h1>
       <p class="quiet">
-        Commit <span class="code">${run.headSha.slice(0, 7)}</span>, status
-        <span class="status-${run.status}">${run.status}</span
-        >${run.errorCode === null ? "" : html`, error ${run.errorCode}`}${run.model === null ? "" : html`, reviewed with ${run.model}`}.
+        Pull request ${run.pullRequestNumber} in ${repository.fullName},
+        ${triggerLabel(run.trigger).toLowerCase()}
+        ${relativeTime(run.createdAt, now)}.
+        <a href="${pullRequestUrl(repository.fullName, run.pullRequestNumber)}"
+          >View on GitHub</a
+        >
       </p>
+      ${note === null ? "" : html`<p>${note}</p>`}
+      ${run.summary === null ? "" : html`<p class="lede summary">${run.summary}</p>`}
       ${
         findings.length === 0
-          ? html`<p>${emptyFindingsMessage(run)}</p>`
-          : html`<div class="table-wrap">
-              <table class="data">
-                <thead>
-                  <tr>
-                    <th>Severity</th>
-                    <th>Location</th>
-                    <th>Finding</th>
-                    <th class="num">Confidence</th>
-                    <th class="num">Comment</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${findings.map(
-                    (finding) =>
-                      html`<tr>
-                        <td class="severity-${finding.severity}">
-                          ${finding.severity}
-                        </td>
-                        <td class="code">
-                          ${finding.filePath}${finding.line === null ? "" : `:${finding.line}`}
-                        </td>
-                        <td class="finding">
-                          ${finding.title === null ? "" : html`<strong>${finding.title}</strong><br />`}
-                          ${finding.message}
-                        </td>
-                        <td class="num">
-                          ${finding.confidence === null ? "" : finding.confidence.toFixed(2)}
-                        </td>
-                        <td class="num">${finding.githubCommentId ?? ""}</td>
-                      </tr>`,
-                  )}
-                </tbody>
-              </table>
-            </div>`
-      }`,
+          ? run.status === "completed" && run.model !== null
+            ? html`<p>No findings on this pull request.</p>`
+            : ""
+          : html`<h2 class="findings-heading">
+                ${`${findings.length} ${findings.length === 1 ? "finding" : "findings"}`}
+              </h2>
+              <ol class="findings">
+                ${findings.map((finding) => findingItem(repository, run, finding))}
+              </ol>`
+      }
+      <dl class="details">
+        <div>
+          <dt>Commit</dt>
+          <dd class="code">${run.headSha.slice(0, 7)}</dd>
+        </div>
+        ${
+          run.model === null
+            ? ""
+            : html`<div>
+                <dt>Model</dt>
+                <dd>${run.model}</dd>
+              </div>`
+        }
+        ${
+          run.totalTokens === null
+            ? ""
+            : html`<div>
+                <dt>Tokens</dt>
+                <dd>${formatNumber(run.totalTokens)}</dd>
+              </div>`
+        }
+      </dl>`,
   );
+};
 
 export const onboardingPage = (
   login: string,

@@ -190,3 +190,34 @@ export const repositoryReviewHistory = (
       ),
     ),
   );
+
+const severityOrder = { critical: 0, warning: 1, suggestion: 2 } as const;
+
+/**
+ * Review page data: the run, its repository (for GitHub links), and its
+ * findings loudest first, then by file and line.
+ */
+export const reviewDetail = (
+  repositoryIds: readonly number[],
+  reviewRunId: number,
+) =>
+  Effect.gen(function* () {
+    const { run, findings } = yield* listRunFindings(
+      repositoryIds,
+      reviewRunId,
+    );
+
+    const repository = yield* requireAccessibleRepository(
+      repositoryIds,
+      run.repositoryId,
+    );
+
+    const ordered = [...findings].sort(
+      (left, right) =>
+        severityOrder[left.severity] - severityOrder[right.severity] ||
+        left.filePath.localeCompare(right.filePath) ||
+        (left.line ?? 0) - (right.line ?? 0),
+    );
+
+    return { repository, run, findings: ordered };
+  });

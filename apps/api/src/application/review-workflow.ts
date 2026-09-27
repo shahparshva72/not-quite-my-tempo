@@ -266,11 +266,12 @@ export const persistReviewFindings = (
   Effect.gen(function* () {
     yield* requireReviewRun(
       reviewRunId,
-      ReviewRunRepository.recordModelUsage(
-        reviewRunId,
-        result.model,
-        result.usage,
-      ),
+      ReviewRunRepository.recordReviewResult(reviewRunId, {
+        model: result.model,
+        usage: result.usage,
+        verdict: result.review.verdict,
+        summary: result.review.summary,
+      }),
     );
 
     const findings = yield* FindingRepository.insertMany(
