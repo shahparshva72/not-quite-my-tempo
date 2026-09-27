@@ -313,11 +313,20 @@ Server-rendered Hono `html` templates stay. No framework and no build step.
 Each step is one PR and keeps `pnpm lint`, `format:check`, `typecheck`,
 `build`, and `test` green.
 
-## 8. Open questions
+## 8. Naming (decided 2026-09-28)
 
-- **Name on screen.** "Not Quite My Tempo" as the product with "Fletcher"
-  as the reviewer (as in the style tile), or rename the product to
-  "Fletcher"?
+- **Not Quite My Tempo** is the product and the site, at `notmytempo.dev`.
+  It is the wordmark, the page title suffix, and the name in legal and
+  billing copy.
+- **Fletcher** is the reviewer and the name used everywhere else: the
+  GitHub App users install, the author of review comments, and the subject
+  of interface copy ("Install Fletcher on GitHub", "Fletcher reviews it
+  within a minute", "Turn Fletcher off for this repository").
+- Name the GitHub App "Fletcher" if the name is free on GitHub; App names
+  are global, so a fallback like "Fletcher Review" keeps the bot name first.
+
+## 9. Open questions
+
 - **Illustration or photography.** The plan uses none. A drawn baton or
   metronome could come later, but the sample review already shows the
   product better than art would.
