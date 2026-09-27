@@ -14,29 +14,87 @@ then this file for exactly where things stand and what to do next.
 
 ## Status at a glance
 
-| Phase | Description               | Status       |
-| ----- | ------------------------- | ------------ |
-| 1     | GitHub App authentication | ✅ Done      |
-| 2     | Fetch the PR diff         | ✅ Done      |
-| 3     | Gemini review service     | ✅ Done      |
-| 4     | Wire the Workflow         | ✅ Done      |
-| 5     | Post the review to GitHub | ✅ Done      |
-| 6     | Hardening & operations    | 🟡 Core done |
-| 7     | Findings memory           | ✅ Done      |
-| 8     | `/fletcher again` command | ✅ Done      |
-| 9     | `.fletcher.json` + guard  | ✅ Done      |
-| 10    | Read API + GitHub OAuth   | ✅ Done      |
-| 11    | Dashboard UI              | ✅ Done      |
+| Phase | Description               | Status        |
+| ----- | ------------------------- | ------------- |
+| 1     | GitHub App authentication | ✅ Done       |
+| 2     | Fetch the PR diff         | ✅ Done       |
+| 3     | Gemini review service     | ✅ Done       |
+| 4     | Wire the Workflow         | ✅ Done       |
+| 5     | Post the review to GitHub | ✅ Done       |
+| 6     | Hardening & operations    | 🟡 Core done  |
+| 7     | Findings memory           | ✅ Done       |
+| 8     | `/fletcher again` command | ✅ Done       |
+| 9     | `.fletcher.json` + guard  | ✅ Done       |
+| 10    | Read API + GitHub OAuth   | ✅ Done       |
+| 11    | Dashboard UI              | 🟡 v1 shipped |
 
-**Next task:** deploy + dogfood. All planned phases are done. Operational
-prerequisites before the next deploy: set `GITHUB_OAUTH_CLIENT_ID` /
-`GITHUB_OAUTH_CLIENT_SECRET` / `SESSION_SECRET` as Worker secrets, set the
-GitHub App's OAuth callback URL to `<worker-url>/auth/callback`, subscribe
-the App to issue comment events, and run `pnpm db:migrate:remote` for
-`0001_*` if not done. Backlog after that (PLAN.md): oversized-diff Fletcher
-comment, opt-in `REQUEST_CHANGES` for criticals, review-comment pagination,
-prompt tuning from real reviews, settings write-path for `.fletcher.json`
-in the dashboard.
+**Next task:** continue Phase 12 with workspace ownership/memberships and
+automatic permission refresh. Persistent users, revocable sessions, and
+repository-level access are implemented and verified. This does not yet
+complete the SaaS account and onboarding foundation.
+
+### Active priorities (2026-09-18)
+
+- [ ] Phase 12: accounts, sessions, workspace roles, and repository access
+      enforcement, including permission removal and isolation tests.
+- [ ] Phase 13: verified GitHub installation linking, repository sync,
+      installation lifecycle handling, and self-service onboarding.
+- [ ] Phase 14: dashboard correctness, review summaries, GitHub links,
+      pagination, accessible responsive UI, and repository settings.
+- [ ] Phase 15: recovery, monitoring, operational usage limits, deletion and
+      retention, production configuration, and full release verification.
+
+Detailed scope and acceptance criteria are in the active roadmap at the top
+of [PLAN.md](./PLAN.md). Plans, billing, subscriptions, checkout, and paid
+entitlements are deferred outside the current focus. Usage tracking and
+operational rate limits remain in scope for abuse and cost control.
+
+The OAuth redirect defect is fixed with regression coverage in Phase 12.
+Comment-ID persistence, misleading success messages, and layout overflow
+remain open for Phase 14. The manual test report remains the source for
+pending live checks and the credential rotation prerequisite. Production
+secrets, callback/webhook configuration, Issue comment subscription, and
+remote migrations must be verified before release.
+
+### Phase 12 foundation — completed 2026-09-18
+
+- [x] Persistent users keyed by immutable GitHub ID, with mutable login
+      updates, exposed through authenticated `GET /api/me`.
+- [x] Opaque, one-hour sessions stored as keyed token hashes in D1; sign-in
+      rotates the current session and logout revokes it server-side.
+- [x] Paginated GitHub repository access discovery, enforced on dashboard and
+      API reads; installation membership alone no longer grants repository
+      access. Large grants use parameterized JSON queries to avoid D1 bind
+      limits.
+- [x] OAuth success returns to `/dashboard`; denied/failed login is handled,
+      auth URLs are omitted from request logging, and private responses are
+      not cached. Logout requires a same-origin POST.
+- [x] Migration `0002_good_metal_master.sql` adds users/sessions; existing
+      review data remains intact, and old cookie-only sessions require a new
+      sign-in. Applied successfully to local D1; remote migration is pending.
+- [x] Verification: lint, formatting, application and test typechecks,
+      Wrangler dry-run build, and all 123 tests across 16 files passed.
+      Coverage includes username changes, hashed storage, expiry/revocation,
+      cross-origin logout, same-installation repository isolation, pagination,
+      and OAuth failures. Two independent integration reviews found no
+      additional in-scope defects.
+
+Permission grants remain a sign-in snapshot with a one-hour maximum lifetime.
+Immediate GitHub permission revocation, workspace roles/ownership, installation
+linking, and onboarding are not implemented by this slice. Billing remains
+deferred. Live browser/GitHub OAuth verification of the updated flow and a
+production deploy have not been performed. Verification used installed Node
+26.8.2 and pnpm 11.1.3; the pinned Node 26.7.0 is not installed locally.
+
+### Pre-commit review — 2026-09-28
+
+- Reviewed account persistence, OAuth, session rotation/revocation,
+  repository access checks, migration, and regression coverage; no blocking
+  defects found in this slice. Corrected stale roadmap and migration notes.
+- Lint, formatting, dry-run build, application/test typechecks, and all 123
+  tests across 16 files passed using Node 26.9.0 and pnpm 11.1.3. The initial
+  sandboxed test run could not bind loopback ports; the permitted rerun passed.
+- Live OAuth/browser verification and remote migration remain pending.
 
 ---
 
@@ -471,7 +529,7 @@ headSha }` via `Schema` decode). Tagged errors:
   localhost (Chrome does).
 - **Start next:** Phase 11 — dashboard UI.
 
-## Phase 11 — Dashboard UI ✅
+## Phase 11 — Dashboard UI 🟡 (functional v1, not "done")
 
 - [x] Server-rendered views in `apps/api/src/dashboard/views.ts` using
       `hono/html` tagged templates (auto-escaping; deviation from PLAN's
@@ -503,6 +561,71 @@ headSha }` via `Schema` decode). Tagged errors:
   the JSON root stops being useful.
 - No settings write-path yet — `.fletcher.json` is repo-managed; the
   dashboard is read-only by design for v1.
+- **Known gaps for the frontend (Phase 14 backlog):** review verdict
+  and summary are not persisted anywhere (needs a new migration +
+  `test/setup.ts` extension) so the most interesting column can't be shown;
+  no deep-links to the GitHub PR or posted comments; no pagination past 25
+  runs; effective `.fletcher.json` not displayed. Partial browser verification
+  found overflow and misleading empty states; accessibility verification
+  remains pending. See `docs/MANUAL_TEST_RESULTS_2026-09-14.md` for evidence.
 - Live verification used `shahparshva72/cv#14` with an isolated arithmetic
   fixture. It confirmed a `not_my_tempo` verdict and a correctly anchored
   critical finding on line 4.
+
+## Manual test findings — 2026-09-14
+
+Latest results: [detailed test report](./MANUAL_TEST_RESULTS_2026-09-14.md).
+Partial verification with four confirmed defects; not release sign-off.
+No application code changed. The initial notes below predate live testing;
+the detailed report supersedes their pending statuses.
+
+- Step 3: real reviews completed, but all three new posted inline comments
+  have NULL `github_comment_id` in D1.
+- Steps 4–6: local replay, real reopen, findings memory, and manual-command
+  guards worked. Fresh manual run queued but model review hit quota.
+- Step 7: disabled passed. Ignore/threshold/malformed config resolved, but
+  Gemini 503/429 blocked complete reviews. Intensity output not verified.
+- Step 8: oversized diff and isolated bad-key tests produced expected
+  errors. Original secrets unchanged; good-key recovery hit quota.
+- Step 10: real OAuth worked but redirected to service JSON at `/` instead
+  of `/dashboard`. Browser cookie/tamper/logout checks remain partial.
+- Step 11: read API, installation isolation, ID validation, and D1 usage
+  sums passed with locally generated fixture sessions.
+- Step 12: mobile tables overflow; long titles cause extreme overflow.
+  Failed/disabled runs incorrectly show “No findings. ...Good job.”
+  HTML escaping passed.
+- Prompt tuning: carousel bugs both critical; calibrate severity. Summary
+  phrase “sheer carelessness” risks personal tone.
+- Setup pending: replacement tunnel URLs and Issue comment subscription.
+  Report lists open test PRs, exact evidence, and unverified items.
+
+### Initial setup notes
+
+- Step 0: all six gates passed (lint, format, application/test typechecks,
+  dry-run build, and 103 tests across 14 files). Used pnpm 11.1.3 from
+  `/Users/parshvashah/Library/pnpm/pnpm`; PATH pnpm 12.4.1 hung.
+  Installed Node is 26.8.2; requested 26.7.0 is not installed.
+- Step 0: local migrations already applied; `review_runs` has all three
+  token columns. Existing run 2 (PR 14) is completed with 1456 total tokens;
+  this historical row is not evidence of a new end-to-end test.
+- Steps 1–2: live local HTTP checks passed: root/health 200, unknown route
+  404 `not_found`, unsigned webhook 401 `invalid_signature`, signed ping
+  202 `ignored`.
+- Step 10: signed-out landing rendered correctly in Chrome at desktop
+  width, with styled GitHub sign-in link and no raw HTML artifacts.
+  Callback replay returned 401 `invalid_oauth_state`.
+- Step 10 discrepancy (source inspection): expected successful sign-in
+  redirect `/dashboard`; actual callback code redirects `/`, which returns
+  service JSON. Real OAuth completion still pending.
+- Step 11: unauthenticated repositories and usage endpoints returned 401.
+  Invalid IDs also return 401 before authentication; authenticated 400
+  validation remains pending.
+- Setup blocker: GitHub App webhook points to an older tunnel and its
+  OAuth callback field is empty. Requested updated tunnel webhook/callback
+  URLs from user, plus confirmation of the throwaway test repository.
+- Steps 3–8, authenticated portions of 10–11, and dashboard detail/mobile
+  checks in 12 are not yet verified. Step 9's permitted automated rate-cap
+  path passed with the suite; no live cap saturation attempted.
+- Playbook caveat: step 6's push can enqueue a synchronize run before the
+  manual comment arrives, so a fresh `manual` run is not deterministic.
+  Arrange delivery ordering when exercising that case.

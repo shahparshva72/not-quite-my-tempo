@@ -54,10 +54,10 @@ const seedRun = (headSha: string) =>
 describe("read API", () => {
   beforeEach(resetAndSeedRepository);
 
-  it("lists repositories only for the session's installations", async () => {
+  it("lists only the repositories authorized for the session", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const accessible = yield* listAccessibleRepositories([1001]);
+        const accessible = yield* listAccessibleRepositories([3001]);
         const foreign = yield* listAccessibleRepositories([9999]);
         const none = yield* listAccessibleRepositories([]);
 
@@ -77,10 +77,10 @@ describe("read API", () => {
       Effect.gen(function* () {
         yield* seedRun("read123");
 
-        const allowed = yield* listRepositoryRuns([1001], 1);
+        const allowed = yield* listRepositoryRuns([3001], 1);
         const denied = yield* listRepositoryRuns([9999], 1).pipe(Effect.flip);
 
-        const missing = yield* listRepositoryRuns([1001], 404).pipe(
+        const missing = yield* listRepositoryRuns([3001], 404).pipe(
           Effect.flip,
         );
 
@@ -99,7 +99,7 @@ describe("read API", () => {
       Effect.gen(function* () {
         const run = yield* seedRun("find123");
 
-        const allowed = yield* listRunFindings([1001], run.id);
+        const allowed = yield* listRunFindings([3001], run.id);
 
         const denied = yield* listRunFindings([9999], run.id).pipe(Effect.flip);
 
@@ -121,7 +121,7 @@ describe("read API", () => {
         yield* seedRun("usage1");
         yield* seedRun("usage2");
 
-        return yield* usageSummary([1001]);
+        return yield* usageSummary([3001]);
       }).pipe(Effect.provide(dbLayer())),
     );
 
@@ -135,5 +135,69 @@ describe("read API", () => {
         totalTokens: 2400,
       },
     ]);
+  });
+
+  it("does not expose sibling repositories or usage from the same installation", async () => {
+    await env.DB.prepare(
+      `INSERT INTO repositories
+        (id, installation_id, github_repository_id, owner, name, full_name, default_branch)
+       VALUES (2, 1, 3002, 'not-my-tempo', 'private', 'not-my-tempo/private', 'main')`,
+    ).run();
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const run = yield* seedRun("private-access");
+        const visible = yield* listAccessibleRepositories([3002]);
+        const runs = yield* listRepositoryRuns([3002], 1).pipe(Effect.flip);
+
+        const findings = yield* listRunFindings([3002], run.id).pipe(
+          Effect.flip,
+        );
+
+        const usage = yield* usageSummary([3002]);
+
+        return { visible, runs, findings, usage };
+      }).pipe(Effect.provide(dbLayer())),
+    );
+
+    expect(result.visible.map((repo) => repo.id)).toEqual([2]);
+    expect(result.runs._tag).toBe("ResourceNotFoundError");
+    expect(result.findings._tag).toBe("ResourceNotFoundError");
+    expect(result.usage).toEqual([
+      {
+        repositoryId: 2,
+        fullName: "not-my-tempo/private",
+        runCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+    ]);
+  });
+
+  it("handles repository grants beyond one GitHub page without exceeding D1 bind limits", async () => {
+    const rows = Array.from({ length: 105 }, (_, index) => {
+      const id = index + 2;
+
+      return env.DB.prepare(
+        `INSERT INTO repositories
+          (id, installation_id, github_repository_id, owner, name, full_name, default_branch)
+         VALUES (?, 1, ?, 'not-my-tempo', ?, ?, 'main')`,
+      ).bind(id, 3000 + id, `repo-${id}`, `not-my-tempo/repo-${id}`);
+    });
+
+    await env.DB.batch(rows);
+    const grants = Array.from({ length: 106 }, (_, index) => 3001 + index);
+
+    const usage = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedRun("large-grant-list");
+
+        return yield* usageSummary(grants);
+      }).pipe(Effect.provide(dbLayer())),
+    );
+
+    expect(usage).toHaveLength(106);
+    expect(usage.find((row) => row.repositoryId === 1)?.totalTokens).toBe(1200);
   });
 });

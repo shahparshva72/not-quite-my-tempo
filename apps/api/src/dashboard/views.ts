@@ -49,6 +49,11 @@ const styles = `
     font-weight: 700; border-radius: 4px;
   }
   nav { margin-bottom: 0.5rem; }
+  .signout { display: inline; }
+  .signout button {
+    border: 0; padding: 0; background: none; color: #d9a441;
+    font: inherit; text-decoration: underline; cursor: pointer;
+  }
 `;
 
 const layout = (title: string, content: HtmlContent) => html`<!doctype html>
@@ -96,9 +101,12 @@ export const dashboardPage = (
 ) =>
   layout(
     "Repositories",
-    html`<p class="meta">
-        Signed in as ${login} · <a href="/auth/logout">sign out</a>
-      </p>
+    html`<div class="meta">
+        Signed in as ${login} ·
+        <form class="signout" method="post" action="/auth/logout">
+          <button type="submit">sign out</button>
+        </form>
+      </div>
       <h2>Repositories</h2>
       ${
         usage.length === 0

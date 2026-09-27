@@ -65,30 +65,228 @@ describe("GitHubOAuth", () => {
     });
   });
 
-  it("fetches the user's installation ids", async () => {
-    const fetchImpl: typeof fetch = (url) =>
+  it("fetches the user's immutable id and current login", async () => {
+    const fetchImpl: typeof fetch = (url) => {
+      expect(String(url)).toBe("https://api.github.test/user");
+
+      return Promise.resolve(
+        new Response(JSON.stringify({ id: 123456, login: "octocat" })),
+      );
+    };
+
+    const user = await Effect.runPromise(
+      withOAuth(fetchImpl, (oauth) => oauth.fetchUser("gho_user")),
+    );
+
+    expect(user).toEqual({ githubUserId: 123456, login: "octocat" });
+  });
+
+  it("rejects a non-positive or non-integer GitHub user id", async () => {
+    const fetchImpl: typeof fetch = () =>
       Promise.resolve(
-        String(url).endsWith("/user/installations")
-          ? new Response(
-              JSON.stringify({
-                installations: [{ id: 1001 }, { id: 2002 }],
-              }),
-            )
-          : new Response("unexpected", { status: 500 }),
+        new Response(JSON.stringify({ id: 0, login: "octocat" })),
       );
 
-    const ids = await Effect.runPromise(
-      withOAuth(fetchImpl, (oauth) =>
-        oauth.fetchUserInstallationIds("gho_user"),
+    const error = await Effect.runPromise(
+      Effect.flip(withOAuth(fetchImpl, (oauth) => oauth.fetchUser("gho_user"))),
+    );
+
+    expect(error._tag).toBe("OAuthRequestError");
+    expect(JSON.stringify(error)).not.toContain('"id":0');
+  });
+
+  it("paginates installations and repositories, deduplicating repository ids", async () => {
+    const pageSize = 100;
+
+    const firstInstallationsPage = Array.from(
+      { length: pageSize },
+      (_, index) => ({ id: 1000 + index }),
+    );
+
+    const firstRepositoriesPage = Array.from(
+      { length: pageSize },
+      (_, index) => ({ id: 9000 + index }),
+    );
+
+    const requests: string[] = [];
+
+    const fetchImpl: typeof fetch = (input) => {
+      const url = new URL(String(input));
+      requests.push(url.href);
+
+      if (url.pathname === "/user/installations") {
+        const page = url.searchParams.get("page");
+
+        if (page === "1") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ installations: firstInstallationsPage }),
+            ),
+          );
+        }
+
+        if (page === "2") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ installations: [{ id: 2001 }, { id: 2002 }] }),
+            ),
+          );
+        }
+      }
+
+      const installationMatch = url.pathname.match(
+        /^\/user\/installations\/(\d+)\/repositories$/,
+      );
+
+      const installationId = installationMatch?.[1];
+
+      if (installationId !== undefined) {
+        const page = url.searchParams.get("page");
+
+        if (installationId !== "2001" && installationId !== "2002") {
+          return Promise.resolve(
+            new Response(JSON.stringify({ repositories: [] })),
+          );
+        }
+
+        if (installationId === "2001" && page === "1") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ repositories: firstRepositoriesPage }),
+            ),
+          );
+        }
+
+        if (installationId === "2001" && page === "2") {
+          return Promise.resolve(
+            new Response(JSON.stringify({ repositories: [{ id: 9100 }] })),
+          );
+        }
+
+        if (installationId === "2002" && page === "1") {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ repositories: [{ id: 9100 }, { id: 9200 }] }),
+            ),
+          );
+        }
+      }
+
+      return Promise.resolve(new Response("unexpected", { status: 500 }));
+    };
+
+    const repositoryIds = await Effect.runPromise(
+      withOAuth(fetchImpl, (oauth) => oauth.fetchUserRepositoryIds("gho_user")),
+    );
+
+    expect(repositoryIds).toEqual([
+      ...firstRepositoriesPage.map(({ id }) => id),
+      9100,
+      9200,
+    ]);
+
+    const installationRequests = requests.filter((url) =>
+      new URL(url).pathname.endsWith("/user/installations"),
+    );
+
+    expect(installationRequests).toEqual([
+      "https://api.github.test/user/installations?per_page=100&page=1",
+      "https://api.github.test/user/installations?per_page=100&page=2",
+    ]);
+
+    const repositoriesRequests = requests.filter((url) =>
+      new URL(url).pathname.includes("/repositories"),
+    );
+
+    expect(repositoriesRequests).toContain(
+      "https://api.github.test/user/installations/2001/repositories?per_page=100&page=1",
+    );
+    expect(repositoriesRequests).toContain(
+      "https://api.github.test/user/installations/2001/repositories?per_page=100&page=2",
+    );
+    expect(repositoriesRequests).toContain(
+      "https://api.github.test/user/installations/2002/repositories?per_page=100&page=1",
+    );
+  });
+
+  it("does not return partial repository access when an installation is inaccessible", async () => {
+    const fetchImpl: typeof fetch = (input) => {
+      const url = new URL(String(input));
+
+      if (url.pathname === "/user/installations") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ installations: [{ id: 1001 }, { id: 2002 }] }),
+          ),
+        );
+      }
+
+      if (url.pathname.endsWith("/1001/repositories")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ repositories: [{ id: 9001 }] })),
+        );
+      }
+
+      if (url.pathname.endsWith("/2002/repositories")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ message: "repository access denied" }),
+            { status: 403 },
+          ),
+        );
+      }
+
+      return Promise.resolve(new Response("unexpected", { status: 500 }));
+    };
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        withOAuth(fetchImpl, (oauth) =>
+          oauth.fetchUserRepositoryIds("gho_user"),
+        ),
       ),
     );
 
-    expect(ids).toEqual([1001, 2002]);
+    expect(error._tag).toBe("OAuthResponseError");
+    expect(error).toMatchObject({ status: 403 });
+    expect(JSON.stringify(error)).not.toContain("repository access denied");
   });
 
-  it("surfaces failed exchanges with status and body", async () => {
+  it("sanitizes a failed exchange response", async () => {
     const fetchImpl: typeof fetch = () =>
-      Promise.resolve(new Response("bad_verification_code", { status: 401 }));
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: "bad_verification_code",
+            error_description: "secret response details",
+            access_token: "gho_should_not_escape",
+          }),
+          { status: 200 },
+        ),
+      );
+
+    const error = await Effect.runPromise(
+      Effect.flip(withOAuth(fetchImpl, (oauth) => oauth.exchangeCode("nope"))),
+    );
+
+    expect(error._tag).toBe("OAuthResponseError");
+    expect(error).toMatchObject({ status: 200 });
+    expect(JSON.stringify(error)).not.toContain("secret response details");
+    expect(JSON.stringify(error)).not.toContain("gho_should_not_escape");
+    expect(JSON.stringify(error)).not.toContain("bad_verification_code");
+  });
+
+  it("sanitizes a non-2xx exchange response", async () => {
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: "bad_verification_code",
+            access_token: "gho_secret",
+          }),
+          { status: 401 },
+        ),
+      );
 
     const error = await Effect.runPromise(
       Effect.flip(withOAuth(fetchImpl, (oauth) => oauth.exchangeCode("nope"))),
@@ -96,5 +294,7 @@ describe("GitHubOAuth", () => {
 
     expect(error._tag).toBe("OAuthResponseError");
     expect(error).toMatchObject({ status: 401 });
+    expect(JSON.stringify(error)).not.toContain("gho_secret");
+    expect(JSON.stringify(error)).not.toContain("bad_verification_code");
   });
 });

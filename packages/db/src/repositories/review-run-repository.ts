@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, inArray, ne, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, ne, sql } from "drizzle-orm";
 import { Array, Data, Effect, Option } from "effect";
 
 import { databaseEffect, DatabaseError } from "../errors.js";
@@ -207,12 +207,7 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
                   })
                   .from(reviewRuns)
                   .where(
-                    inArray(
-                      reviewRuns.repositoryId,
-                      // SAFETY: drizzle's inArray requires a mutable array
-                      // type; the values are only read.
-                      repositoryIds as number[],
-                    ),
+                    sql`${reviewRuns.repositoryId} in (select value from json_each(${JSON.stringify(repositoryIds)}))`,
                   )
                   .groupBy(reviewRuns.repositoryId)
                   .all(),

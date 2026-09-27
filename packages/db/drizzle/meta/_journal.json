@@ -15,6 +15,13 @@
       "when": 1789296246974,
       "tag": "0001_abandoned_lorna_dane",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789753596776,
+      "tag": "0002_good_metal_master",
+      "breakpoints": true
     }
   ]
 }

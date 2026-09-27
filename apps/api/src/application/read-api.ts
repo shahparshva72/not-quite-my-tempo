@@ -8,7 +8,7 @@ import {
 const RUNS_PAGE_SIZE = 25;
 
 /**
- * Raised when a resource does not exist or the session's installations do
+ * Raised when a resource does not exist or the session's repositories do
  * not grant access to it. Both cases intentionally map to the same error so
  * resource IDs cannot be enumerated.
  */
@@ -16,35 +16,32 @@ export class ResourceNotFoundError extends Data.TaggedError(
   "ResourceNotFoundError",
 ) {}
 
-export const listAccessibleRepositories = (
-  installationIds: readonly number[],
-) => GitHubRepositoryRepository.listByGithubInstallationIds(installationIds);
+export const listAccessibleRepositories = (repositoryIds: readonly number[]) =>
+  GitHubRepositoryRepository.listByGithubRepositoryIds(repositoryIds);
 
 const requireAccessibleRepository = (
-  installationIds: readonly number[],
+  repositoryIds: readonly number[],
   repositoryId: number,
 ) =>
-  GitHubRepositoryRepository.findByIdWithGithubInstallationId(
-    repositoryId,
-  ).pipe(
+  GitHubRepositoryRepository.findById(repositoryId).pipe(
     Effect.flatMap(
       Option.match({
         onNone: () => new ResourceNotFoundError(),
-        onSome: (row) =>
-          installationIds.includes(row.githubInstallationId)
-            ? Effect.succeed(row.repository)
+        onSome: (repository) =>
+          repositoryIds.includes(repository.githubRepositoryId)
+            ? Effect.succeed(repository)
             : new ResourceNotFoundError(),
       }),
     ),
   );
 
 export const listRepositoryRuns = (
-  installationIds: readonly number[],
+  repositoryIds: readonly number[],
   repositoryId: number,
 ) =>
   Effect.gen(function* () {
     const repository = yield* requireAccessibleRepository(
-      installationIds,
+      repositoryIds,
       repositoryId,
     );
 
@@ -57,7 +54,7 @@ export const listRepositoryRuns = (
   });
 
 export const listRunFindings = (
-  installationIds: readonly number[],
+  repositoryIds: readonly number[],
   reviewRunId: number,
 ) =>
   Effect.gen(function* () {
@@ -70,16 +67,16 @@ export const listRunFindings = (
       ),
     );
 
-    yield* requireAccessibleRepository(installationIds, run.repositoryId);
+    yield* requireAccessibleRepository(repositoryIds, run.repositoryId);
 
     const findings = yield* FindingRepository.listByReviewRun(run.id);
 
     return { run, findings };
   });
 
-export const usageSummary = (installationIds: readonly number[]) =>
+export const usageSummary = (repositoryIds: readonly number[]) =>
   Effect.gen(function* () {
-    const repositories = yield* listAccessibleRepositories(installationIds);
+    const repositories = yield* listAccessibleRepositories(repositoryIds);
 
     const usage = yield* ReviewRunRepository.usageByRepositoryIds(
       repositories.map((repository) => repository.id),

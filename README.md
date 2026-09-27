@@ -198,14 +198,25 @@ Completed runs record the Gemini model and token usage (`input_tokens`,
 
 ## Dashboard API and sign-in
 
-A session-gated, read-only JSON API backs the (upcoming) dashboard:
+A session-gated, read-only JSON API backs the dashboard:
 
 - `GET /auth/login` — redirects to GitHub OAuth (uses the GitHub App's OAuth
   client credentials). `GET /auth/callback` verifies the `state` cookie,
-  exchanges the code, resolves the user's installations via
-  `GET /user/installations`, and sets a signed HttpOnly session cookie
-  (7-day HMAC-SHA256, `SESSION_SECRET`). `GET /auth/logout` clears it.
-- `GET /api/repositories` — repositories in the user's installations.
+  exchanges the code, and persists the account using the immutable GitHub
+  user ID. Username changes update the existing account. Repository access
+  is discovered through paginated `GET /user/installations` and
+  `GET /user/installations/{id}/repositories` calls with the user's token.
+  Successful sign-in redirects to `/dashboard`.
+- Sessions last one hour. The Secure, HttpOnly, SameSite=Lax cookie contains
+  a random token; D1 stores only its HMAC-SHA256 hash (using `SESSION_SECRET`),
+  user ID, expiry, and repository access snapshot. Legacy signed cookies
+  are invalidated by this upgrade. GitHub OAuth access tokens are not stored.
+- `POST /auth/logout` — requires a matching `Origin`, revokes the session
+  in D1, and clears the cookie. The dashboard provides a sign-out form.
+  `GET /auth/logout` returns 405 without changing the session.
+- `GET /api/repositories` — known repositories the user can access, not all
+  repositories belonging to an accessible installation.
+- `GET /api/me` — the persistent account identity and current session expiry.
 - `GET /api/repositories/:id/runs` — the latest review runs.
 - `GET /api/runs/:id/findings` — findings for a run.
 - `GET /api/usage` — run counts and token usage per repository.
@@ -214,6 +225,17 @@ Unknown and inaccessible resources both return 404. Requests without a valid
 session return 401. Configure `GITHUB_OAUTH_CLIENT_ID`,
 `GITHUB_OAUTH_CLIENT_SECRET`, and `SESSION_SECRET` (see `.env.example`), and
 set the GitHub App's callback URL to `<worker-url>/auth/callback`.
+
+Apply migration `0002_good_metal_master.sql` before running this version
+(`pnpm db:migrate:local`, or `pnpm db:migrate:remote` for a configured remote
+database). It adds `users` and `sessions` without changing existing reviews.
+
+Repository permissions are a sign-in snapshot, valid for at most one hour;
+changes on GitHub are not reflected immediately. Sign in again to refresh
+access. Automatic permission refresh/revocation, workspace memberships, and
+self-service installation onboarding remain required follow-up work before
+public SaaS launch. Repositories still enter the local catalog through review
+webhooks. Plans and billing are outside the current development scope.
 
 A server-rendered dashboard sits on the same API at `/dashboard`: signed-out
 visitors get a sign-in page; signed-in users see their repositories with run
