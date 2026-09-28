@@ -2,16 +2,24 @@ import { env } from "cloudflare:workers";
 
 export const resetAndSeedRepository = async () => {
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM audit_events"),
+    env.DB.prepare("DELETE FROM memberships"),
     env.DB.prepare("DELETE FROM sessions"),
     env.DB.prepare("DELETE FROM users"),
     env.DB.prepare("DELETE FROM findings"),
     env.DB.prepare("DELETE FROM review_runs"),
     env.DB.prepare("DELETE FROM repositories"),
     env.DB.prepare("DELETE FROM github_installations"),
+    env.DB.prepare("DELETE FROM workspaces"),
+    env.DB.prepare(
+      `INSERT INTO workspaces
+        (id, github_account_id, github_account_login, account_type)
+       VALUES (1, 2001, 'not-my-tempo', 'Organization')`,
+    ),
     env.DB.prepare(
       `INSERT INTO github_installations
-        (id, github_installation_id, github_account_id, github_account_login, account_type)
-       VALUES (1, 1001, 2001, 'not-my-tempo', 'Organization')`,
+        (id, github_installation_id, github_account_id, github_account_login, account_type, workspace_id)
+       VALUES (1, 1001, 2001, 'not-my-tempo', 'Organization', 1)`,
     ),
     env.DB.prepare(
       `INSERT INTO repositories

@@ -12,6 +12,8 @@ export interface Session {
   readonly tokenHash: string;
   readonly userId: number;
   readonly repositoryIds: readonly number[];
+  readonly githubTokenCiphertext: string | null;
+  readonly accessVerifiedAt: Date | null;
   readonly expiresAt: Date;
   readonly createdAt: Date;
 }
@@ -25,6 +27,8 @@ export interface CreateSessionInput {
   readonly tokenHash: string;
   readonly userId: number;
   readonly repositoryIds: readonly number[];
+  readonly githubTokenCiphertext: string | null;
+  readonly accessVerifiedAt: Date;
   readonly expiresAt: Date;
 }
 
@@ -39,6 +43,8 @@ const toSession = (row: SessionRow): Session => ({
   tokenHash: row.tokenHash,
   userId: row.userId,
   repositoryIds: parseRepositoryIds(row.repositoryIds),
+  githubTokenCiphertext: row.githubTokenCiphertext,
+  accessVerifiedAt: row.accessVerifiedAt,
   expiresAt: row.expiresAt,
   createdAt: row.createdAt,
 });
@@ -69,6 +75,8 @@ export class SessionRepository extends Effect.Service<SessionRepository>()(
                 tokenHash: input.tokenHash,
                 userId: input.userId,
                 repositoryIds: JSON.stringify(input.repositoryIds),
+                githubTokenCiphertext: input.githubTokenCiphertext,
+                accessVerifiedAt: input.accessVerifiedAt,
                 expiresAt: input.expiresAt,
               })
               .returning()
@@ -93,6 +101,21 @@ export class SessionRepository extends Effect.Service<SessionRepository>()(
                   row.user.login,
                 );
           }).pipe(Effect.map(Option.fromNullable)),
+        /** Stores a freshly verified repository list on the session. */
+        updateAccess: (
+          tokenHash: string,
+          repositoryIds: readonly number[],
+          verifiedAt: Date,
+        ) =>
+          databaseEffect("sessions.update_access", async () => {
+            await client
+              .update(sessions)
+              .set({
+                repositoryIds: JSON.stringify(repositoryIds),
+                accessVerifiedAt: verifiedAt,
+              })
+              .where(eq(sessions.tokenHash, tokenHash));
+          }),
         revoke: (tokenHash: string) =>
           databaseEffect("sessions.revoke", async () => {
             await client

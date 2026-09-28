@@ -34,8 +34,8 @@ their historical descriptions are not the current release status. See
    repositories no longer start reviews or appear in the dashboard.
 2. Onboarding flow (rest of Phase 13) — **done 2026-09-28**: install →
    verified setup callback → repository selection → first-review guidance.
-3. Workspaces and memberships (rest of Phase 12), with CSRF protection
-   before any dashboard mutation.
+3. Workspaces and memberships (rest of Phase 12) — **done 2026-09-29**:
+   see [WORKSPACES_DESIGN.md](./WORKSPACES_DESIGN.md).
 4. Dashboard management (Phase 14).
 5. Production readiness (Phase 15).
 6. BYOK, trial, and billing (Phase 16).
@@ -133,10 +133,11 @@ Acceptance: a new workspace gets exactly 5 platform-key reviews, a BYOK
 workspace never consumes platform usage, and a paying workspace keeps
 reviewing after the trial. Keys never appear in logs or HTML.
 
-Continue Phase 12 with workspace ownership/memberships and permission refresh.
-Persistent accounts, revocable sessions, repository access checks, and the
-OAuth redirect fix are implemented. Carry the remaining recorded defects
-into Phase 14. Billing is not a dependency or release gate for this roadmap.
+Phase 12 is complete (2026-09-29): workspaces per GitHub account,
+GitHub-derived owners with in-app admins, one authorization check for every
+route, 10-minute access refresh, and webhook revocation. Next: the BYOK key
+and 5-review trial from Phase 16, which attach to the workspace, then
+production readiness (Phase 15) for a free beta; Stripe billing can follow.
 
 ## Original baseline (before Phase 1)
 

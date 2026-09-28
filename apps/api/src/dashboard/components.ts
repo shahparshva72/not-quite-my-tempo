@@ -106,6 +106,22 @@ export const reviewSwitch = (
     </button>
   </form>`;
 
+/**
+ * The review switch for admins and owners; for members, the current state
+ * and who can change it (members can't turn reviews on or off).
+ */
+export const reviewControl = (
+  repository: GitHubRepository,
+  canToggle: boolean,
+  returnTo: "onboarding" | "repository",
+) =>
+  canToggle
+    ? reviewSwitch(repository, returnTo)
+    : html`<span class="review-state"
+        >${repository.enabled ? "Reviews on" : "Reviews off"}
+        <span class="quiet">Ask an admin to change this</span></span
+      >`;
+
 /** One headline, one explanation, one action. */
 export const messagePage = (
   title: string,

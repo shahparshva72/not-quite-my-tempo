@@ -1,4 +1,5 @@
-import { Effect } from "effect";
+import { eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
 
 import { databaseEffect } from "../errors.js";
 import { users } from "../schema/users.js";
@@ -34,6 +35,14 @@ export class UserRepository extends Effect.Service<UserRepository>()(
               .returning()
               .get(),
           ),
+        findByGithubUserId: (githubUserId: number) =>
+          databaseEffect("users.find_by_github_user_id", () =>
+            client
+              .select()
+              .from(users)
+              .where(eq(users.githubUserId, githubUserId))
+              .get(),
+          ).pipe(Effect.map(Option.fromNullable)),
       };
     }),
   },

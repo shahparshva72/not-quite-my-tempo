@@ -19,10 +19,19 @@ import {
   listRepositoryRuns,
   listRunFindings,
   repositoryReviewHistory,
-  requireAccessibleRepository,
   reviewDetail,
   usageSummary,
 } from "./application/read-api.js";
+import {
+  authorizeRepository,
+  visibleRepositories,
+} from "./application/authorization.js";
+import { refreshSessionAccess } from "./application/session-access.js";
+import {
+  changeAdminRole,
+  workspaceMembers,
+} from "./application/workspace-members.js";
+import { GitHubOAuthLive } from "./auth/github-oauth.js";
 import { createAuthRoutes } from "./auth/routes.js";
 import {
   PENDING_INSTALLATION_COOKIE,
@@ -32,10 +41,13 @@ import {
 import type { SessionPayload } from "./auth/session.js";
 import {
   dashboardPage,
+  forbiddenPage,
   installationPendingPage,
   landingPage,
+  membersPage,
   notFoundPage,
   onboardingPage,
+  ownerRolePage,
   repositoryRunsPage,
   runFindingsPage,
 } from "./dashboard/views.js";
@@ -55,6 +67,7 @@ type Bindings = Env & {
   readonly GITHUB_OAUTH_CLIENT_ID: string;
   readonly GITHUB_OAUTH_CLIENT_SECRET: string;
   readonly SESSION_SECRET: string;
+  readonly TOKEN_ENCRYPTION_KEY: string;
   readonly REVIEW_PULL_REQUEST_WORKFLOW: Workflow<ReviewWorkflowParams>;
 };
 
@@ -107,6 +120,26 @@ app.use("*", async (c, next) => {
   } else {
     await logger()(c, next);
   }
+});
+
+// Every browser form post must come from this site; GitHub webhooks are
+// authenticated by their signature instead.
+app.use("*", async (c, next) => {
+  if (c.req.method === "POST" && !c.req.path.startsWith("/webhooks/")) {
+    const sameOrigin = c.req.header("origin") === new URL(c.req.url).origin;
+    const crossSite = c.req.header("sec-fetch-site") === "cross-site";
+
+    if (!sameOrigin || crossSite) {
+      return errorResponse(
+        c,
+        403,
+        "invalid_origin",
+        "Same-origin request required",
+      );
+    }
+  }
+
+  return next();
 });
 
 app.get("/health", (c) =>
@@ -171,15 +204,42 @@ app.post("/webhooks/github", (c) => {
 
 app.route("/auth", createAuthRoutes());
 
+/**
+ * The signed-in session for this request, with GitHub access re-read when
+ * it is older than the refresh interval (docs/WORKSPACES_DESIGN.md).
+ */
+const currentSession = (c: AppContext) =>
+  Effect.runPromise(
+    verifySession(c.env.SESSION_SECRET, getCookie(c, SESSION_COOKIE)).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(Option.none<SessionPayload>()),
+          onSome: (session) =>
+            refreshSessionAccess(session, c.env.TOKEN_ENCRYPTION_KEY),
+        }),
+      ),
+      Effect.provide(
+        GitHubOAuthLive({
+          clientId: c.env.GITHUB_OAUTH_CLIENT_ID,
+          clientSecret: c.env.GITHUB_OAUTH_CLIENT_SECRET,
+        }),
+      ),
+      Effect.provide(
+        GitHubAppAuthLive({
+          appId: c.env.GITHUB_APP_ID,
+          privateKey: c.env.GITHUB_APP_PRIVATE_KEY,
+        }),
+      ),
+      Effect.provide(GitHubInstallationClientLive({})),
+      Effect.provide(makeLiveLayer(c.env.DB)),
+    ),
+  );
+
 const withSession = (
   c: AppContext,
   handle: (session: SessionPayload) => Promise<Response>,
 ) =>
-  Effect.runPromise(
-    verifySession(c.env.SESSION_SECRET, getCookie(c, SESSION_COOKIE)).pipe(
-      Effect.provide(makeLiveLayer(c.env.DB)),
-    ),
-  ).then(
+  currentSession(c).then(
     Option.match({
       onNone: () =>
         Promise.resolve(
@@ -193,11 +253,7 @@ const withSessionPage = (
   c: AppContext,
   handle: (session: SessionPayload) => Promise<Response | Promise<Response>>,
 ): Promise<Response> =>
-  Effect.runPromise(
-    verifySession(c.env.SESSION_SECRET, getCookie(c, SESSION_COOKIE)).pipe(
-      Effect.provide(makeLiveLayer(c.env.DB)),
-    ),
-  )
+  currentSession(c)
     .then(
       Option.match({
         onNone: () => Promise.resolve(c.html(landingPage())),
@@ -209,7 +265,7 @@ const withSessionPage = (
 app.get("/dashboard", (c) =>
   withSessionPage(c, (session) =>
     Effect.runPromise(
-      dashboardOverview(session.repositoryIds).pipe(
+      dashboardOverview(session).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),
@@ -230,7 +286,7 @@ app.get("/dashboard/repositories/:id", (c) =>
     }
 
     return Effect.runPromise(
-      repositoryReviewHistory(session.repositoryIds, repositoryId).pipe(
+      repositoryReviewHistory(session, repositoryId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -240,11 +296,12 @@ app.get("/dashboard/repositories/:id", (c) =>
               ),
               Match.orElse((error) => internalError(c, error)),
             ),
-          onSuccess: ({ repository, reviews }) =>
+          onSuccess: ({ repository, role, reviews }) =>
             c.html(
               repositoryRunsPage(
                 session.login,
                 repository,
+                role,
                 reviews,
                 new Date(),
               ),
@@ -264,7 +321,7 @@ app.get("/dashboard/runs/:id", (c) =>
     }
 
     return Effect.runPromise(
-      reviewDetail(session.repositoryIds, reviewRunId).pipe(
+      reviewDetail(session, reviewRunId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -305,7 +362,7 @@ app.get("/onboarding", (c) =>
     }
 
     return Effect.runPromise(
-      listAccessibleRepositories(session.repositoryIds).pipe(
+      visibleRepositories(session).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),
@@ -347,14 +404,8 @@ app.get("/onboarding/callback", (c) => {
   return c.redirect("/auth/login?next=onboarding");
 });
 
-app.post("/onboarding/repositories/:id", (c) => {
-  if (c.req.header("origin") !== new URL(c.req.url).origin) {
-    return Promise.resolve(
-      errorResponse(c, 403, "invalid_origin", "Same-origin request required"),
-    );
-  }
-
-  return withSessionPage(c, async (session) => {
+app.post("/onboarding/repositories/:id", (c) =>
+  withSessionPage(c, async (session) => {
     const repositoryId = Number(c.req.param("id"));
     const form = await c.req.parseBody();
     const enabled = form["enabled"];
@@ -373,11 +424,12 @@ app.post("/onboarding/repositories/:id", (c) => {
     }
 
     return Effect.runPromise(
-      requireAccessibleRepository(session.repositoryIds, repositoryId).pipe(
-        Effect.flatMap((repository) =>
-          GitHubRepositoryRepository.setEnabled(
-            repository.id,
+      authorizeRepository(session, repositoryId, "toggle_reviews").pipe(
+        Effect.flatMap((visible) =>
+          GitHubRepositoryRepository.setEnabledWithAudit(
+            visible.repository,
             enabled === "true",
+            { workspaceId: visible.workspaceId, actorUserId: session.userId },
           ),
         ),
         Effect.provide(makeLiveLayer(c.env.DB)),
@@ -387,14 +439,82 @@ app.post("/onboarding/repositories/:id", (c) => {
               Match.tag("ResourceNotFoundError", () =>
                 c.html(notFoundPage(session.login), 404),
               ),
+              Match.tag("ForbiddenError", (error) =>
+                c.html(forbiddenPage(session.login, error.requiredRole), 403),
+              ),
               Match.orElse((error) => internalError(c, error)),
             ),
           onSuccess: () => c.redirect(returnTo, 303),
         }),
       ),
     );
-  });
-});
+  }),
+);
+
+app.get("/workspaces/:id/members", (c) =>
+  withSessionPage(c, (session) => {
+    const workspaceId = Number(c.req.param("id"));
+
+    if (!Number.isInteger(workspaceId)) {
+      return Promise.resolve(c.html(notFoundPage(session.login), 404));
+    }
+
+    return Effect.runPromise(
+      workspaceMembers(session, workspaceId).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                c.html(notFoundPage(session.login), 404),
+              ),
+              Match.orElse((error) => internalError(c, error)),
+            ),
+          onSuccess: (data) => c.html(membersPage(session.login, data)),
+        }),
+      ),
+    );
+  }),
+);
+
+app.post("/workspaces/:id/members/:userId/role", (c) =>
+  withSessionPage(c, async (session) => {
+    const workspaceId = Number(c.req.param("id"));
+    const targetUserId = Number(c.req.param("userId"));
+    const role = (await c.req.parseBody())["role"];
+
+    if (
+      !Number.isInteger(workspaceId) ||
+      !Number.isInteger(targetUserId) ||
+      (role !== "admin" && role !== "member")
+    ) {
+      return c.html(notFoundPage(session.login), 404);
+    }
+
+    return Effect.runPromise(
+      changeAdminRole(session, workspaceId, targetUserId, role).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                c.html(notFoundPage(session.login), 404),
+              ),
+              Match.tag("ForbiddenError", (error) =>
+                c.html(forbiddenPage(session.login, error.requiredRole), 403),
+              ),
+              Match.tag("OwnerRoleError", () =>
+                c.html(ownerRolePage(session.login), 400),
+              ),
+              Match.orElse((error) => internalError(c, error)),
+            ),
+          onSuccess: () =>
+            c.redirect(`/workspaces/${workspaceId}/members`, 303),
+        }),
+      ),
+    );
+  }),
+);
 
 app.get("/api/me", (c) =>
   withSession(c, (session) =>
@@ -414,7 +534,7 @@ app.get("/api/me", (c) =>
 app.get("/api/repositories", (c) =>
   withSession(c, (session) =>
     Effect.runPromise(
-      listAccessibleRepositories(session.repositoryIds).pipe(
+      listAccessibleRepositories(session).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),
@@ -436,7 +556,7 @@ app.get("/api/repositories/:id/runs", (c) =>
     }
 
     return Effect.runPromise(
-      listRepositoryRuns(session.repositoryIds, repositoryId).pipe(
+      listRepositoryRuns(session, repositoryId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -464,7 +584,7 @@ app.get("/api/runs/:id/findings", (c) =>
     }
 
     return Effect.runPromise(
-      listRunFindings(session.repositoryIds, reviewRunId).pipe(
+      listRunFindings(session, reviewRunId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -484,7 +604,7 @@ app.get("/api/runs/:id/findings", (c) =>
 app.get("/api/usage", (c) =>
   withSession(c, (session) =>
     Effect.runPromise(
-      usageSummary(session.repositoryIds).pipe(
+      usageSummary(session).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),

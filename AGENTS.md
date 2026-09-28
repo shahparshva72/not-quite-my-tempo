@@ -17,7 +17,7 @@
 
 ## Gotchas
 
-- `wrangler.jsonc` ships an all-zero D1 `database_id` placeholder that works locally. After `pnpm db:create`, paste the real ID before any `--remote` command.
+- `wrangler.jsonc` holds the real production D1 `database_id` (not a secret). Local dev and tests use local copies, but every `--remote` command (e.g. `pnpm db:migrate:remote`) hits production. Use a Wrangler `env` block for staging rather than swapping the ID.
 - Secrets: local-only `apps/api/.dev.vars` (gitignored, never commit), prod via `wrangler secret put GITHUB_WEBHOOK_SECRET`. When adding/changing/removing env vars, update root `.env.example` in the same change (purpose, required/optional, where loaded; empty values only) and keep README setup in sync.
 - Never use `wrangler dev --remote` — Workflow bindings break there. For webhook tunnels, press `t` in the `wrangler dev` terminal.
 - Tests run in workerd via `@cloudflare/vitest-plugin`; keep Vitest on `4.1.x` (the plugin's peer range, not v5). `test/setup.ts` hardcodes applying `packages/db/drizzle/0000_*.sql` — extend it when a second migration lands. Reuse `resetAndSeedRepository` in `test/database.ts` (FK-safe delete order, seeds installation 1 / repo 1).

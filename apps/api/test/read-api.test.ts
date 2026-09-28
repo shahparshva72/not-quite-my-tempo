@@ -11,9 +11,13 @@ import {
 } from "../src/application/read-api";
 import { persistReviewFindings } from "../src/application/review-workflow";
 import type { GeminiReviewResult } from "@not-quite-my-tempo/gemini";
+import { testAccess } from "./authentication";
 import { resetAndSeedRepository } from "./database";
 
 const dbLayer = () => makeLiveLayer(env.DB);
+
+const asAccess = (repositoryIds: readonly number[]) =>
+  Effect.promise(() => testAccess(repositoryIds));
 
 const reviewResult: GeminiReviewResult = {
   review: {
@@ -57,9 +61,15 @@ describe("read API", () => {
   it("lists only the repositories authorized for the session", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
-        const accessible = yield* listAccessibleRepositories([3001]);
-        const foreign = yield* listAccessibleRepositories([9999]);
-        const none = yield* listAccessibleRepositories([]);
+        const accessible = yield* listAccessibleRepositories(
+          yield* asAccess([3001]),
+        );
+
+        const foreign = yield* listAccessibleRepositories(
+          yield* asAccess([9999]),
+        );
+
+        const none = yield* listAccessibleRepositories(yield* asAccess([]));
 
         return { accessible, foreign, none };
       }).pipe(Effect.provide(dbLayer())),
@@ -77,12 +87,17 @@ describe("read API", () => {
       Effect.gen(function* () {
         yield* seedRun("read123");
 
-        const allowed = yield* listRepositoryRuns([3001], 1);
-        const denied = yield* listRepositoryRuns([9999], 1).pipe(Effect.flip);
+        const allowed = yield* listRepositoryRuns(yield* asAccess([3001]), 1);
 
-        const missing = yield* listRepositoryRuns([3001], 404).pipe(
-          Effect.flip,
-        );
+        const denied = yield* listRepositoryRuns(
+          yield* asAccess([9999]),
+          1,
+        ).pipe(Effect.flip);
+
+        const missing = yield* listRepositoryRuns(
+          yield* asAccess([3001]),
+          404,
+        ).pipe(Effect.flip);
 
         return { allowed, denied, missing };
       }).pipe(Effect.provide(dbLayer())),
@@ -99,9 +114,12 @@ describe("read API", () => {
       Effect.gen(function* () {
         const run = yield* seedRun("find123");
 
-        const allowed = yield* listRunFindings([3001], run.id);
+        const allowed = yield* listRunFindings(yield* asAccess([3001]), run.id);
 
-        const denied = yield* listRunFindings([9999], run.id).pipe(Effect.flip);
+        const denied = yield* listRunFindings(
+          yield* asAccess([9999]),
+          run.id,
+        ).pipe(Effect.flip);
 
         return { allowed, denied };
       }).pipe(Effect.provide(dbLayer())),
@@ -121,7 +139,7 @@ describe("read API", () => {
         yield* seedRun("usage1");
         yield* seedRun("usage2");
 
-        return yield* usageSummary([3001]);
+        return yield* usageSummary(yield* asAccess([3001]));
       }).pipe(Effect.provide(dbLayer())),
     );
 
@@ -147,14 +165,21 @@ describe("read API", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const run = yield* seedRun("private-access");
-        const visible = yield* listAccessibleRepositories([3002]);
-        const runs = yield* listRepositoryRuns([3002], 1).pipe(Effect.flip);
 
-        const findings = yield* listRunFindings([3002], run.id).pipe(
+        const visible = yield* listAccessibleRepositories(
+          yield* asAccess([3002]),
+        );
+
+        const runs = yield* listRepositoryRuns(yield* asAccess([3002]), 1).pipe(
           Effect.flip,
         );
 
-        const usage = yield* usageSummary([3002]);
+        const findings = yield* listRunFindings(
+          yield* asAccess([3002]),
+          run.id,
+        ).pipe(Effect.flip);
+
+        const usage = yield* usageSummary(yield* asAccess([3002]));
 
         return { visible, runs, findings, usage };
       }).pipe(Effect.provide(dbLayer())),
@@ -193,7 +218,7 @@ describe("read API", () => {
       Effect.gen(function* () {
         yield* seedRun("large-grant-list");
 
-        return yield* usageSummary(grants);
+        return yield* usageSummary(yield* asAccess(grants));
       }).pipe(Effect.provide(dbLayer())),
     );
 

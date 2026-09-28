@@ -83,6 +83,8 @@ describe("account repositories", () => {
           tokenHash: "session-hash",
           userId: user.id,
           repositoryIds: [1, 2, 3],
+          githubTokenCiphertext: null,
+          accessVerifiedAt: new Date(0),
           expiresAt,
         });
 
@@ -125,18 +127,24 @@ describe("account repositories", () => {
           tokenHash: "first-session-one",
           userId: firstUser.id,
           repositoryIds: [1],
+          githubTokenCiphertext: null,
+          accessVerifiedAt: new Date(0),
           expiresAt,
         });
         yield* sessions.create({
           tokenHash: "first-session-two",
           userId: firstUser.id,
           repositoryIds: [1, 2],
+          githubTokenCiphertext: null,
+          accessVerifiedAt: new Date(0),
           expiresAt,
         });
         yield* sessions.create({
           tokenHash: "second-session",
           userId: secondUser.id,
           repositoryIds: [2],
+          githubTokenCiphertext: null,
+          accessVerifiedAt: new Date(0),
           expiresAt,
         });
 
@@ -173,6 +181,8 @@ describe("account repositories", () => {
           tokenHash: "delete-cascade-hash",
           userId: user.id,
           repositoryIds: [1],
+          githubTokenCiphertext: null,
+          accessVerifiedAt: new Date(0),
           expiresAt: new Date("2026-09-19T00:00:00.000Z"),
         });
 

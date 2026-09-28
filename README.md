@@ -67,6 +67,19 @@ For self-service onboarding, also set in the App's settings:
 - Leave **Request user authorization (OAuth) during installation**
   unchecked; it disables the Setup URL.
 - Set `GITHUB_APP_SLUG` to the App's URL name (`github.com/apps/<slug>`).
+- Under **Organization permissions**, set **Members** to **Read-only**, and
+  subscribe to the **Organization** event. Fletcher uses it to tell
+  organization owners from members and to remove access when someone leaves
+  the organization.
+
+Workspaces and roles are described in `docs/WORKSPACES_DESIGN.md`. Sessions
+store the user's GitHub token encrypted with `TOKEN_ENCRYPTION_KEY` so
+repository access can be re-checked every 10 minutes:
+
+```sh
+openssl rand -base64 32   # add to apps/api/.dev.vars as TOKEN_ENCRYPTION_KEY
+pnpm --filter @not-quite-my-tempo/api exec wrangler secret put TOKEN_ENCRYPTION_KEY
+```
 
 The onboarding flow is sign in → `/onboarding` → install on GitHub → Setup
 URL → a silent re-sign-in that verifies the new installation against the
@@ -135,13 +148,11 @@ pnpm format:check
 
 Both tools respect `.gitignore` and exclude generated Worker types. Oxfmt also excludes the generated pnpm lockfile.
 
-The checked-in Wrangler config uses a deterministic all-zero D1 UUID so local development and tests work before a Cloudflare database exists. Create a real database before using remote commands:
+The checked-in Wrangler config points at the production D1 database. Its `database_id` is not a secret (using it requires Cloudflare credentials), and local development and tests use their own local copies. Any `--remote` command, such as `pnpm db:migrate:remote`, runs against production. To use a separate database (a fork or a staging environment), create one and put its ID in `apps/api/wrangler.jsonc` or a Wrangler `env` block:
 
 ```sh
 pnpm db:create
 ```
-
-Copy the returned `database_id` into `apps/api/wrangler.jsonc`, replacing the all-zero UUID. The Worker only declares the binding; no application data or database routes are included.
 
 ## Database
 
@@ -327,9 +338,9 @@ curl -i http://localhost:8787/webhooks/github \
 
 ## Test the GitHub webhook flow after deployment
 
-1. Create the production D1 database once, replace the placeholder
-   `database_id` in `apps/api/wrangler.jsonc` with the returned ID, and apply the
-   migrations:
+1. The production D1 database already exists (its ID is in
+   `apps/api/wrangler.jsonc`). For a new deployment, create one, put its ID
+   there, and apply the migrations:
 
    ```sh
    pnpm db:create

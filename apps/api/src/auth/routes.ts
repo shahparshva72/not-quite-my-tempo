@@ -4,13 +4,14 @@ import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { makeLiveLayer, UserRepository } from "@not-quite-my-tempo/db";
 
-import { syncUserInstallations } from "../application/installation-sync.js";
+import { readUserAccess, saveUserAccess } from "../application/user-access.js";
 import { GitHubAppAuthLive } from "../github/app-auth.js";
 import type { GitHubAppAuth } from "../github/app-auth.js";
 import { GitHubInstallationClientLive } from "../github/installation-client.js";
 import type { GitHubInstallationClient } from "../github/installation-client.js";
 import { signInErrorPage } from "../dashboard/views.js";
 import { logError } from "../logging.js";
+import { encryptToken, tokenContext } from "./token-cipher.js";
 
 import { authorizeUrl, GitHubOAuth, GitHubOAuthLive } from "./github-oauth.js";
 import {
@@ -30,6 +31,7 @@ interface AuthBindings {
   readonly GITHUB_APP_ID: string;
   readonly GITHUB_APP_PRIVATE_KEY: string;
   readonly SESSION_SECRET: string;
+  readonly TOKEN_ENCRYPTION_KEY: string;
 }
 
 // Post-sign-in destinations a login link may request; anything else falls
@@ -152,20 +154,33 @@ export const createAuthRoutes = (
         const oauth = yield* GitHubOAuth;
         const accessToken = yield* oauth.exchangeCode(code);
         const identity = yield* oauth.fetchUser(accessToken);
-        const access = yield* oauth.fetchUserAccess(accessToken);
+
+        const access = yield* readUserAccess(
+          identity.githubUserId,
+          accessToken,
+          pendingInstallation,
+        );
+
         const user = yield* UserRepository.upsert(identity);
 
-        yield* syncUserInstallations(access.installations, pendingInstallation);
+        yield* saveUserAccess(user.id, access);
 
         yield* revokeSession(
           c.env.SESSION_SECRET,
           getCookie(c, SESSION_COOKIE),
         );
 
+        const githubTokenCiphertext = yield* encryptToken(
+          c.env.TOKEN_ENCRYPTION_KEY,
+          accessToken,
+          tokenContext(user.id),
+        );
+
         const sessionCookie = yield* createSession(
           c.env.SESSION_SECRET,
           user.id,
           access.repositoryIds,
+          githubTokenCiphertext,
         );
 
         return {

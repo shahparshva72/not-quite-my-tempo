@@ -2,8 +2,13 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 
 import { databaseEffect } from "../errors.js";
+import { auditEvents } from "../schema/audit-events.js";
+import { githubInstallations } from "../schema/github-installations.js";
+import { memberships } from "../schema/memberships.js";
 import { repositories } from "../schema/repositories.js";
 import { Database } from "../services/database.js";
+import { effectiveRole } from "./membership-repository.js";
+import type { WorkspaceRole } from "./membership-repository.js";
 
 export type GitHubRepository = typeof repositories.$inferSelect;
 
@@ -16,6 +21,18 @@ export type InstallationRepositoryInput = Omit<
   UpsertGitHubRepositoryInput,
   "installationId"
 >;
+
+/** A repository the user may see, with their role in its workspace. */
+export interface VisibleRepository {
+  readonly repository: GitHubRepository;
+  readonly workspaceId: number;
+  readonly role: WorkspaceRole;
+}
+
+export interface RepositoryAuditActor {
+  readonly workspaceId: number;
+  readonly actorUserId: number;
+}
 
 export class GitHubRepositoryRepository extends Effect.Service<GitHubRepositoryRepository>()(
   "@not-quite-my-tempo/db/GitHubRepositoryRepository",
@@ -111,6 +128,80 @@ export class GitHubRepositoryRepository extends Effect.Service<GitHubRepositoryR
                   )
                   .all(),
               ),
+        /**
+         * Repositories the user can see: not removed, visible to them on
+         * GitHub (githubRepositoryIds from their session), and in a
+         * workspace they belong to. Both conditions live in one query so a
+         * missed check elsewhere cannot cross workspaces.
+         */
+        listVisibleToUser: (
+          userId: number,
+          githubRepositoryIds: readonly number[],
+          id?: number,
+        ) =>
+          githubRepositoryIds.length === 0
+            ? Effect.succeed<readonly VisibleRepository[]>([])
+            : databaseEffect("repositories.list_visible_to_user", () =>
+                client
+                  .select({
+                    repository: repositories,
+                    membership: memberships,
+                  })
+                  .from(repositories)
+                  .innerJoin(
+                    githubInstallations,
+                    eq(repositories.installationId, githubInstallations.id),
+                  )
+                  .innerJoin(
+                    memberships,
+                    and(
+                      eq(
+                        memberships.workspaceId,
+                        githubInstallations.workspaceId,
+                      ),
+                      eq(memberships.userId, userId),
+                    ),
+                  )
+                  .where(
+                    and(
+                      isNull(repositories.removedAt),
+                      id === undefined ? undefined : eq(repositories.id, id),
+                      sql`${repositories.githubRepositoryId} in (select value from json_each(${JSON.stringify(githubRepositoryIds)}))`,
+                    ),
+                  )
+                  .orderBy(repositories.fullName)
+                  .all(),
+              ).pipe(
+                Effect.map((rows) =>
+                  rows.map((row): VisibleRepository => ({
+                    repository: row.repository,
+                    workspaceId: row.membership.workspaceId,
+                    role: effectiveRole(row.membership),
+                  })),
+                ),
+              ),
+        /** Sets review on/off and records who did it, in one batch. */
+        setEnabledWithAudit: (
+          repository: GitHubRepository,
+          enabled: boolean,
+          actor: RepositoryAuditActor,
+        ) =>
+          databaseEffect("repositories.set_enabled_with_audit", () =>
+            client.batch([
+              client
+                .update(repositories)
+                .set({ enabled, updatedAt: new Date() })
+                .where(eq(repositories.id, repository.id)),
+              client.insert(auditEvents).values({
+                workspaceId: actor.workspaceId,
+                actorUserId: actor.actorUserId,
+                action: "repository.reviews_toggled",
+                target: `repository:${repository.id}`,
+                before: JSON.stringify({ enabled: repository.enabled }),
+                after: JSON.stringify({ enabled }),
+              }),
+            ]),
+          ).pipe(Effect.asVoid),
         setEnabled: (id: number, enabled: boolean) =>
           databaseEffect("repositories.set_enabled", () =>
             client

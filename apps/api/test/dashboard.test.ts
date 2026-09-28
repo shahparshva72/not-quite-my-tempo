@@ -101,12 +101,33 @@ describe("dashboard", () => {
   });
 
   it("explains an empty dashboard with a way to start", async () => {
+    const cookie = await sessionCookie([]);
+
+    await env.DB.prepare("DELETE FROM memberships").run();
+
+    const body = await (await request("/dashboard", cookie)).text();
+
+    expect(body).toContain("Install Fletcher on a repository");
+    expect(body).toContain('href="/onboarding"');
+  });
+
+  it("groups repositories under their workspace with the viewer's role", async () => {
+    const body = await (
+      await request("/dashboard", await sessionCookie([3001], "member"))
+    ).text();
+
+    expect(body).toContain("<h2>not-my-tempo</h2>");
+    expect(body).toContain("Member");
+    expect(body).toContain('href="/workspaces/1/members"');
+  });
+
+  it("shows a workspace whose repositories the user can't see", async () => {
     const body = await (
       await request("/dashboard", await sessionCookie([]))
     ).text();
 
-    expect(body).toContain("Install Fletcher on a repository");
-    expect(body).toContain('href="/onboarding"');
+    expect(body).toContain("<h2>not-my-tempo</h2>");
+    expect(body).toContain("None of this account");
   });
 
   it("shows a repository's runs", async () => {

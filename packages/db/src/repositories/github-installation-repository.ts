@@ -1,8 +1,9 @@
 import { sql } from "drizzle-orm";
 import { Effect } from "effect";
 
-import { databaseEffect } from "../errors.js";
+import { databaseEffect, DatabaseError } from "../errors.js";
 import { githubInstallations } from "../schema/github-installations.js";
+import { workspaces } from "../schema/workspaces.js";
 import { Database } from "../services/database.js";
 
 export type GitHubInstallation = typeof githubInstallations.$inferSelect;
@@ -29,24 +30,60 @@ export class GitHubInstallationRepository extends Effect.Service<GitHubInstallat
       const { client } = yield* Database;
 
       return {
-        upsert: (input: UpsertGitHubInstallationInput) =>
-          databaseEffect("github_installations.upsert", () =>
-            client
-              .insert(githubInstallations)
-              .values(input)
-              .onConflictDoUpdate({
-                target: githubInstallations.githubInstallationId,
-                set: {
+        /**
+         * Upserts the installation and the workspace for its GitHub account
+         * in one batch, so every installation belongs to a workspace and
+         * reinstalls re-attach to the existing one.
+         */
+        upsert: (input: UpsertGitHubInstallationInput) => {
+          const workspaceId = sql`(select ${workspaces.id} from ${workspaces} where ${workspaces.githubAccountId} = ${input.githubAccountId})`;
+
+          return databaseEffect("github_installations.upsert", () =>
+            client.batch([
+              client
+                .insert(workspaces)
+                .values({
                   githubAccountId: input.githubAccountId,
                   githubAccountLogin: input.githubAccountLogin,
                   accountType: input.accountType,
-                  status: input.status ?? sql`${githubInstallations.status}`,
-                  updatedAt: new Date(),
-                },
-              })
-              .returning()
-              .get(),
-          ),
+                })
+                .onConflictDoUpdate({
+                  target: workspaces.githubAccountId,
+                  set: {
+                    githubAccountLogin: input.githubAccountLogin,
+                    accountType: input.accountType,
+                    updatedAt: new Date(),
+                  },
+                }),
+              client
+                .insert(githubInstallations)
+                .values({ ...input, workspaceId })
+                .onConflictDoUpdate({
+                  target: githubInstallations.githubInstallationId,
+                  set: {
+                    githubAccountId: input.githubAccountId,
+                    githubAccountLogin: input.githubAccountLogin,
+                    accountType: input.accountType,
+                    workspaceId,
+                    status: input.status ?? sql`${githubInstallations.status}`,
+                    updatedAt: new Date(),
+                  },
+                })
+                .returning(),
+            ]),
+          ).pipe(
+            Effect.flatMap(([, rows]) => {
+              const installation = rows[0];
+
+              return installation === undefined
+                ? new DatabaseError({
+                    operation: "github_installations.upsert",
+                    cause: "upsert returned no row",
+                  })
+                : Effect.succeed(installation);
+            }),
+          );
+        },
         listByGithubInstallationIds: (
           githubInstallationIds: readonly number[],
         ) =>
