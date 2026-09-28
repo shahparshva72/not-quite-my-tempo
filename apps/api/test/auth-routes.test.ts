@@ -274,9 +274,22 @@ describe("sign-in installation sync", () => {
 
   // The user sees stored installation 1001 and new installation 5005.
   const accessFetch =
-    (repositoryIds: readonly number[]): typeof fetch =>
+    (
+      repositoryIds: readonly number[],
+      orgOwnerOf: readonly string[],
+    ): typeof fetch =>
     (input) => {
       const path = new URL(String(input)).pathname;
+      const org = path.match(/^\/user\/memberships\/orgs\/([^/]+)$/)?.[1];
+
+      if (org !== undefined) {
+        return Promise.resolve(
+          Response.json({
+            state: "active",
+            role: orgOwnerOf.includes(org) ? "admin" : "member",
+          }),
+        );
+      }
 
       switch (path) {
         case "/login/oauth/access_token":
@@ -302,7 +315,11 @@ describe("sign-in installation sync", () => {
 
   const signIn = async (
     cookie: string,
-    options: { repositoryIds?: readonly number[]; failSync?: boolean } = {},
+    options: {
+      repositoryIds?: readonly number[];
+      failSync?: boolean;
+      orgOwnerOf?: readonly string[];
+    } = {},
   ) => {
     const synced: number[] = [];
 
@@ -333,7 +350,10 @@ describe("sign-in installation sync", () => {
       GitHubOAuthLive({
         clientId: testEnv.GITHUB_OAUTH_CLIENT_ID,
         clientSecret: testEnv.GITHUB_OAUTH_CLIENT_SECRET,
-        fetchImpl: accessFetch(options.repositoryIds ?? [3001]),
+        fetchImpl: accessFetch(
+          options.repositoryIds ?? [3001],
+          options.orgOwnerOf ?? [],
+        ),
       }),
       githubAppLayer,
     );
@@ -346,6 +366,49 @@ describe("sign-in installation sync", () => {
 
     return { response, synced };
   };
+
+  const membershipRows = () =>
+    env.DB.prepare(
+      `SELECT w.github_account_id, m.github_owner, m.app_role
+         FROM memberships m JOIN workspaces w ON w.id = m.workspace_id
+        ORDER BY w.github_account_id`,
+    )
+      .all()
+      .then((result) => result.results);
+
+  it("records a membership per workspace, with owners from GitHub", async () => {
+    await signIn("", { orgOwnerOf: ["org-1001"] });
+
+    expect(await membershipRows()).toEqual([
+      { github_account_id: 2001, github_owner: 1, app_role: "member" },
+      { github_account_id: 6005, github_owner: 0, app_role: "member" },
+    ]);
+  });
+
+  it("keeps in-app roles and drops workspaces GitHub no longer lists", async () => {
+    await signIn("");
+
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE memberships SET app_role = 'admin' WHERE workspace_id = 1",
+      ),
+      env.DB.prepare(
+        `INSERT INTO workspaces (id, github_account_id, github_account_login, account_type)
+         VALUES (9, 9999, 'old-org', 'Organization')`,
+      ),
+      env.DB.prepare(
+        `INSERT INTO memberships (workspace_id, user_id, verified_at)
+         SELECT 9, id, 0 FROM users WHERE github_user_id = 4001`,
+      ),
+    ]);
+
+    await signIn("");
+
+    expect(await membershipRows()).toEqual([
+      { github_account_id: 2001, github_owner: 0, app_role: "admin" },
+      { github_account_id: 6005, github_owner: 0, app_role: "member" },
+    ]);
+  });
 
   it("syncs installations the user can see that are not stored yet", async () => {
     const { response, synced } = await signIn("");

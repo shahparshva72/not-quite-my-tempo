@@ -43,6 +43,11 @@ const UserInstallationsResponse = Schema.Struct({
   ),
 });
 
+const OrgMembershipResponse = Schema.Struct({
+  state: Schema.String,
+  role: Schema.String,
+});
+
 const UserRepositoriesResponse = Schema.Struct({
   repositories: Schema.Array(Schema.Struct({ id: GitHubId })),
 });
@@ -78,6 +83,15 @@ export interface GitHubOAuthService {
   readonly fetchUserAccess: (
     accessToken: string,
   ) => Effect.Effect<UserAccess, GitHubOAuthError>;
+  /**
+   * Whether the user is an active owner of the GitHub organization. Needs
+   * the App's Organization "Members: Read" permission; when GitHub refuses
+   * (403/404, e.g. the org hasn't approved it) the answer is false.
+   */
+  readonly isOrgOwner: (
+    accessToken: string,
+    org: string,
+  ) => Effect.Effect<boolean, GitHubOAuthError>;
 }
 
 export class GitHubOAuth extends Context.Tag(
@@ -202,6 +216,25 @@ export const GitHubOAuthLive = (config: GitHubOAuthConfig) => {
             login: decoded.login,
           };
         }),
+      isOrgOwner: (accessToken, org) =>
+        oauthRequest(
+          config,
+          `${apiBaseUrl}/user/memberships/orgs/${encodeURIComponent(org)}`,
+          { method: "GET", headers: apiHeaders(accessToken) },
+        ).pipe(
+          Effect.flatMap((response) =>
+            decodeBody(OrgMembershipResponse, response.body),
+          ),
+          Effect.map(
+            (membership) =>
+              membership.state === "active" && membership.role === "admin",
+          ),
+          Effect.catchTag("OAuthResponseError", (error) =>
+            error.status === 403 || error.status === 404
+              ? Effect.succeed(false)
+              : Effect.fail(error),
+          ),
+        ),
       fetchUserAccess: (accessToken) =>
         Effect.gen(function* () {
           const userInstallations: UserInstallation[] = [];

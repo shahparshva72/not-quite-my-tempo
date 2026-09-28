@@ -4,7 +4,7 @@ import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { makeLiveLayer, UserRepository } from "@not-quite-my-tempo/db";
 
-import { syncUserInstallations } from "../application/installation-sync.js";
+import { readUserAccess, saveUserAccess } from "../application/user-access.js";
 import { GitHubAppAuthLive } from "../github/app-auth.js";
 import type { GitHubAppAuth } from "../github/app-auth.js";
 import { GitHubInstallationClientLive } from "../github/installation-client.js";
@@ -152,10 +152,16 @@ export const createAuthRoutes = (
         const oauth = yield* GitHubOAuth;
         const accessToken = yield* oauth.exchangeCode(code);
         const identity = yield* oauth.fetchUser(accessToken);
-        const access = yield* oauth.fetchUserAccess(accessToken);
+
+        const access = yield* readUserAccess(
+          identity.githubUserId,
+          accessToken,
+          pendingInstallation,
+        );
+
         const user = yield* UserRepository.upsert(identity);
 
-        yield* syncUserInstallations(access.installations, pendingInstallation);
+        yield* saveUserAccess(user.id, access);
 
         yield* revokeSession(
           c.env.SESSION_SECRET,

@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Either } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -264,6 +264,45 @@ describe("GitHubOAuth", () => {
     expect(error._tag).toBe("OAuthResponseError");
     expect(error).toMatchObject({ status: 403 });
     expect(JSON.stringify(error)).not.toContain("repository access denied");
+  });
+
+  it("recognizes only active organization owners", async () => {
+    const answer = (
+      status: number,
+      body: {
+        readonly state?: string;
+        readonly role?: string;
+        readonly message?: string;
+      },
+    ) =>
+      Effect.runPromise(
+        Effect.either(
+          withOAuth(
+            () =>
+              Promise.resolve(new Response(JSON.stringify(body), { status })),
+            (oauth) => oauth.isOrgOwner("gho_user", "tempo-band"),
+          ),
+        ),
+      );
+
+    expect(await answer(200, { state: "active", role: "admin" })).toEqual(
+      Either.right(true),
+    );
+    expect(await answer(200, { state: "active", role: "member" })).toEqual(
+      Either.right(false),
+    );
+    expect(await answer(200, { state: "pending", role: "admin" })).toEqual(
+      Either.right(false),
+    );
+    expect(await answer(403, { message: "Resource not accessible" })).toEqual(
+      Either.right(false),
+    );
+    expect(await answer(404, { message: "Not Found" })).toEqual(
+      Either.right(false),
+    );
+    expect(Either.isLeft(await answer(502, { message: "Bad gateway" }))).toBe(
+      true,
+    );
   });
 
   it("sanitizes a failed exchange response", async () => {
