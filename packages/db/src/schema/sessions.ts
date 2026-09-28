@@ -11,6 +11,11 @@ export const sessions = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     repositoryIds: text("repository_ids").notNull(),
+    // The user's GitHub token, AES-GCM encrypted with TOKEN_ENCRYPTION_KEY,
+    // used only to refresh repositoryIds and memberships. Null for sessions
+    // created before access refresh existed; those simply expire.
+    githubTokenCiphertext: text("github_token_ciphertext"),
+    accessVerifiedAt: integer("access_verified_at", { mode: "timestamp_ms" }),
     expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()

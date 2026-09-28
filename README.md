@@ -67,6 +67,19 @@ For self-service onboarding, also set in the App's settings:
 - Leave **Request user authorization (OAuth) during installation**
   unchecked; it disables the Setup URL.
 - Set `GITHUB_APP_SLUG` to the App's URL name (`github.com/apps/<slug>`).
+- Under **Organization permissions**, set **Members** to **Read-only**, and
+  subscribe to the **Organization** event. Fletcher uses it to tell
+  organization owners from members and to remove access when someone leaves
+  the organization.
+
+Workspaces and roles are described in `docs/WORKSPACES_DESIGN.md`. Sessions
+store the user's GitHub token encrypted with `TOKEN_ENCRYPTION_KEY` so
+repository access can be re-checked every 10 minutes:
+
+```sh
+openssl rand -base64 32   # add to apps/api/.dev.vars as TOKEN_ENCRYPTION_KEY
+pnpm --filter @not-quite-my-tempo/api exec wrangler secret put TOKEN_ENCRYPTION_KEY
+```
 
 The onboarding flow is sign in → `/onboarding` → install on GitHub → Setup
 URL → a silent re-sign-in that verifies the new installation against the

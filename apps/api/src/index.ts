@@ -26,6 +26,8 @@ import {
   authorizeRepository,
   visibleRepositories,
 } from "./application/authorization.js";
+import { refreshSessionAccess } from "./application/session-access.js";
+import { GitHubOAuthLive } from "./auth/github-oauth.js";
 import { createAuthRoutes } from "./auth/routes.js";
 import {
   PENDING_INSTALLATION_COOKIE,
@@ -59,6 +61,7 @@ type Bindings = Env & {
   readonly GITHUB_OAUTH_CLIENT_ID: string;
   readonly GITHUB_OAUTH_CLIENT_SECRET: string;
   readonly SESSION_SECRET: string;
+  readonly TOKEN_ENCRYPTION_KEY: string;
   readonly REVIEW_PULL_REQUEST_WORKFLOW: Workflow<ReviewWorkflowParams>;
 };
 
@@ -195,15 +198,42 @@ app.post("/webhooks/github", (c) => {
 
 app.route("/auth", createAuthRoutes());
 
+/**
+ * The signed-in session for this request, with GitHub access re-read when
+ * it is older than the refresh interval (docs/WORKSPACES_DESIGN.md).
+ */
+const currentSession = (c: AppContext) =>
+  Effect.runPromise(
+    verifySession(c.env.SESSION_SECRET, getCookie(c, SESSION_COOKIE)).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(Option.none<SessionPayload>()),
+          onSome: (session) =>
+            refreshSessionAccess(session, c.env.TOKEN_ENCRYPTION_KEY),
+        }),
+      ),
+      Effect.provide(
+        GitHubOAuthLive({
+          clientId: c.env.GITHUB_OAUTH_CLIENT_ID,
+          clientSecret: c.env.GITHUB_OAUTH_CLIENT_SECRET,
+        }),
+      ),
+      Effect.provide(
+        GitHubAppAuthLive({
+          appId: c.env.GITHUB_APP_ID,
+          privateKey: c.env.GITHUB_APP_PRIVATE_KEY,
+        }),
+      ),
+      Effect.provide(GitHubInstallationClientLive({})),
+      Effect.provide(makeLiveLayer(c.env.DB)),
+    ),
+  );
+
 const withSession = (
   c: AppContext,
   handle: (session: SessionPayload) => Promise<Response>,
 ) =>
-  Effect.runPromise(
-    verifySession(c.env.SESSION_SECRET, getCookie(c, SESSION_COOKIE)).pipe(
-      Effect.provide(makeLiveLayer(c.env.DB)),
-    ),
-  ).then(
+  currentSession(c).then(
     Option.match({
       onNone: () =>
         Promise.resolve(
@@ -217,11 +247,7 @@ const withSessionPage = (
   c: AppContext,
   handle: (session: SessionPayload) => Promise<Response | Promise<Response>>,
 ): Promise<Response> =>
-  Effect.runPromise(
-    verifySession(c.env.SESSION_SECRET, getCookie(c, SESSION_COOKIE)).pipe(
-      Effect.provide(makeLiveLayer(c.env.DB)),
-    ),
-  )
+  currentSession(c)
     .then(
       Option.match({
         onNone: () => Promise.resolve(c.html(landingPage())),

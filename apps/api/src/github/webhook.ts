@@ -1,11 +1,13 @@
 import { Data, Effect, Match, Option } from "effect";
 
+import { handleAccessRevocation } from "../application/access-revocation.js";
 import { handleInstallationEvent } from "../application/installation-sync.js";
 import {
   handleManualReviewCommand,
   handleReviewRequest,
 } from "../application/review-requests.js";
 import { logInfo } from "../logging.js";
+import { decodeAccessRevocation } from "./access-event.js";
 import { decodeInstallationBody } from "./installation-event.js";
 import { decodeIssueCommentBody } from "./manual-command.js";
 import { decodePullRequestBody } from "./review-request.js";
@@ -22,7 +24,8 @@ type GitHubWebhookResult =
   | { readonly status: "queued"; readonly reviewRunId: number }
   | { readonly status: "synced"; readonly repositoryCount: number }
   | { readonly status: "suspended" }
-  | { readonly status: "removed" };
+  | { readonly status: "removed" }
+  | { readonly status: "revoked" };
 
 const ignoredWebhook = Effect.succeed<GitHubWebhookResult>({
   status: "ignored",
@@ -85,6 +88,22 @@ export const processGitHubWebhook = (
                 onNone: () => ignoredWebhook,
                 onSome: (installationEvent) =>
                   handleInstallationEvent(installationEvent).pipe(
+                    Effect.map((result): GitHubWebhookResult => result),
+                  ),
+              }),
+            ),
+          ),
+      ),
+      Match.when(
+        (event) =>
+          event === "github_app_authorization" || event === "organization",
+        (event) =>
+          decodeAccessRevocation(event, rawBody).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => ignoredWebhook,
+                onSome: (revocation) =>
+                  handleAccessRevocation(revocation).pipe(
                     Effect.map((result): GitHubWebhookResult => result),
                   ),
               }),

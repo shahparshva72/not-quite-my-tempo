@@ -11,6 +11,7 @@ import { GitHubInstallationClientLive } from "../github/installation-client.js";
 import type { GitHubInstallationClient } from "../github/installation-client.js";
 import { signInErrorPage } from "../dashboard/views.js";
 import { logError } from "../logging.js";
+import { encryptToken, tokenContext } from "./token-cipher.js";
 
 import { authorizeUrl, GitHubOAuth, GitHubOAuthLive } from "./github-oauth.js";
 import {
@@ -30,6 +31,7 @@ interface AuthBindings {
   readonly GITHUB_APP_ID: string;
   readonly GITHUB_APP_PRIVATE_KEY: string;
   readonly SESSION_SECRET: string;
+  readonly TOKEN_ENCRYPTION_KEY: string;
 }
 
 // Post-sign-in destinations a login link may request; anything else falls
@@ -168,10 +170,17 @@ export const createAuthRoutes = (
           getCookie(c, SESSION_COOKIE),
         );
 
+        const githubTokenCiphertext = yield* encryptToken(
+          c.env.TOKEN_ENCRYPTION_KEY,
+          accessToken,
+          tokenContext(user.id),
+        );
+
         const sessionCookie = yield* createSession(
           c.env.SESSION_SECRET,
           user.id,
           access.repositoryIds,
+          githubTokenCiphertext,
         );
 
         return {

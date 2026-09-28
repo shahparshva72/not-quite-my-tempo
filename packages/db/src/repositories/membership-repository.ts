@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { databaseEffect } from "../errors.js";
@@ -75,6 +75,35 @@ export class MembershipRepository extends Effect.Service<MembershipRepository>()
                   }),
               ),
             ]),
+          ).pipe(Effect.asVoid),
+        /**
+         * Removes one user's membership of the workspace for a GitHub
+         * account, unless a refresh verified it after `before` (so a late
+         * removal event can't undo a newer sign-in).
+         */
+        removeForAccount: (
+          userId: number,
+          githubAccountId: number,
+          before: Date,
+        ) =>
+          databaseEffect("memberships.remove_for_account", () =>
+            client
+              .delete(memberships)
+              .where(
+                and(
+                  eq(memberships.userId, userId),
+                  lt(memberships.verifiedAt, before),
+                  sql`${memberships.workspaceId} in (select ${workspaces.id} from ${workspaces} where ${workspaces.githubAccountId} = ${githubAccountId})`,
+                ),
+              )
+              .run(),
+          ).pipe(Effect.asVoid),
+        removeAllForUser: (userId: number) =>
+          databaseEffect("memberships.remove_all_for_user", () =>
+            client
+              .delete(memberships)
+              .where(eq(memberships.userId, userId))
+              .run(),
           ).pipe(Effect.asVoid),
         listForUser: (userId: number) =>
           databaseEffect("memberships.list_for_user", () =>

@@ -8,6 +8,9 @@ import { createSession } from "../src/auth/session";
 
 export const TEST_SESSION_SECRET = "test-session-secret";
 
+// 32 zero bytes, base64. Tests must not depend on a developer's .dev.vars.
+export const TEST_TOKEN_ENCRYPTION_KEY = btoa("\0".repeat(32));
+
 /**
  * Upserts the test user (GitHub 4001, "neiman") and gives them `role` in the
  * seeded workspace 1, as a sign-in would.

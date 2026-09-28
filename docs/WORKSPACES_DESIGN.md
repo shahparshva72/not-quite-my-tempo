@@ -163,6 +163,11 @@ a page that names the role needed and who holds it.
 
 ### Refreshing access (decided: Option A)
 
+Implemented with one simplification: sessions still last one hour, and
+GitHub App user tokens last eight, so only the access token is stored (no
+refresh token). If the token stops working, the session ends and the user
+signs in again.
+
 Access must stay current without a new sign-in. The hourly snapshot misses
 new repositories and keeps removed access for up to an hour. Two ways to do
 it:

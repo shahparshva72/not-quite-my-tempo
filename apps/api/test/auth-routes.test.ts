@@ -12,7 +12,12 @@ import {
 } from "../src/github/app-auth";
 import { GitHubInstallationClient } from "../src/github/installation-client";
 import { verifySession } from "../src/auth/session";
-import { sessionCookie, TEST_SESSION_SECRET } from "./authentication";
+import { decryptToken, tokenContext } from "../src/auth/token-cipher";
+import {
+  sessionCookie,
+  TEST_SESSION_SECRET,
+  TEST_TOKEN_ENCRYPTION_KEY,
+} from "./authentication";
 import { resetAndSeedRepository } from "./database";
 
 const testEnv = {
@@ -20,6 +25,7 @@ const testEnv = {
   SESSION_SECRET: TEST_SESSION_SECRET,
   GITHUB_OAUTH_CLIENT_ID: "client-id",
   GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
+  TOKEN_ENCRYPTION_KEY: TEST_TOKEN_ENCRYPTION_KEY,
 };
 
 const identityFetch =
@@ -375,6 +381,26 @@ describe("sign-in installation sync", () => {
     )
       .all()
       .then((result) => result.results);
+
+  it("stores the GitHub token encrypted and bound to the user", async () => {
+    await signIn("");
+
+    const row = await env.DB.prepare(
+      "SELECT user_id, github_token_ciphertext FROM sessions",
+    ).first<{ user_id: number; github_token_ciphertext: string }>();
+
+    expect(row?.github_token_ciphertext).not.toContain("user-token");
+
+    const token = await Effect.runPromise(
+      decryptToken(
+        TEST_TOKEN_ENCRYPTION_KEY,
+        row?.github_token_ciphertext ?? "",
+        tokenContext(row?.user_id ?? 0),
+      ),
+    );
+
+    expect(token).toBe("user-token");
+  });
 
   it("records a membership per workspace, with owners from GitHub", async () => {
     await signIn("", { orgOwnerOf: ["org-1001"] });

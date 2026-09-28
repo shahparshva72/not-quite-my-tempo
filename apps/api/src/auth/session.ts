@@ -26,6 +26,10 @@ export interface SessionPayload {
   readonly login: string;
   readonly repositoryIds: readonly number[];
   readonly expiresAt: Date;
+  // Used only to refresh access; never sent to the browser.
+  readonly tokenHash: string;
+  readonly githubTokenCiphertext: string | null;
+  readonly accessVerifiedAt: Date | null;
 }
 
 export class SessionError extends Data.TaggedError("SessionError")<{
@@ -76,6 +80,7 @@ export const createSession = (
   secret: string,
   userId: number,
   repositoryIds: readonly number[],
+  githubTokenCiphertext: string | null = null,
 ) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
@@ -86,6 +91,8 @@ export const createSession = (
       tokenHash: yield* tokenHash(secret, token),
       userId,
       repositoryIds,
+      githubTokenCiphertext,
+      accessVerifiedAt: new Date(now),
       expiresAt: new Date(now + SESSION_TTL_MILLIS),
     });
 
@@ -112,9 +119,8 @@ export const verifySession = (
 
     const sessionRepository = yield* SessionRepository;
 
-    const session = yield* sessionRepository.findByTokenHash(
-      yield* tokenHash(secret, cookieValue),
-    );
+    const hash = yield* tokenHash(secret, cookieValue);
+    const session = yield* sessionRepository.findByTokenHash(hash);
 
     if (Option.isNone(session)) {
       return Option.none<SessionPayload>();
@@ -132,6 +138,9 @@ export const verifySession = (
       login: session.value.login,
       repositoryIds: session.value.repositoryIds,
       expiresAt: session.value.expiresAt,
+      tokenHash: hash,
+      githubTokenCiphertext: session.value.githubTokenCiphertext,
+      accessVerifiedAt: session.value.accessVerifiedAt,
     });
   });
 
