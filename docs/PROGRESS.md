@@ -27,14 +27,35 @@ then this file for exactly where things stand and what to do next.
 | 9     | `.fletcher.json` + guard  | ✅ Done       |
 | 10    | Read API + GitHub OAuth   | ✅ Done       |
 | 11    | Dashboard UI              | 🟡 v1 shipped |
-| 12    | Accounts & authorization  | 🟡 Partial    |
+| 12    | Accounts & authorization  | ✅ Done       |
 | 13    | GitHub onboarding         | ✅ Core done  |
 | 16    | BYOK, trial, billing      | ⬜ Planned    |
 
-**Next task:** workspaces and memberships (Phase 12): a workspace per
-GitHub account/org installation, owner/admin/member roles, and restricting
-repository toggles to admins. Then Phase 14 dashboard management. See
-PLAN.md "Recommended order".
+**Next task:** the workspace Gemini key (BYOK) and the 5-review trial
+(Phase 16, first half), attached to `workspaces`. See PLAN.md Phase 16 and
+"Recommended order".
+
+### Workspaces, memberships, and roles — 2026-09-29
+
+Design: [WORKSPACES_DESIGN.md](./WORKSPACES_DESIGN.md) (approved, Option A).
+
+- Migrations `0005`–`0007`: `workspaces` (one per GitHub account ID),
+  `memberships` (GitHub-derived `github_owner` plus in-app `app_role`),
+  `audit_events`, `github_installations.workspace_id` (backfilled), and the
+  encrypted token and `access_verified_at` on `sessions`.
+- Sign-in records memberships (org owners via
+  `GET /user/memberships/orgs/{org}`); access is re-read every 10 minutes
+  with the stored token (`TOKEN_ENCRYPTION_KEY`); `github_app_authorization`
+  and `organization.member_removed` webhooks revoke immediately.
+- `application/authorization.ts` is the single check: repository reads and
+  writes need membership plus GitHub access; turning reviews on/off needs
+  admin; changing admins needs owner. Browser POSTs pass one same-origin
+  middleware. Role changes and review toggles write `audit_events`.
+- Dashboard groups repositories by workspace; `/workspaces/:id/members`
+  lists members and lets owners make or remove admins.
+- Existing sessions have no memberships or stored token: everyone signs in
+  once after deploy. The GitHub App needs Organization "Members: Read" and
+  the Organization event.
 
 ### Rehearsal Score redesign — 2026-09-28
 

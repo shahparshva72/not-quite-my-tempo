@@ -4,6 +4,8 @@ import type {
   GitHubRepository,
   ReviewRun,
   VisibleRepository,
+  Workspace,
+  WorkspaceMember,
   WorkspaceRole,
 } from "@not-quite-my-tempo/db";
 
@@ -12,6 +14,7 @@ import { repositoryActionAllowed } from "../application/authorization.js";
 import type {
   RepositoryOverview,
   ReviewSummary,
+  WorkspaceOverview,
 } from "../application/read-api.js";
 import {
   dynamicMark,
@@ -172,10 +175,37 @@ const repositoryRow = (
   </li>`;
 };
 
+const roleLabels = {
+  owner: "Owner",
+  admin: "Admin",
+  member: "Member",
+} as const satisfies Record<WorkspaceRole, string>;
+
+const workspaceSection = (
+  { workspace, role, repositories }: WorkspaceOverview,
+  now: Date,
+) =>
+  html`<section class="workspace">
+    <div class="workspace-head">
+      <h2>${workspace.githubAccountLogin}</h2>
+      <span class="quiet">${roleLabels[role]}</span>
+      <a href="/workspaces/${workspace.id}/members">Members</a>
+    </div>
+    ${
+      repositories.length === 0
+        ? html`<p class="quiet">
+            None of this account's repositories are visible to you on GitHub.
+          </p>`
+        : html`<ul class="entries">
+            ${repositories.map((entry) => repositoryRow(entry, now))}
+          </ul>`
+    }
+  </section>`;
+
 export const dashboardPage = (
   login: string,
   overview: {
-    readonly repositories: readonly RepositoryOverview[];
+    readonly workspaces: readonly WorkspaceOverview[];
     readonly totals: {
       readonly reviewCount: number;
       readonly totalTokens: number;
@@ -191,14 +221,14 @@ export const dashboardPage = (
         <a href="/onboarding">Choose which repositories Fletcher reviews</a>
       </div>
       ${
-        overview.repositories.length === 0
+        overview.workspaces.length === 0
           ? html`<p>
                 Install Fletcher on a repository to get your first review.
               </p>
               <a class="btn" href="/onboarding">Set up Fletcher</a>`
-          : html`<ul class="entries">
-                ${overview.repositories.map((entry) => repositoryRow(entry, now))}
-              </ul>
+          : html`${overview.workspaces.map((workspace) =>
+                workspaceSection(workspace, now),
+              )}
               <p class="fine">
                 ${formatNumber(overview.totals.reviewCount)}
                 ${overview.totals.reviewCount === 1 ? "review" : "reviews"} so
@@ -206,6 +236,98 @@ export const dashboardPage = (
                 tokens.
               </p>`
       }`,
+  );
+
+const memberRoleLabels = {
+  owner: "Owner on GitHub",
+  admin: "Admin",
+  member: "Member",
+} as const satisfies Record<WorkspaceRole, string>;
+
+const memberControl = (
+  workspaceId: number,
+  member: WorkspaceMember,
+  viewerRole: WorkspaceRole,
+) =>
+  viewerRole !== "owner" || member.role === "owner"
+    ? ""
+    : html`<form
+        method="post"
+        action="/workspaces/${workspaceId}/members/${member.userId}/role"
+      >
+        <input
+          type="hidden"
+          name="role"
+          value="${member.role === "admin" ? "member" : "admin"}"
+        />
+        <button class="link-button" type="submit">
+          ${member.role === "admin" ? "Remove admin" : "Make admin"}
+        </button>
+      </form>`;
+
+export const membersPage = (
+  login: string,
+  data: {
+    readonly workspace: Workspace;
+    readonly viewerRole: WorkspaceRole;
+    readonly viewerUserId: number;
+    readonly members: readonly WorkspaceMember[];
+  },
+) => {
+  const { workspace, viewerRole, viewerUserId, members } = data;
+  const organization = workspace.accountType === "Organization";
+  const hasOwner = members.some((member) => member.role === "owner");
+
+  return layout(
+    `Members of ${workspace.githubAccountLogin}`,
+    login,
+    html`<p class="crumbs"><a href="/dashboard">Your repositories</a></p>
+      <h1 class="page-title">Members of ${workspace.githubAccountLogin}</h1>
+      <p>
+        Owners come from GitHub:
+        ${organization ? "the organization's owners" : "the account holder"}.
+        Owners choose admins, who can turn Fletcher's reviews on or off.
+        Everyone else sees reviews for the repositories they can see on GitHub.
+      </p>
+      ${
+        hasOwner
+          ? ""
+          : html`<p class="quiet">
+              No owner has signed in yet. An owner of this GitHub
+              ${organization ? "organization" : "account"} needs to sign in to
+              choose admins.
+            </p>`
+      }
+      <table class="repos members">
+        <tbody>
+          ${members.map(
+            (member) =>
+              html`<tr>
+                <td>
+                  ${member.login}${member.userId === viewerUserId ? " (you)" : ""}
+                </td>
+                <td class="quiet">${memberRoleLabels[member.role]}</td>
+                <td>${memberControl(workspace.id, member, viewerRole)}</td>
+              </tr>`,
+          )}
+        </tbody>
+      </table>
+      <p class="fine">
+        People appear here after they sign in, if GitHub shows them this
+        account's installation.
+      </p>`,
+  );
+};
+
+export const ownerRolePage = (login: string) =>
+  messagePage(
+    "Owners come from GitHub",
+    login,
+    html`<p>
+        An owner's role follows GitHub. To change it, change who owns the
+        account or organization on GitHub.
+      </p>
+      <a class="btn" href="/dashboard">Go to your repositories</a>`,
   );
 
 const reviewRow = (

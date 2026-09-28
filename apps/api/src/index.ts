@@ -27,6 +27,10 @@ import {
   visibleRepositories,
 } from "./application/authorization.js";
 import { refreshSessionAccess } from "./application/session-access.js";
+import {
+  changeAdminRole,
+  workspaceMembers,
+} from "./application/workspace-members.js";
 import { GitHubOAuthLive } from "./auth/github-oauth.js";
 import { createAuthRoutes } from "./auth/routes.js";
 import {
@@ -40,8 +44,10 @@ import {
   forbiddenPage,
   installationPendingPage,
   landingPage,
+  membersPage,
   notFoundPage,
   onboardingPage,
+  ownerRolePage,
   repositoryRunsPage,
   runFindingsPage,
 } from "./dashboard/views.js";
@@ -439,6 +445,71 @@ app.post("/onboarding/repositories/:id", (c) =>
               Match.orElse((error) => internalError(c, error)),
             ),
           onSuccess: () => c.redirect(returnTo, 303),
+        }),
+      ),
+    );
+  }),
+);
+
+app.get("/workspaces/:id/members", (c) =>
+  withSessionPage(c, (session) => {
+    const workspaceId = Number(c.req.param("id"));
+
+    if (!Number.isInteger(workspaceId)) {
+      return Promise.resolve(c.html(notFoundPage(session.login), 404));
+    }
+
+    return Effect.runPromise(
+      workspaceMembers(session, workspaceId).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                c.html(notFoundPage(session.login), 404),
+              ),
+              Match.orElse((error) => internalError(c, error)),
+            ),
+          onSuccess: (data) => c.html(membersPage(session.login, data)),
+        }),
+      ),
+    );
+  }),
+);
+
+app.post("/workspaces/:id/members/:userId/role", (c) =>
+  withSessionPage(c, async (session) => {
+    const workspaceId = Number(c.req.param("id"));
+    const targetUserId = Number(c.req.param("userId"));
+    const role = (await c.req.parseBody())["role"];
+
+    if (
+      !Number.isInteger(workspaceId) ||
+      !Number.isInteger(targetUserId) ||
+      (role !== "admin" && role !== "member")
+    ) {
+      return c.html(notFoundPage(session.login), 404);
+    }
+
+    return Effect.runPromise(
+      changeAdminRole(session, workspaceId, targetUserId, role).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                c.html(notFoundPage(session.login), 404),
+              ),
+              Match.tag("ForbiddenError", (error) =>
+                c.html(forbiddenPage(session.login, error.requiredRole), 403),
+              ),
+              Match.tag("OwnerRoleError", () =>
+                c.html(ownerRolePage(session.login), 400),
+              ),
+              Match.orElse((error) => internalError(c, error)),
+            ),
+          onSuccess: () =>
+            c.redirect(`/workspaces/${workspaceId}/members`, 303),
         }),
       ),
     );

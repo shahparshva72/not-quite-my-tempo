@@ -1,5 +1,8 @@
-import { Data, Effect } from "effect";
-import { GitHubRepositoryRepository } from "@not-quite-my-tempo/db";
+import { Data, Effect, Option } from "effect";
+import {
+  GitHubRepositoryRepository,
+  MembershipRepository,
+} from "@not-quite-my-tempo/db";
 import type { WorkspaceRole } from "@not-quite-my-tempo/db";
 
 import { logInfo } from "../logging.js";
@@ -88,4 +91,55 @@ export const authorizeRepository = (
     }
 
     return visible;
+  });
+
+export type WorkspaceAction = "view_members" | "manage_roles";
+
+const workspaceRequiredRoles = {
+  view_members: "member",
+  manage_roles: "owner",
+} as const satisfies Record<WorkspaceAction, WorkspaceRole>;
+
+export const workspaceActionAllowed = (
+  role: WorkspaceRole,
+  action: WorkspaceAction,
+) => roleAllows(role, workspaceRequiredRoles[action]);
+
+/**
+ * The workspace-level check: the user must be a member (404 otherwise, so
+ * workspace IDs can't be probed) and hold the role the action needs.
+ */
+export const authorizeWorkspace = (
+  access: SessionAccess,
+  workspaceId: number,
+  action: WorkspaceAction,
+) =>
+  Effect.gen(function* () {
+    const membership = yield* MembershipRepository.findForUser(
+      workspaceId,
+      access.userId,
+    );
+
+    if (Option.isNone(membership)) {
+      return yield* new ResourceNotFoundError();
+    }
+
+    const requiredRole = workspaceRequiredRoles[action];
+
+    if (!roleAllows(membership.value.role, requiredRole)) {
+      yield* logInfo("authorization_denied", {
+        userId: access.userId,
+        workspaceId,
+        action,
+        role: membership.value.role,
+        requiredRole,
+      });
+
+      return yield* new ForbiddenError({
+        role: membership.value.role,
+        requiredRole,
+      });
+    }
+
+    return membership.value;
   });
