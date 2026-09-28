@@ -36,6 +36,20 @@
       "when": 1790544997893,
       "tag": "0004_loud_may_parker",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1790636106847,
+      "tag": "0005_brown_black_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1790636112660,
+      "tag": "0006_backfill_workspaces",
+      "breakpoints": true
     }
   ]
 }
