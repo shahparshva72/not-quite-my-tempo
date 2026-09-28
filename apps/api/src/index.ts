@@ -19,10 +19,13 @@ import {
   listRepositoryRuns,
   listRunFindings,
   repositoryReviewHistory,
-  requireAccessibleRepository,
   reviewDetail,
   usageSummary,
 } from "./application/read-api.js";
+import {
+  authorizeRepository,
+  visibleRepositories,
+} from "./application/authorization.js";
 import { createAuthRoutes } from "./auth/routes.js";
 import {
   PENDING_INSTALLATION_COOKIE,
@@ -32,6 +35,7 @@ import {
 import type { SessionPayload } from "./auth/session.js";
 import {
   dashboardPage,
+  forbiddenPage,
   installationPendingPage,
   landingPage,
   notFoundPage,
@@ -107,6 +111,26 @@ app.use("*", async (c, next) => {
   } else {
     await logger()(c, next);
   }
+});
+
+// Every browser form post must come from this site; GitHub webhooks are
+// authenticated by their signature instead.
+app.use("*", async (c, next) => {
+  if (c.req.method === "POST" && !c.req.path.startsWith("/webhooks/")) {
+    const sameOrigin = c.req.header("origin") === new URL(c.req.url).origin;
+    const crossSite = c.req.header("sec-fetch-site") === "cross-site";
+
+    if (!sameOrigin || crossSite) {
+      return errorResponse(
+        c,
+        403,
+        "invalid_origin",
+        "Same-origin request required",
+      );
+    }
+  }
+
+  return next();
 });
 
 app.get("/health", (c) =>
@@ -209,7 +233,7 @@ const withSessionPage = (
 app.get("/dashboard", (c) =>
   withSessionPage(c, (session) =>
     Effect.runPromise(
-      dashboardOverview(session.repositoryIds).pipe(
+      dashboardOverview(session).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),
@@ -230,7 +254,7 @@ app.get("/dashboard/repositories/:id", (c) =>
     }
 
     return Effect.runPromise(
-      repositoryReviewHistory(session.repositoryIds, repositoryId).pipe(
+      repositoryReviewHistory(session, repositoryId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -240,11 +264,12 @@ app.get("/dashboard/repositories/:id", (c) =>
               ),
               Match.orElse((error) => internalError(c, error)),
             ),
-          onSuccess: ({ repository, reviews }) =>
+          onSuccess: ({ repository, role, reviews }) =>
             c.html(
               repositoryRunsPage(
                 session.login,
                 repository,
+                role,
                 reviews,
                 new Date(),
               ),
@@ -264,7 +289,7 @@ app.get("/dashboard/runs/:id", (c) =>
     }
 
     return Effect.runPromise(
-      reviewDetail(session.repositoryIds, reviewRunId).pipe(
+      reviewDetail(session, reviewRunId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -305,7 +330,7 @@ app.get("/onboarding", (c) =>
     }
 
     return Effect.runPromise(
-      listAccessibleRepositories(session.repositoryIds).pipe(
+      visibleRepositories(session).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),
@@ -347,14 +372,8 @@ app.get("/onboarding/callback", (c) => {
   return c.redirect("/auth/login?next=onboarding");
 });
 
-app.post("/onboarding/repositories/:id", (c) => {
-  if (c.req.header("origin") !== new URL(c.req.url).origin) {
-    return Promise.resolve(
-      errorResponse(c, 403, "invalid_origin", "Same-origin request required"),
-    );
-  }
-
-  return withSessionPage(c, async (session) => {
+app.post("/onboarding/repositories/:id", (c) =>
+  withSessionPage(c, async (session) => {
     const repositoryId = Number(c.req.param("id"));
     const form = await c.req.parseBody();
     const enabled = form["enabled"];
@@ -373,11 +392,12 @@ app.post("/onboarding/repositories/:id", (c) => {
     }
 
     return Effect.runPromise(
-      requireAccessibleRepository(session.repositoryIds, repositoryId).pipe(
-        Effect.flatMap((repository) =>
-          GitHubRepositoryRepository.setEnabled(
-            repository.id,
+      authorizeRepository(session, repositoryId, "toggle_reviews").pipe(
+        Effect.flatMap((visible) =>
+          GitHubRepositoryRepository.setEnabledWithAudit(
+            visible.repository,
             enabled === "true",
+            { workspaceId: visible.workspaceId, actorUserId: session.userId },
           ),
         ),
         Effect.provide(makeLiveLayer(c.env.DB)),
@@ -387,14 +407,17 @@ app.post("/onboarding/repositories/:id", (c) => {
               Match.tag("ResourceNotFoundError", () =>
                 c.html(notFoundPage(session.login), 404),
               ),
+              Match.tag("ForbiddenError", (error) =>
+                c.html(forbiddenPage(session.login, error.requiredRole), 403),
+              ),
               Match.orElse((error) => internalError(c, error)),
             ),
           onSuccess: () => c.redirect(returnTo, 303),
         }),
       ),
     );
-  });
-});
+  }),
+);
 
 app.get("/api/me", (c) =>
   withSession(c, (session) =>
@@ -414,7 +437,7 @@ app.get("/api/me", (c) =>
 app.get("/api/repositories", (c) =>
   withSession(c, (session) =>
     Effect.runPromise(
-      listAccessibleRepositories(session.repositoryIds).pipe(
+      listAccessibleRepositories(session).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),
@@ -436,7 +459,7 @@ app.get("/api/repositories/:id/runs", (c) =>
     }
 
     return Effect.runPromise(
-      listRepositoryRuns(session.repositoryIds, repositoryId).pipe(
+      listRepositoryRuns(session, repositoryId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -464,7 +487,7 @@ app.get("/api/runs/:id/findings", (c) =>
     }
 
     return Effect.runPromise(
-      listRunFindings(session.repositoryIds, reviewRunId).pipe(
+      listRunFindings(session, reviewRunId).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -484,7 +507,7 @@ app.get("/api/runs/:id/findings", (c) =>
 app.get("/api/usage", (c) =>
   withSession(c, (session) =>
     Effect.runPromise(
-      usageSummary(session.repositoryIds).pipe(
+      usageSummary(session).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) => internalError(c, cause),

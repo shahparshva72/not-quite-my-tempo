@@ -1,9 +1,11 @@
-import { Data, Effect, Option } from "effect";
+import { Effect, Option } from "effect";
+import { FindingRepository, ReviewRunRepository } from "@not-quite-my-tempo/db";
 import {
-  FindingRepository,
-  GitHubRepositoryRepository,
-  ReviewRunRepository,
-} from "@not-quite-my-tempo/db";
+  authorizeRepository,
+  ResourceNotFoundError,
+  visibleRepositories,
+} from "./authorization.js";
+import type { SessionAccess } from "./authorization.js";
 import type {
   FindingSeverityCount,
   GitHubRepository,
@@ -12,44 +14,29 @@ import type {
 
 const RUNS_PAGE_SIZE = 25;
 
-/**
- * Raised when a resource does not exist or the session's repositories do
- * not grant access to it. Both cases intentionally map to the same error so
- * resource IDs cannot be enumerated.
- */
-export class ResourceNotFoundError extends Data.TaggedError(
-  "ResourceNotFoundError",
-) {}
+export const listAccessibleRepositories = (access: SessionAccess) =>
+  visibleRepositories(access).pipe(
+    Effect.map((visible) => visible.map((entry) => entry.repository)),
+  );
 
-export const listAccessibleRepositories = (repositoryIds: readonly number[]) =>
-  GitHubRepositoryRepository.listByGithubRepositoryIds(repositoryIds);
-
+/** A repository the user may view, or ResourceNotFoundError. */
 export const requireAccessibleRepository = (
-  repositoryIds: readonly number[],
+  access: SessionAccess,
   repositoryId: number,
 ) =>
-  GitHubRepositoryRepository.findById(repositoryId).pipe(
-    Effect.flatMap(
-      Option.match({
-        onNone: () => new ResourceNotFoundError(),
-        onSome: (repository) =>
-          repository.removedAt === null &&
-          repositoryIds.includes(repository.githubRepositoryId)
-            ? Effect.succeed(repository)
-            : new ResourceNotFoundError(),
-      }),
-    ),
+  authorizeRepository(access, repositoryId, "view").pipe(
+    Effect.map((visible) => visible.repository),
+    // Viewing needs only membership, so ForbiddenError can't occur; keep
+    // the 404-only contract for readers.
+    Effect.catchTag("ForbiddenError", () => new ResourceNotFoundError()),
   );
 
 export const listRepositoryRuns = (
-  repositoryIds: readonly number[],
+  access: SessionAccess,
   repositoryId: number,
 ) =>
   Effect.gen(function* () {
-    const repository = yield* requireAccessibleRepository(
-      repositoryIds,
-      repositoryId,
-    );
+    const repository = yield* requireAccessibleRepository(access, repositoryId);
 
     const runs = yield* ReviewRunRepository.listByRepository(
       repository.id,
@@ -59,10 +46,7 @@ export const listRepositoryRuns = (
     return { repository, runs };
   });
 
-export const listRunFindings = (
-  repositoryIds: readonly number[],
-  reviewRunId: number,
-) =>
+export const listRunFindings = (access: SessionAccess, reviewRunId: number) =>
   Effect.gen(function* () {
     const run = yield* ReviewRunRepository.findById(reviewRunId).pipe(
       Effect.flatMap(
@@ -73,16 +57,16 @@ export const listRunFindings = (
       ),
     );
 
-    yield* requireAccessibleRepository(repositoryIds, run.repositoryId);
+    yield* requireAccessibleRepository(access, run.repositoryId);
 
     const findings = yield* FindingRepository.listByReviewRun(run.id);
 
     return { run, findings };
   });
 
-export const usageSummary = (repositoryIds: readonly number[]) =>
+export const usageSummary = (access: SessionAccess) =>
   Effect.gen(function* () {
-    const repositories = yield* listAccessibleRepositories(repositoryIds);
+    const repositories = yield* listAccessibleRepositories(access);
 
     const usage = yield* ReviewRunRepository.usageByRepositoryIds(
       repositories.map((repository) => repository.id),
@@ -150,9 +134,9 @@ export interface RepositoryOverview {
  * Dashboard data: each accessible repository with its most recent review,
  * plus all-time totals across them.
  */
-export const dashboardOverview = (repositoryIds: readonly number[]) =>
+export const dashboardOverview = (access: SessionAccess) =>
   Effect.gen(function* () {
-    const repositories = yield* listAccessibleRepositories(repositoryIds);
+    const repositories = yield* listAccessibleRepositories(access);
     const ids = repositories.map((repository) => repository.id);
 
     const latestRuns = yield* ReviewRunRepository.latestByRepositoryIds(ids);
@@ -180,16 +164,21 @@ export const dashboardOverview = (repositoryIds: readonly number[]) =>
 
 /** Repository page data: its recent reviews with finding counts. */
 export const repositoryReviewHistory = (
-  repositoryIds: readonly number[],
+  access: SessionAccess,
   repositoryId: number,
 ) =>
-  listRepositoryRuns(repositoryIds, repositoryId).pipe(
-    Effect.flatMap(({ repository, runs }) =>
-      summarizeRuns(runs).pipe(
-        Effect.map((reviews) => ({ repository, reviews })),
-      ),
-    ),
-  );
+  Effect.gen(function* () {
+    const visible = yield* authorizeRepository(access, repositoryId, "view");
+
+    const runs = yield* ReviewRunRepository.listByRepository(
+      visible.repository.id,
+      RUNS_PAGE_SIZE,
+    );
+
+    const reviews = yield* summarizeRuns(runs);
+
+    return { repository: visible.repository, role: visible.role, reviews };
+  });
 
 const severityOrder = { critical: 0, warning: 1, suggestion: 2 } as const;
 
@@ -197,18 +186,12 @@ const severityOrder = { critical: 0, warning: 1, suggestion: 2 } as const;
  * Review page data: the run, its repository (for GitHub links), and its
  * findings loudest first, then by file and line.
  */
-export const reviewDetail = (
-  repositoryIds: readonly number[],
-  reviewRunId: number,
-) =>
+export const reviewDetail = (access: SessionAccess, reviewRunId: number) =>
   Effect.gen(function* () {
-    const { run, findings } = yield* listRunFindings(
-      repositoryIds,
-      reviewRunId,
-    );
+    const { run, findings } = yield* listRunFindings(access, reviewRunId);
 
     const repository = yield* requireAccessibleRepository(
-      repositoryIds,
+      access,
       run.repositoryId,
     );
 

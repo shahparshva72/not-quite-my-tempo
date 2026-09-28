@@ -3,7 +3,11 @@ import type {
   Finding,
   GitHubRepository,
   ReviewRun,
+  VisibleRepository,
+  WorkspaceRole,
 } from "@not-quite-my-tempo/db";
+
+import { repositoryActionAllowed } from "../application/authorization.js";
 
 import type {
   RepositoryOverview,
@@ -17,8 +21,8 @@ import {
   messagePage,
   rehearsalStep,
   relativeTime,
+  reviewControl,
   reviewOutcome,
-  reviewSwitch,
   triggerLabel,
 } from "./components.js";
 
@@ -104,6 +108,22 @@ export const notFoundPage = (login: string | null) =>
     "This page doesn't exist",
     login,
     html`<p>The link may be old, or the page belongs to another account.</p>
+      <a class="btn" href="/dashboard">Go to your repositories</a>`,
+  );
+
+export const forbiddenPage = (login: string, requiredRole: string) =>
+  messagePage(
+    requiredRole === "owner"
+      ? "Only owners can do this"
+      : "You need admin access",
+    login,
+    html`<p>
+        ${
+          requiredRole === "owner"
+            ? "Only owners of this GitHub account can make this change."
+            : "Only admins and owners can turn Fletcher's reviews on or off. Ask an owner of this GitHub account to make you an admin."
+        }
+      </p>
       <a class="btn" href="/dashboard">Go to your repositories</a>`,
   );
 
@@ -217,6 +237,7 @@ const reviewRow = (
 export const repositoryRunsPage = (
   login: string,
   repository: GitHubRepository,
+  role: WorkspaceRole,
   reviews: readonly ReviewSummary[],
   now: Date,
 ) =>
@@ -226,7 +247,11 @@ export const repositoryRunsPage = (
     html`<p class="crumbs"><a href="/dashboard">Your repositories</a></p>
       <div class="page-head">
         <h1 class="page-title">${repository.fullName}</h1>
-        ${reviewSwitch(repository, "repository")}
+        ${reviewControl(
+          repository,
+          repositoryActionAllowed(role, "toggle_reviews"),
+          "repository",
+        )}
       </div>
       ${
         reviews.length === 0
@@ -391,8 +416,9 @@ export const runFindingsPage = (
 export const onboardingPage = (
   login: string,
   installUrl: string,
-  repositories: readonly GitHubRepository[],
+  visible: readonly VisibleRepository[],
 ) => {
+  const repositories = visible.map((entry) => entry.repository);
   const installed = repositories.length > 0;
   const reviewing = repositories.some((repository) => repository.enabled);
 
@@ -421,11 +447,17 @@ export const onboardingPage = (
               installed
                 ? html`<table class="repos">
                     <tbody>
-                      ${repositories.map(
-                        (repository) =>
+                      ${visible.map(
+                        ({ repository, role }) =>
                           html`<tr>
                             <td>${repository.fullName}</td>
-                            <td>${reviewSwitch(repository, "onboarding")}</td>
+                            <td>
+                              ${reviewControl(
+                                repository,
+                                repositoryActionAllowed(role, "toggle_reviews"),
+                                "onboarding",
+                              )}
+                            </td>
                           </tr>`,
                       )}
                     </tbody>

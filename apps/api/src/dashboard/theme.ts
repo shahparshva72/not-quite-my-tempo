@@ -174,6 +174,8 @@ section.band { padding: 3rem 0; border-top: 1px solid var(--staff); }
   .track, .track::after { transition: none; }
 }
 
+.review-state { display: inline-flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; justify-content: flex-end; }
+
 /* Message pages: one headline, one sentence, one action */
 .message { padding: clamp(2rem, 8vw, 6rem) 0; max-width: 40rem; }
 .message .page-title { font-size: clamp(2.2rem, 6vw, 3.5rem); font-variation-settings: "wdth" 62; }
