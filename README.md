@@ -148,13 +148,11 @@ pnpm format:check
 
 Both tools respect `.gitignore` and exclude generated Worker types. Oxfmt also excludes the generated pnpm lockfile.
 
-The checked-in Wrangler config uses a deterministic all-zero D1 UUID so local development and tests work before a Cloudflare database exists. Create a real database before using remote commands:
+The checked-in Wrangler config points at the production D1 database. Its `database_id` is not a secret (using it requires Cloudflare credentials), and local development and tests use their own local copies. Any `--remote` command, such as `pnpm db:migrate:remote`, runs against production. To use a separate database (a fork or a staging environment), create one and put its ID in `apps/api/wrangler.jsonc` or a Wrangler `env` block:
 
 ```sh
 pnpm db:create
 ```
-
-Copy the returned `database_id` into `apps/api/wrangler.jsonc`, replacing the all-zero UUID. The Worker only declares the binding; no application data or database routes are included.
 
 ## Database
 
@@ -340,9 +338,9 @@ curl -i http://localhost:8787/webhooks/github \
 
 ## Test the GitHub webhook flow after deployment
 
-1. Create the production D1 database once, replace the placeholder
-   `database_id` in `apps/api/wrangler.jsonc` with the returned ID, and apply the
-   migrations:
+1. The production D1 database already exists (its ID is in
+   `apps/api/wrangler.jsonc`). For a new deployment, create one, put its ID
+   there, and apply the migrations:
 
    ```sh
    pnpm db:create

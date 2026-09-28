@@ -14,7 +14,7 @@
     {
       "binding": "DB",
       "database_name": "not-quite-my-tempo",
-      "database_id": "00000000-0000-0000-0000-000000000001",
+      "database_id": "3143afbb-2d35-472d-a3b2-49e0c09c4120",
       "migrations_dir": "../../packages/db/drizzle",
     },
   ],
