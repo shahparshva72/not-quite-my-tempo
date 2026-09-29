@@ -60,8 +60,11 @@ RETURNING trial_reviews_used
 The step's output is only the key **source**, never the key. Workflows
 persist step outputs, so the key is decrypted inside the Gemini step itself
 and never stored. Because step outputs are cached, a retried Gemini step
-does not take a second trial review. Trial reviews are not refunded when a
-later step fails. That is the simple rule, and it is stated in the UI copy.
+does not take a second trial review. A trial review is refunded when the run used the platform key and failed
+with `gemini_error` (outage, quota, or an unusable answer), in its own
+workflow step so a retry can't refund twice. Live testing found Gemini
+returning 503 "high demand", which would otherwise cost users a trial
+review. Failures before the key step never take one.
 
 When Gemini rejects a **workspace** key (HTTP 400, 401, or 403), the run
 fails with `gemini_key_rejected`: "your workspace's Gemini key was

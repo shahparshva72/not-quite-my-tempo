@@ -24,6 +24,7 @@ import type { ReviewPipelineError } from "../application/review-workflow.js";
 import {
   chooseReviewKey,
   explainMissingKey,
+  refundTrialIfGeminiFailed,
   resolveGeminiKey,
   WorkspaceGeminiKeyRejectedError,
 } from "../application/review-keys.js";
@@ -332,6 +333,16 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
                 Effect.provide(databaseLayer),
               ),
             );
+
+            if (details.code === "gemini_error") {
+              yield* runStep(
+                step,
+                "refund trial review",
+                refundTrialIfGeminiFailed(reviewRunId).pipe(
+                  Effect.provide(databaseLayer),
+                ),
+              );
+            }
           }),
         ),
       );

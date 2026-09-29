@@ -69,9 +69,11 @@ export const workspaceSettings = (access: SessionAccess, workspaceId: number) =>
     };
   });
 
-// Google API keys are one token of URL-safe characters; this rejects pasted
-// whitespace, quotes, or whole config lines before any network call.
-const KEY_PATTERN = /^[A-Za-z0-9_-]{20,200}$/;
+// Only catches paste mistakes (whitespace, quotes, a whole
+// "GEMINI_API_KEY=..." line) before any network call; Google decides
+// whether the key is valid. Keys come in more than one format: classic
+// "AIza..." keys and newer ones that contain "." and are longer.
+const KEY_PATTERN = /^[A-Za-z0-9._~+/-]{20,512}$/;
 
 /**
  * Checks the key with Gemini, then stores it encrypted. A key Gemini

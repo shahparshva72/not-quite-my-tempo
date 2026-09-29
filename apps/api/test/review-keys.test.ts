@@ -8,6 +8,7 @@ import {
   chooseReviewKey,
   explainMissingKey,
   GeminiKeyUnreadableError,
+  refundTrialIfGeminiFailed,
   resolveGeminiKey,
 } from "../src/application/review-keys";
 import { geminiKeyContext } from "../src/application/workspace-settings";
@@ -213,6 +214,59 @@ describe("explaining a blocked review", () => {
     expect(comments[0]).toContain(
       "https://notmytempo.dev/workspaces/1/settings",
     );
+  });
+});
+
+describe("refunding trial reviews lost to Gemini", () => {
+  beforeEach(resetAndSeedRepository);
+
+  const failedRun = async (keySource: string | null, errorCode: string) => {
+    const run = await createRun(`${keySource}-${errorCode}`);
+
+    await env.DB.prepare(
+      "UPDATE review_runs SET status = 'failed', key_source = ?, error_code = ? WHERE id = ?",
+    )
+      .bind(keySource, errorCode, run.id)
+      .run();
+
+    return run.id;
+  };
+
+  const refund = (runId: number) =>
+    Effect.runPromise(
+      refundTrialIfGeminiFailed(runId).pipe(Effect.provide(db())),
+    );
+
+  const setTrialUsed = (used: number) =>
+    env.DB.prepare("UPDATE workspaces SET trial_reviews_used = ? WHERE id = 1")
+      .bind(used)
+      .run();
+
+  it("gives back a trial review when Gemini failed a platform-key run", async () => {
+    await setTrialUsed(3);
+
+    expect(await refund(await failedRun("platform", "gemini_error"))).toBe(
+      true,
+    );
+    expect((await workspaceRow())?.trial_reviews_used).toBe(2);
+  });
+
+  it("never refunds workspace-key runs or other failures", async () => {
+    await setTrialUsed(3);
+
+    expect(await refund(await failedRun("workspace", "gemini_error"))).toBe(
+      false,
+    );
+    expect(await refund(await failedRun("platform", "post_review_error"))).toBe(
+      false,
+    );
+    expect((await workspaceRow())?.trial_reviews_used).toBe(3);
+  });
+
+  it("never goes below zero", async () => {
+    await refund(await failedRun("platform", "gemini_error"));
+
+    expect((await workspaceRow())?.trial_reviews_used).toBe(0);
   });
 });
 

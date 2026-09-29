@@ -134,6 +134,20 @@ describe("workspace settings: Gemini key", () => {
     expect(page).not.toContain(stored?.gemini_key_ciphertext ?? "missing");
   });
 
+  it("accepts Google's newer key format, which contains dots", async () => {
+    const calls = geminiAnswers(200);
+    const newFormatKey = "AQ.Ab8RN6LmTestOnlyNewFormatKey-0123456789abcdef_XYZ";
+
+    const response = await saveKey(
+      await sessionCookie([3001], "admin"),
+      newFormatKey,
+    );
+
+    expect(response.status).toBe(303);
+    expect(calls).toHaveLength(1);
+    expect((await workspaceKey())?.gemini_key_last4).toBe("_XYZ");
+  });
+
   it("refuses malformed keys without calling Google", async () => {
     const calls = geminiAnswers(200);
 

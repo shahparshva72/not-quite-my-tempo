@@ -171,3 +171,38 @@ export const explainMissingKey = (
       }),
     ),
   );
+
+/**
+ * Gives a free trial review back when the review used the platform key and
+ * failed because Gemini did (outage, quota, or an unusable answer): people
+ * shouldn't lose trial reviews to our provider's failures. Runs as its own
+ * Workflow step, so a retried workflow can't refund twice.
+ */
+export const refundTrialIfGeminiFailed = (reviewRunId: number) =>
+  Effect.gen(function* () {
+    const run = yield* ReviewRunRepository.findById(reviewRunId);
+
+    if (
+      Option.isNone(run) ||
+      run.value.keySource !== "platform" ||
+      run.value.errorCode !== "gemini_error"
+    ) {
+      return false;
+    }
+
+    const workspace = yield* WorkspaceRepository.findByRepositoryId(
+      run.value.repositoryId,
+    );
+
+    if (Option.isNone(workspace)) {
+      return false;
+    }
+
+    yield* WorkspaceRepository.refundTrialReview(workspace.value.id);
+    yield* logInfo("trial_review_refunded", {
+      workspaceId: workspace.value.id,
+      reviewRunId,
+    });
+
+    return true;
+  });
