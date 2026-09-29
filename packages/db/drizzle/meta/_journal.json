@@ -57,6 +57,13 @@
       "when": 1790637903808,
       "tag": "0007_big_iron_monger",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1790701251920,
+      "tag": "0008_sour_roughhouse",
+      "breakpoints": true
     }
   ]
 }

@@ -130,6 +130,12 @@ export interface GitHubPullRequestClientService {
     ref: PullRequestRef,
     reviewId: number,
   ) => Effect.Effect<readonly PostedReviewComment[], ReviewSubmitError>;
+  /** Posts a plain conversation comment on the pull request. */
+  readonly createIssueComment: (
+    installationToken: string,
+    ref: PullRequestRef,
+    body: string,
+  ) => Effect.Effect<void, ReviewSubmitError>;
   readonly fetchRepositoryFile: (
     installationToken: string,
     ref: PullRequestRef,
@@ -324,6 +330,13 @@ export const GitHubPullRequestClientLive = (
 
           return { reviewId: decoded.id };
         }),
+      createIssueComment: (installationToken, ref, body) =>
+        submitRequest(
+          config,
+          installationToken,
+          `/repos/${ref.owner}/${ref.repo}/issues/${ref.pullRequestNumber}/comments`,
+          { method: "POST", body: JSON.stringify({ body }) },
+        ).pipe(Effect.asVoid),
       fetchRepositoryFile: (installationToken, ref, filePath, gitRef) =>
         Effect.gen(function* () {
           const baseUrl = config.baseUrl ?? GITHUB_API_BASE_URL;

@@ -18,6 +18,8 @@ export * from "./repositories/session-repository.js";
 
 export * from "./repositories/user-repository.js";
 
+export * from "./repositories/workspace-repository.js";
+
 export * from "./schema/index.js";
 
 export * from "./services/database.js";

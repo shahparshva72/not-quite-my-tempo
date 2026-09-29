@@ -13,7 +13,7 @@ import { buildReviewUserPrompt, buildSystemPrompt } from "./prompt.js";
 import { GeminiReview, geminiResponseJsonSchema } from "./schema.js";
 import type { GeminiReviewInput } from "./prompt.js";
 
-const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com";
+export const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
 

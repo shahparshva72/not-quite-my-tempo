@@ -171,7 +171,12 @@ app.post("/webhooks/github", (c) => {
         ),
       ),
       Effect.provide(makeLiveLayer(c.env.DB)),
-      Effect.provide(ReviewWorkflowLive(c.env.REVIEW_PULL_REQUEST_WORKFLOW)),
+      Effect.provide(
+        ReviewWorkflowLive(
+          c.env.REVIEW_PULL_REQUEST_WORKFLOW,
+          new URL(c.req.url).origin,
+        ),
+      ),
       Effect.provide(
         GitHubAppAuthLive({
           appId: c.env.GITHUB_APP_ID,

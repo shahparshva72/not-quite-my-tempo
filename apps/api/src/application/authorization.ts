@@ -93,11 +93,17 @@ export const authorizeRepository = (
     return visible;
   });
 
-export type WorkspaceAction = "view_members" | "manage_roles";
+export type WorkspaceAction =
+  | "view_members"
+  | "manage_roles"
+  | "view_settings"
+  | "manage_settings";
 
 const workspaceRequiredRoles = {
   view_members: "member",
   manage_roles: "owner",
+  view_settings: "member",
+  manage_settings: "admin",
 } as const satisfies Record<WorkspaceAction, WorkspaceRole>;
 
 export const workspaceActionAllowed = (

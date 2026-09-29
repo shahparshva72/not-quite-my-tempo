@@ -23,6 +23,9 @@ import type { ManualReviewCommand } from "../github/manual-command.js";
 export const ReviewWorkflowParams = Schema.Struct({
   reviewRunId: Schema.Number.pipe(Schema.int(), Schema.positive()),
   request: ReviewRequest,
+  // Public origin of this Worker (from the webhook request), for links in
+  // comments Fletcher posts. Optional so in-flight runs still decode.
+  appOrigin: Schema.optional(Schema.String),
 });
 
 export type ReviewWorkflowParams = typeof ReviewWorkflowParams.Type;
@@ -41,7 +44,10 @@ export class ReviewWorkflow extends Context.Tag(
   "@not-quite-my-tempo/api/ReviewWorkflow",
 )<ReviewWorkflow, ReviewWorkflowService>() {}
 
-export const ReviewWorkflowLive = (workflow: Workflow<ReviewWorkflowParams>) =>
+export const ReviewWorkflowLive = (
+  workflow: Workflow<ReviewWorkflowParams>,
+  appOrigin: string,
+) =>
   Layer.succeed(
     ReviewWorkflow,
     ReviewWorkflow.of({
@@ -50,7 +56,7 @@ export const ReviewWorkflowLive = (workflow: Workflow<ReviewWorkflowParams>) =>
           try: () =>
             workflow.create({
               id: `review-run-${params.reviewRunId}`,
-              params,
+              params: { ...params, appOrigin },
             }),
           catch: (cause) => new WorkflowStartError({ cause }),
         }).pipe(Effect.map((instance) => instance.id)),

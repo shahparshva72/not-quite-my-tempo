@@ -3,6 +3,7 @@ import { Array, Data, Effect, Option } from "effect";
 
 import { databaseEffect, DatabaseError } from "../errors.js";
 import {
+  reviewKeySources,
   reviewRuns,
   reviewRunStatuses,
   reviewRunTriggers,
@@ -26,6 +27,8 @@ export interface RepositoryUsageSummary {
   readonly outputTokens: number;
   readonly totalTokens: number;
 }
+
+export type ReviewKeySource = (typeof reviewKeySources)[number];
 
 export type ReviewRunVerdict = (typeof reviewVerdicts)[number];
 
@@ -195,6 +198,37 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
               .returning()
               .get(),
           ).pipe(Effect.map(Option.fromNullable)),
+        setKeySource: (id: number, keySource: ReviewKeySource) =>
+          databaseEffect("review_runs.set_key_source", () =>
+            client
+              .update(reviewRuns)
+              .set({ keySource })
+              .where(eq(reviewRuns.id, id))
+              .run(),
+          ).pipe(Effect.asVoid),
+        /**
+         * Whether another run of this pull request was already blocked for
+         * a missing Gemini key, so the explanation is posted only once.
+         */
+        hasEarlierBlockedRun: (
+          repositoryId: number,
+          pullRequestNumber: number,
+          excludeRunId: number,
+        ) =>
+          databaseEffect("review_runs.has_earlier_blocked_run", () =>
+            client
+              .select({ id: reviewRuns.id })
+              .from(reviewRuns)
+              .where(
+                and(
+                  eq(reviewRuns.repositoryId, repositoryId),
+                  eq(reviewRuns.pullRequestNumber, pullRequestNumber),
+                  eq(reviewRuns.errorCode, "no_gemini_key"),
+                  ne(reviewRuns.id, excludeRunId),
+                ),
+              )
+              .get(),
+          ).pipe(Effect.map((row) => row !== undefined)),
         listByRepository: (repositoryId: number, limit: number) =>
           databaseEffect("review_runs.list_by_repository", () =>
             client

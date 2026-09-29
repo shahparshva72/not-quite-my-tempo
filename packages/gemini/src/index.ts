@@ -37,3 +37,7 @@ export type {
   GeminiReviewResult,
   GeminiUsage,
 } from "./reviewer.js";
+
+export { checkGeminiKey } from "./key-check.js";
+
+export type { GeminiKeyCheckConfig } from "./key-check.js";

@@ -260,6 +260,7 @@ describe("installation webhooks", () => {
               fetchDetails: () => Effect.die("unused"),
               createReview: () => Effect.die("unused"),
               listReviewComments: () => Effect.succeed([]),
+              createIssueComment: () => Effect.void,
               fetchRepositoryFile: () => Effect.succeed(Option.none()),
             }),
           ),
