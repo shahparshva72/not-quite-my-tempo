@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Option } from "effect";
+import { Clock, Context, Data, Effect, Either, Layer, Option } from "effect";
 import { ReviewRunRepository } from "@not-quite-my-tempo/db";
 
 import { logInfo } from "../logging.js";
@@ -19,10 +19,28 @@ const liveStatuses = new Set([
   "waitingForPause",
 ]);
 
+/** Cloudflare couldn't say what the instance is doing right now. */
+export class WorkflowStatusUnavailableError extends Data.TaggedError(
+  "WorkflowStatusUnavailableError",
+)<{
+  readonly cause: unknown;
+}> {}
+
 export interface ReviewWorkflowStatusService {
-  /** The instance's status, or None when Cloudflare has no such instance. */
-  readonly status: (instanceId: string) => Effect.Effect<Option.Option<string>>;
+  /**
+   * The instance's status, or None only when Cloudflare says it doesn't
+   * exist. Any other failure is WorkflowStatusUnavailableError, so a
+   * transient error is never mistaken for a dead workflow.
+   */
+  readonly status: (
+    instanceId: string,
+  ) => Effect.Effect<Option.Option<string>, WorkflowStatusUnavailableError>;
 }
+
+// What Workflow.get() rejects with for an unknown instance ID (checked
+// against the Workflows runtime).
+const isInstanceNotFound = (cause: unknown) =>
+  cause instanceof Error && cause.message.includes("instance.not_found");
 
 export class ReviewWorkflowStatus extends Context.Tag(
   "@not-quite-my-tempo/api/ReviewWorkflowStatus",
@@ -35,14 +53,19 @@ export const ReviewWorkflowStatusLive = (
     ReviewWorkflowStatus,
     ReviewWorkflowStatus.of({
       status: (instanceId) =>
-        Effect.tryPromise(async () => {
-          const instance = await workflow.get(instanceId);
+        Effect.tryPromise({
+          try: async () => {
+            const instance = await workflow.get(instanceId);
 
-          return (await instance.status()).status;
+            return Option.some((await instance.status()).status);
+          },
+          catch: (cause) => cause,
         }).pipe(
-          Effect.map(Option.some),
-          // get() rejects for unknown instances; treat as gone.
-          Effect.orElseSucceed(() => Option.none<string>()),
+          Effect.catchAll((cause) =>
+            isInstanceNotFound(cause)
+              ? Effect.succeed(Option.none<string>())
+              : new WorkflowStatusUnavailableError({ cause }),
+          ),
         ),
     }),
   );
@@ -62,20 +85,27 @@ export const recoverStuckRuns = Effect.gen(function* () {
   const candidates = yield* ReviewRunRepository.listStuck(before, BATCH_SIZE);
 
   let recovered = 0;
+  let skipped = 0;
 
   for (const run of candidates) {
-    const status = yield* workflows.status(
-      workflowInstanceId(run.id, run.attempt),
-    );
+    const status = yield* workflows
+      .status(workflowInstanceId(run.id, run.attempt))
+      .pipe(Effect.either);
 
-    if (Option.isSome(status) && liveStatuses.has(status.value)) {
+    // Unknown is not dead: leave the run for the next check.
+    if (Either.isLeft(status)) {
+      skipped += 1;
+      continue;
+    }
+
+    if (Option.isSome(status.right) && liveStatuses.has(status.right.value)) {
       continue;
     }
 
     const changed = yield* ReviewRunRepository.markStuckFailed(
       run.id,
       before,
-      `Workflow ${Option.getOrElse(status, () => "missing")} without finishing the run`,
+      `Workflow ${Option.getOrElse(status.right, () => "missing")} without finishing the run`,
     );
 
     if (changed) {
@@ -86,7 +116,8 @@ export const recoverStuckRuns = Effect.gen(function* () {
   yield* logInfo("stuck_runs_checked", {
     checked: candidates.length,
     recovered,
+    skipped,
   });
 
-  return { checked: candidates.length, recovered };
+  return { checked: candidates.length, recovered, skipped };
 });

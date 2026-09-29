@@ -62,9 +62,13 @@ const recordingWorkflow = (created: string[]) => {
   return binding;
 };
 
-const handle = (reviewRequest: ReviewRequest, created: string[]) =>
+const handle = (
+  reviewRequest: ReviewRequest,
+  created: string[],
+  dailyRunCap?: number,
+) =>
   Effect.runPromise(
-    handleReviewRequest(reviewRequest).pipe(
+    handleReviewRequest(reviewRequest, dailyRunCap).pipe(
       Effect.provide(makeLiveLayer(env.DB)),
       Effect.provide(
         ReviewWorkflowLive(recordingWorkflow(created), "https://example.com"),
@@ -95,6 +99,11 @@ const failRun = (id: number, errorCode: string) =>
        VALUES (?, 'src/old.ts', 1, 'warning', 'From the failed attempt.')`,
     ).bind(id),
   ]);
+
+const retryCount = () =>
+  env.DB.prepare("SELECT count(*) AS total FROM review_run_retries")
+    .first<{ total: number }>()
+    .then((row) => row?.total);
 
 const findingCount = (id: number) =>
   env.DB.prepare(
@@ -172,6 +181,21 @@ describe("/fletcher again on the same commit", () => {
       "queued",
     ]);
     expect((await runRow(first))?.["attempt"]).toBe(2);
+    expect(created).toHaveLength(2);
+    expect(await retryCount()).toBe(1);
+  });
+
+  it("counts retries toward the daily review cap", async () => {
+    const created: string[] = [];
+    const run = runIdOf(await handle(request("opened"), created, 2));
+
+    await failRun(run, "post_review_error");
+    expect((await handle(request("manual"), created, 2)).status).toBe("queued");
+
+    await failRun(run, "post_review_error");
+    expect(await handle(request("manual"), created, 2)).toEqual({
+      status: "rate_limited",
+    });
     expect(created).toHaveLength(2);
   });
 

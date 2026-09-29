@@ -8,6 +8,7 @@ import {
   recoverStuckRuns,
   ReviewWorkflowStatus,
   STUCK_AFTER_MILLIS,
+  WorkflowStatusUnavailableError,
 } from "../src/application/stuck-runs";
 import { resetAndSeedRepository } from "./database";
 
@@ -69,7 +70,7 @@ describe("stuck review recovery", () => {
       [`review-run-${finished}`]: "complete",
     });
 
-    expect(result).toEqual({ checked: 3, recovered: 3 });
+    expect(result).toEqual({ checked: 3, recovered: 3, skipped: 0 });
 
     for (const id of [errored, missing, finished]) {
       expect(await runState(id)).toEqual({
@@ -77,6 +78,28 @@ describe("stuck review recovery", () => {
         error_code: "stuck",
       });
     }
+  });
+
+  it("leaves a run alone when Cloudflare can't say what its workflow is doing", async () => {
+    const id = await seedRun("unknown", "running", longAgo());
+
+    const result = await Effect.runPromise(
+      recoverStuckRuns.pipe(
+        Effect.provide(db()),
+        Effect.provide(
+          Layer.succeed(
+            ReviewWorkflowStatus,
+            ReviewWorkflowStatus.of({
+              status: () =>
+                new WorkflowStatusUnavailableError({ cause: "503 from API" }),
+            }),
+          ),
+        ),
+      ),
+    );
+
+    expect(result).toEqual({ checked: 1, recovered: 0, skipped: 1 });
+    expect(await runState(id)).toEqual({ status: "running", error_code: null });
   });
 
   it("leaves runs whose workflow is still making progress", async () => {

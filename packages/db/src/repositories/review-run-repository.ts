@@ -3,7 +3,6 @@ import {
   count,
   desc,
   eq,
-  gte,
   inArray,
   isNull,
   lt,
@@ -21,6 +20,7 @@ import {
   reviewVerdicts,
 } from "../schema/review-runs.js";
 import { findings } from "../schema/findings.js";
+import { reviewRunRetries } from "../schema/review-run-retries.js";
 import { repositories } from "../schema/repositories.js";
 import { Database } from "../services/database.js";
 
@@ -358,22 +358,27 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
                   .groupBy(reviewRuns.repositoryId)
                   .all(),
               ),
+        /**
+         * Review attempts started for an installation since `since`: runs
+         * created plus "/fletcher again" retries, which reuse their run's
+         * row. Feeds the daily cost cap.
+         */
         countForInstallationSince: (installationId: number, since: Date) =>
           databaseEffect("review_runs.count_for_installation_since", () =>
-            client
-              .select({ total: count() })
-              .from(reviewRuns)
-              .innerJoin(
-                repositories,
-                eq(reviewRuns.repositoryId, repositories.id),
-              )
-              .where(
-                and(
-                  eq(repositories.installationId, installationId),
-                  gte(reviewRuns.createdAt, since),
-                ),
-              )
-              .get(),
+            client.get<{ total: number }>(
+              sql`select (
+                select count(*) from ${reviewRuns}
+                join ${repositories} on ${repositories.id} = ${reviewRuns.repositoryId}
+                where ${repositories.installationId} = ${installationId}
+                  and ${reviewRuns.createdAt} >= ${since.getTime()}
+              ) + (
+                select count(*) from ${reviewRunRetries}
+                join ${reviewRuns} on ${reviewRuns.id} = ${reviewRunRetries.reviewRunId}
+                join ${repositories} on ${repositories.id} = ${reviewRuns.repositoryId}
+                where ${repositories.installationId} = ${installationId}
+                  and ${reviewRunRetries.createdAt} >= ${since.getTime()}
+              ) as total`,
+            ),
           ).pipe(Effect.map((row) => row?.total ?? 0)),
         markCompleted: (id: number) =>
           databaseEffect("review_runs.mark_completed", () =>
@@ -422,6 +427,20 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
                   and(eq(reviewRuns.id, id), eq(reviewRuns.status, "failed")),
                 )
                 .returning(),
+              // Recorded only when the update above changed the run, so two
+              // concurrent retries record one retry; counted by the daily cap.
+              client.insert(reviewRunRetries).select(
+                client
+                  // All columns in table order, as insert-select requires;
+                  // a NULL id lets SQLite assign the next one.
+                  .select({
+                    id: sql<number>`null`.as("id"),
+                    reviewRunId: reviewRuns.id,
+                    createdAt: sql<Date>`(unixepoch() * 1000)`.as("created_at"),
+                  })
+                  .from(reviewRuns)
+                  .where(and(eq(reviewRuns.id, id), sql`changes() > 0`)),
+              ),
               // Deletes only after the update above re-queued the run (now
               // queued and not started); any other run keeps its findings.
               client
