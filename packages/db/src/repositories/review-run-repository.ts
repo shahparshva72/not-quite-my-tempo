@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, ne, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import { Array, Data, Effect, Option } from "effect";
 
 import { databaseEffect, DatabaseError } from "../errors.js";
@@ -302,6 +302,47 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
               .returning()
               .get(),
           ).pipe(Effect.map(Option.fromNullable)),
+        /** Runs still queued or running that haven't changed since `before`. */
+        listStuck: (before: Date, limit: number) =>
+          databaseEffect("review_runs.list_stuck", () =>
+            client
+              .select()
+              .from(reviewRuns)
+              .where(
+                and(
+                  inArray(reviewRuns.status, ["queued", "running"]),
+                  lt(reviewRuns.updatedAt, before),
+                ),
+              )
+              .orderBy(reviewRuns.id)
+              .limit(limit)
+              .all(),
+          ),
+        /**
+         * Fails a run only if it is still queued or running and unchanged
+         * since `before`, so recovery can't overwrite a review that finished
+         * in the meantime. Returns whether it changed the run.
+         */
+        markStuckFailed: (id: number, before: Date, errorMessage: string) =>
+          databaseEffect("review_runs.mark_stuck_failed", () =>
+            client
+              .update(reviewRuns)
+              .set({
+                status: "failed",
+                completedAt: new Date(),
+                errorCode: "stuck",
+                errorMessage,
+              })
+              .where(
+                and(
+                  eq(reviewRuns.id, id),
+                  inArray(reviewRuns.status, ["queued", "running"]),
+                  lt(reviewRuns.updatedAt, before),
+                ),
+              )
+              .returning({ id: reviewRuns.id })
+              .get(),
+          ).pipe(Effect.map((row) => row !== undefined)),
         markFailed: (id: number, errorCode: string, errorMessage: string) =>
           databaseEffect("review_runs.mark_failed", () =>
             client

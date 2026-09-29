@@ -153,6 +153,7 @@ const failureReasons = new Map<string, string>([
     "this workspace has no Gemini key and its free reviews are used up",
   ],
   ["gemini_key_rejected", "Google rejected this workspace's Gemini key"],
+  ["stuck", "the review stopped before finishing"],
   [
     "gemini_key_unreadable",
     "the saved Gemini key couldn't be read; an admin needs to save it again",

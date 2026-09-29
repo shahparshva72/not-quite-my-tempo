@@ -28,6 +28,10 @@ import {
 } from "./application/authorization.js";
 import { refreshSessionAccess } from "./application/session-access.js";
 import {
+  recoverStuckRuns,
+  ReviewWorkflowStatusLive,
+} from "./application/stuck-runs.js";
+import {
   changeAdminRole,
   workspaceMembers,
 } from "./application/workspace-members.js";
@@ -777,4 +781,30 @@ app.notFound((c) => errorResponse(c, 404, "not_found", "Route not found"));
 
 app.onError((error, c) => internalError(c, error));
 
-export default app;
+/**
+ * Cron trigger (wrangler.jsonc): fails reviews whose workflow died without
+ * finishing them, so the dashboard doesn't say "Reviewing now" forever.
+ */
+const scheduled = (
+  _controller: ScheduledController,
+  env: Bindings,
+  ctx: ExecutionContext,
+) => {
+  ctx.waitUntil(
+    Effect.runPromise(
+      recoverStuckRuns.pipe(
+        Effect.provide(makeLiveLayer(env.DB)),
+        Effect.provide(
+          ReviewWorkflowStatusLive(env.REVIEW_PULL_REQUEST_WORKFLOW),
+        ),
+        Effect.catchAll((error) =>
+          logError("stuck_runs_check_failed", {
+            error: Inspectable.toStringUnknown(error),
+          }),
+        ),
+      ),
+    ),
+  );
+};
+
+export default Object.assign(app, { scheduled });

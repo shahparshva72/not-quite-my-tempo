@@ -3,6 +3,8 @@
   "name": "not-quite-my-tempo-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-10",
+  // Every 15 minutes: fail reviews whose workflow died (stuck-runs.ts).
+  "triggers": { "crons": ["*/15 * * * *"] },
   "workflows": [
     {
       "binding": "REVIEW_PULL_REQUEST_WORKFLOW",
