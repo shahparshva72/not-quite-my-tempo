@@ -110,6 +110,15 @@ Stage light tokens:
 | `--brass`      | `#EDB94E` | Primary button fill, focus ring, _mf_ marks                           |
 | `--brass-ink`  | `#0E1C1C` | Text on brass buttons                                                 |
 
+Three in-between shades were added in the SaaS shell revision (section 10).
+They use the same teal hue and never carry meaning on their own:
+
+| Token            | Hex       | Use                                                     |
+| ---------------- | --------- | ------------------------------------------------------- |
+| `--well`         | `#112222` | Sunken areas: inputs, code blocks, card footers         |
+| `--raised`       | `#1A3131` | Hover fill on rows and secondary buttons, inline `code` |
+| `--staff-strong` | `#36524F` | Borders that must read on `--surface`, badge outlines   |
+
 Measured contrast on `--paper` (WCAG): ink 15.1:1, graphite 7.4:1, red
 pencil 6.0:1 (5.3:1 on `--surface`), brass 9.7:1, and button text on brass
 9.7:1. All pass AA for body text, and ink and brass pass AAA. `--staff`
@@ -144,10 +153,11 @@ in a headline; line length at most 38rem (about 70 characters).
 ### Space, shape, motion
 
 - Spacing: 0.25rem base; section rhythm 3rem; page gutter `clamp(1rem, 4vw, 3rem)`.
-- Radius: 2px on buttons and surfaces (printed paper, not bubbles); switches
-  are fully round because they are physical controls. No shadows; depth
-  comes from `--surface` against `--paper` and one `--staff` border, never
-  from shadows (they disappear on dark).
+- Radius: 10px on cards and panels, 6px on buttons, inputs, and icon tiles,
+  4px on rehearsal marks and inline code; badges and switches are fully
+  round. (Revised from 2px in section 10.) No shadows; depth comes from
+  `--surface` against `--paper` and one `--staff` border, never from
+  shadows (they disappear on dark).
 - Motion: one moment only, the red-pencil circle on the landing sample
   (900ms stroke draw, 400ms delay). Switches animate 150ms because that
   motion answers a click. Both honor `prefers-reduced-motion`.
@@ -155,9 +165,9 @@ in a headline; line length at most 38rem (about 70 characters).
 
 ## 5. Pages
 
-Every page shares one top bar: the wordmark (Archivo expanded, links to
-`/dashboard` or `/`) on the left. On the right, signed out shows
-"Sign in"; signed in shows the GitHub login and a "Sign out" button.
+Every page shares one top bar and one footer; see section 10 for the
+current shell. The wireframes below record the original page structure;
+section 10 lists what the SaaS shell revision changed on each page.
 
 ### Landing `/`
 
@@ -187,9 +197,9 @@ Every page shares one top bar: the wordmark (Archivo expanded, links to
 ```
 
 Two columns on desktop; on phones the sample review stacks under the
-button. Left aligned throughout. The pricing section ships only when
-Phase 16 (billing) does; until then the trial line under the button is
-the whole story.
+button. Left aligned throughout. The pricing section shows the free
+bring-your-own-key plan and marks the hosted plan "Coming soon" with no
+price until Phase 16 (billing) ships.
 
 ### Onboarding `/onboarding`
 
@@ -330,3 +340,43 @@ Each step is one PR and keeps `pnpm lint`, `format:check`, `typecheck`,
 - **Illustration or photography.** The plan uses none. A drawn baton or
   metronome could come later, but the sample review already shows the
   product better than art would.
+
+## 10. SaaS shell revision (2026-09-30)
+
+A layout pass so the product reads as a finished SaaS app. The palette,
+type, dynamic marks, rehearsal marks, staff, and red pencil are unchanged.
+
+- **Shell.** A sticky top bar (blurred `--paper`, `--staff` bottom border)
+  with a brass logo tile holding a metronome glyph, the wordmark, and
+  section navigation: "How it works / Pricing / Privacy" signed out,
+  "Repositories / Setup" signed in (`aria-current="page"` on the current
+  one). Signed out shows "Sign in" and a brass "Get started"; signed in
+  shows the GitHub avatar, "Signed in as …", and a secondary "Sign out"
+  button. Content sits in a centered 72rem column; every page ends with a
+  footer. Below 40rem the wordmark text and login hide, leaving the logo.
+- **Components** (`dashboard/components.ts`): stroke icons, the GitHub
+  mark, `avatar` (GitHub picture from `avatars.githubusercontent.com` over
+  the login's initial, so a failed load still shows something), `pageHead`,
+  `crumbs`, and `reviewsBadge`. Buttons come in primary (brass), secondary,
+  ghost, and danger (red pencil outline), each in small and large sizes.
+- **Cards** replace bare lists: `--surface` fill, `--staff` border, a
+  header row, and an optional `--well` footer.
+- **Landing.** A "GitHub App" badge line above the headline; primary and
+  secondary buttons; the sample review framed as a pull request comment
+  by Fletcher. New sections: feature cards, the three setup steps, pricing
+  cards, privacy cards, and a closing sign-in banner.
+- **Dashboard.** Stat tiles (reviews, repositories reviewed, workspaces,
+  Gemini tokens); one card per workspace with Members and Settings
+  buttons, clickable repository rows, and a free-review meter in the
+  card footer (brass, red pencil when used up).
+- **Repository and review pages.** Breadcrumbs. Reviews list in a card.
+  The review page puts the verdict and summary in a card, each finding in
+  its own card with a red pencil or brass left edge for critical and
+  warning, and a sticky side panel with "View on GitHub", a severity tally,
+  and details.
+- **Settings, members, onboarding, messages.** Settings has a key card and
+  a separate "Remove key" section; members show avatars and role badges;
+  onboarding shows a progress bar and each step as a card; message pages
+  are one centered card with the logo.
+- Rows without a dynamic mark show a small `--staff-strong` dot so the
+  mark column stays aligned.

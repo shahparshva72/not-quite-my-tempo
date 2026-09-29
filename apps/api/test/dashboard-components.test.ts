@@ -73,7 +73,7 @@ describe("review wording", () => {
       { critical: 1, warning: 0, suggestion: 0 },
     );
 
-    expect(await render(outcome.mark)).toBe("");
+    expect(await render(outcome.mark)).not.toContain("dyn");
     expect(await render(outcome.text)).toContain("Reviewing now");
   });
 });
