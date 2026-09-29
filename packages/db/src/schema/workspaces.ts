@@ -28,8 +28,6 @@ export const workspaces = sqliteTable("workspaces", {
     () => users.id,
     { onDelete: "set null" },
   ),
-  // Platform-key reviews used from the free trial; taken atomically.
-  trialReviewsUsed: integer("trial_reviews_used").notNull().default(0),
   createdAt: integer("created_at", { mode: "timestamp_ms" })
     .notNull()
     .default(sql`(unixepoch() * 1000)`),

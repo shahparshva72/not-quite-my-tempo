@@ -1,6 +1,8 @@
 import { Context, Data, Effect, Layer, Option } from "effect";
-import { WorkspaceRepository } from "@not-quite-my-tempo/db";
-import type { Workspace } from "@not-quite-my-tempo/db";
+import {
+  ReviewRunRepository,
+  WorkspaceRepository,
+} from "@not-quite-my-tempo/db";
 import { checkGeminiKey } from "@not-quite-my-tempo/gemini";
 import type {
   GeminiProvider,
@@ -51,10 +53,11 @@ export interface TrialStatus {
   readonly remaining: number;
 }
 
-export const trialStatus = (workspace: Workspace): TrialStatus => ({
-  used: workspace.trialReviewsUsed,
+/** `used` comes from ReviewRunRepository.trialReviewsUsed (derived). */
+export const trialStatus = (used: number): TrialStatus => ({
+  used,
   total: FREE_TRIAL_REVIEWS,
-  remaining: Math.max(0, FREE_TRIAL_REVIEWS - workspace.trialReviewsUsed),
+  remaining: Math.max(0, FREE_TRIAL_REVIEWS - used),
 });
 
 /** Settings page data. Never includes the key, only its last 4. */
@@ -66,10 +69,12 @@ export const workspaceSettings = (access: SessionAccess, workspaceId: number) =>
       "view_settings",
     );
 
+    const [usage] = yield* ReviewRunRepository.trialReviewsUsed([workspaceId]);
+
     return {
       workspace: viewer.workspace,
       viewerRole: viewer.role,
-      trial: trialStatus(viewer.workspace),
+      trial: trialStatus(usage?.used ?? 0),
     };
   });
 

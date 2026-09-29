@@ -268,9 +268,15 @@ describe("dashboard key status", () => {
   it("shows the trial, the workspace key, or paused reviews", async () => {
     expect(await dashboard()).toContain("5 of 5 free reviews left.");
 
-    await env.DB.prepare(
-      "UPDATE workspaces SET trial_reviews_used = 5 WHERE id = 1",
-    ).run();
+    // Five completed reviews on the platform key use up the trial.
+    for (let index = 0; index < 5; index += 1) {
+      await env.DB.prepare(
+        `INSERT INTO review_runs (repository_id, pull_request_number, head_sha, status, trigger, key_source, trial_workspace_id)
+         VALUES (1, ?, ?, 'completed', 'opened', 'platform', 1)`,
+      )
+        .bind(200 + index, `trial-${index}`)
+        .run();
+    }
 
     expect(await dashboard()).toContain(
       "Free reviews used up. Reviews are paused.",

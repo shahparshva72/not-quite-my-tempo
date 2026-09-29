@@ -8,7 +8,6 @@ import {
   chooseReviewKey,
   explainMissingKey,
   GeminiKeyUnreadableError,
-  refundTrialIfGeminiFailed,
   resolveGeminiKey,
 } from "../src/application/review-keys";
 import { geminiKeyContext } from "../src/application/workspace-settings";
@@ -30,10 +29,24 @@ const createRun = (headSha: string, pullRequestNumber = 42) =>
     }).pipe(Effect.provide(db())),
   );
 
-const workspaceRow = () =>
-  env.DB.prepare(
-    "SELECT trial_reviews_used FROM workspaces WHERE id = 1",
-  ).first<{ trial_reviews_used: number }>();
+// Free trial reviews workspace 1 has used, as the product counts them.
+const trialUsed = () =>
+  Effect.runPromise(
+    ReviewRunRepository.trialReviewsUsed([1]).pipe(Effect.provide(db())),
+  ).then((usage) => usage[0]?.used);
+
+// Runs that already claimed the platform key, in the given state.
+const seedTrialRuns = async (count: number, status: string) => {
+  for (let index = 0; index < count; index += 1) {
+    const run = await createRun(`seed-${status}-${index}`, 100 + index);
+
+    await env.DB.prepare(
+      "UPDATE review_runs SET key_source = 'platform', trial_workspace_id = 1, status = ? WHERE id = ?",
+    )
+      .bind(status, run.id)
+      .run();
+  }
+};
 
 const keySourceOf = (runId: number) =>
   env.DB.prepare("SELECT key_source FROM review_runs WHERE id = ?")
@@ -59,7 +72,7 @@ const choose = (runId: number) =>
 describe("choosing a review's Gemini key", () => {
   beforeEach(resetAndSeedRepository);
 
-  it("uses the workspace's own key without touching the trial", async () => {
+  it("uses the workspace's own key without using a free review", async () => {
     await storeWorkspaceKey("AIzaWorkspaceKey1234567890");
     const run = await createRun("own-key");
 
@@ -69,21 +82,19 @@ describe("choosing a review's Gemini key", () => {
       workspaceId: 1,
     });
     expect(await keySourceOf(run.id)).toBe("workspace");
-    expect((await workspaceRow())?.trial_reviews_used).toBe(0);
+    expect(await trialUsed()).toBe(0);
   });
 
-  it("takes a free trial review when the workspace has no key", async () => {
+  it("claims a free review when the workspace has no key", async () => {
     const run = await createRun("trial");
 
     expect((await choose(run.id)).source).toBe("platform");
     expect(await keySourceOf(run.id)).toBe("platform");
-    expect((await workspaceRow())?.trial_reviews_used).toBe(1);
+    expect(await trialUsed()).toBe(1);
   });
 
-  it("blocks the review once the 5 free reviews are used", async () => {
-    await env.DB.prepare(
-      "UPDATE workspaces SET trial_reviews_used = 5 WHERE id = 1",
-    ).run();
+  it("blocks the review once 5 free reviews are used", async () => {
+    await seedTrialRuns(5, "completed");
     const run = await createRun("spent");
 
     expect(await choose(run.id)).toEqual({
@@ -92,13 +103,11 @@ describe("choosing a review's Gemini key", () => {
       workspaceId: 1,
     });
     expect(await keySourceOf(run.id)).toBeNull();
-    expect((await workspaceRow())?.trial_reviews_used).toBe(5);
+    expect(await trialUsed()).toBe(5);
   });
 
   it("gives the last free review to exactly one of two concurrent runs", async () => {
-    await env.DB.prepare(
-      "UPDATE workspaces SET trial_reviews_used = 4 WHERE id = 1",
-    ).run();
+    await seedTrialRuns(4, "completed");
 
     const [first, second] = await Promise.all([
       createRun("race-a"),
@@ -111,7 +120,111 @@ describe("choosing a review's Gemini key", () => {
       "none",
       "platform",
     ]);
-    expect((await workspaceRow())?.trial_reviews_used).toBe(5);
+    expect(await trialUsed()).toBe(5);
+  });
+});
+
+describe("counting free reviews fairly", () => {
+  beforeEach(resetAndSeedRepository);
+
+  it("never claims twice when the key step is retried", async () => {
+    const run = await createRun("retried-step");
+
+    expect((await choose(run.id)).source).toBe("platform");
+    expect((await choose(run.id)).source).toBe("platform");
+    expect(await trialUsed()).toBe(1);
+  });
+
+  it("counts reviews in progress and completed, never failed or cancelled", async () => {
+    await seedTrialRuns(1, "queued");
+    await seedTrialRuns(1, "running");
+    await seedTrialRuns(1, "completed");
+    await seedTrialRuns(2, "failed");
+    await seedTrialRuns(1, "cancelled");
+
+    expect(await trialUsed()).toBe(3);
+  });
+
+  it("gives a free review back as soon as a run fails, for any reason", async () => {
+    const run = await createRun("fails-later");
+
+    await choose(run.id);
+    expect(await trialUsed()).toBe(1);
+
+    await env.DB.prepare(
+      "UPDATE review_runs SET status = 'failed', error_code = 'post_review_error' WHERE id = ?",
+    )
+      .bind(run.id)
+      .run();
+
+    expect(await trialUsed()).toBe(0);
+  });
+
+  it("keeps free reviews with the workspace that used them when a repository moves", async () => {
+    const run = await createRun("before-transfer");
+
+    await choose(run.id);
+
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO workspaces (id, github_account_id, github_account_login, account_type)
+         VALUES (2, 2002, 'new-owner', 'Organization')`,
+      ),
+      env.DB.prepare(
+        `INSERT INTO github_installations
+          (id, github_installation_id, github_account_id, github_account_login, account_type, workspace_id)
+         VALUES (2, 1002, 2002, 'new-owner', 'Organization', 2)`,
+      ),
+      env.DB.prepare(
+        "UPDATE repositories SET installation_id = 2 WHERE id = 1",
+      ),
+    ]);
+
+    const usage = await Effect.runPromise(
+      ReviewRunRepository.trialReviewsUsed([1, 2]).pipe(Effect.provide(db())),
+    );
+
+    expect(usage).toEqual([
+      { workspaceId: 1, used: 1 },
+      { workspaceId: 2, used: 0 },
+    ]);
+  });
+
+  it("charges a pull request once across a failed attempt and its retry", async () => {
+    const run = await createRun("retry-once");
+
+    await choose(run.id);
+    await env.DB.prepare(
+      "UPDATE review_runs SET status = 'failed', error_code = 'stuck' WHERE id = ?",
+    )
+      .bind(run.id)
+      .run();
+
+    await Effect.runPromise(
+      ReviewRunRepository.requeueFailed(run.id).pipe(Effect.provide(db())),
+    );
+
+    expect((await choose(run.id)).source).toBe("platform");
+    expect(await trialUsed()).toBe(1);
+  });
+
+  it("holds a retried run to the same 5-review limit", async () => {
+    const run = await createRun("retry-over-limit");
+
+    await choose(run.id);
+    await env.DB.prepare(
+      "UPDATE review_runs SET status = 'failed', error_code = 'gemini_error' WHERE id = ?",
+    )
+      .bind(run.id)
+      .run();
+    await seedTrialRuns(5, "completed");
+
+    await Effect.runPromise(
+      ReviewRunRepository.requeueFailed(run.id).pipe(Effect.provide(db())),
+    );
+
+    expect((await choose(run.id)).source).toBe("none");
+    expect(await trialUsed()).toBe(5);
   });
 });
 
@@ -222,59 +335,6 @@ describe("explaining a blocked review", () => {
     expect(comments[0]).toContain(
       "https://notmytempo.dev/workspaces/1/settings",
     );
-  });
-});
-
-describe("refunding trial reviews lost to Gemini", () => {
-  beforeEach(resetAndSeedRepository);
-
-  const failedRun = async (keySource: string | null, errorCode: string) => {
-    const run = await createRun(`${keySource}-${errorCode}`);
-
-    await env.DB.prepare(
-      "UPDATE review_runs SET status = 'failed', key_source = ?, error_code = ? WHERE id = ?",
-    )
-      .bind(keySource, errorCode, run.id)
-      .run();
-
-    return run.id;
-  };
-
-  const refund = (runId: number) =>
-    Effect.runPromise(
-      refundTrialIfGeminiFailed(runId).pipe(Effect.provide(db())),
-    );
-
-  const setTrialUsed = (used: number) =>
-    env.DB.prepare("UPDATE workspaces SET trial_reviews_used = ? WHERE id = 1")
-      .bind(used)
-      .run();
-
-  it("gives back a trial review when Gemini failed a platform-key run", async () => {
-    await setTrialUsed(3);
-
-    expect(await refund(await failedRun("platform", "gemini_error"))).toBe(
-      true,
-    );
-    expect((await workspaceRow())?.trial_reviews_used).toBe(2);
-  });
-
-  it("never refunds workspace-key runs or other failures", async () => {
-    await setTrialUsed(3);
-
-    expect(await refund(await failedRun("workspace", "gemini_error"))).toBe(
-      false,
-    );
-    expect(await refund(await failedRun("platform", "post_review_error"))).toBe(
-      false,
-    );
-    expect((await workspaceRow())?.trial_reviews_used).toBe(3);
-  });
-
-  it("never goes below zero", async () => {
-    await refund(await failedRun("platform", "gemini_error"));
-
-    expect((await workspaceRow())?.trial_reviews_used).toBe(0);
   });
 });
 

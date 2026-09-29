@@ -1,4 +1,15 @@
-import { and, count, desc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  ne,
+  sql,
+} from "drizzle-orm";
 import { Array, Data, Effect, Option } from "effect";
 
 import { databaseEffect, DatabaseError } from "../errors.js";
@@ -28,6 +39,30 @@ export interface RepositoryUsageSummary {
   readonly outputTokens: number;
   readonly totalTokens: number;
 }
+
+export interface TrialUsage {
+  readonly workspaceId: number;
+  readonly used: number;
+}
+
+/**
+ * A free trial review counts while its run is queued, running, or
+ * completed on the platform key. Failed and cancelled runs never count, so
+ * people aren't charged for reviews they didn't get, and nothing has to be
+ * refunded. See docs/BYOK_TRIAL_DESIGN.md.
+ */
+const countedTrialRun = and(
+  eq(reviewRuns.keySource, "platform"),
+  inArray(reviewRuns.status, ["queued", "running", "completed"]),
+);
+
+// Counted trial runs charged to a workspace, as a subquery (aliased so it
+// can sit inside an UPDATE of review_runs).
+const trialRunCount = (workspaceId: number) =>
+  sql`select count(*) from review_runs as counted
+      where counted.trial_workspace_id = ${workspaceId}
+        and counted.key_source = 'platform'
+        and counted.status in ('queued', 'running', 'completed')`;
 
 export type ReviewKeySource = (typeof reviewKeySources)[number];
 
@@ -199,6 +234,57 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
               .returning()
               .get(),
           ).pipe(Effect.map(Option.fromNullable)),
+        /**
+         * Claims one of a workspace's free trial reviews for this run, in a
+         * single statement: the run is marked 'platform' only if it has no
+         * key source yet and the workspace has fewer than `limit` counted
+         * trial runs. The run itself records the claim, so retrying this is
+         * harmless. Returns whether the claim succeeded.
+         */
+        claimTrialReview: (id: number, workspaceId: number, limit: number) =>
+          databaseEffect("review_runs.claim_trial_review", () =>
+            client
+              .update(reviewRuns)
+              .set({ keySource: "platform", trialWorkspaceId: workspaceId })
+              .where(
+                and(
+                  eq(reviewRuns.id, id),
+                  isNull(reviewRuns.keySource),
+                  sql`(${trialRunCount(workspaceId)}) < ${limit}`,
+                ),
+              )
+              .returning({ id: reviewRuns.id })
+              .get(),
+          ).pipe(Effect.map((row) => row !== undefined)),
+        /** Free trial reviews each workspace has used (see trialRunCount). */
+        trialReviewsUsed: (workspaceIds: readonly number[]) =>
+          workspaceIds.length === 0
+            ? Effect.succeed<readonly TrialUsage[]>([])
+            : databaseEffect("review_runs.trial_reviews_used", () =>
+                client
+                  .select({
+                    workspaceId: reviewRuns.trialWorkspaceId,
+                    used: count(),
+                  })
+                  .from(reviewRuns)
+                  .where(
+                    and(
+                      countedTrialRun,
+                      sql`${reviewRuns.trialWorkspaceId} in (select value from json_each(${JSON.stringify(workspaceIds)}))`,
+                    ),
+                  )
+                  .groupBy(reviewRuns.trialWorkspaceId)
+                  .all(),
+              ).pipe(
+                Effect.map((rows) =>
+                  workspaceIds.map((workspaceId): TrialUsage => ({
+                    workspaceId,
+                    used:
+                      rows.find((row) => row.workspaceId === workspaceId)
+                        ?.used ?? 0,
+                  })),
+                ),
+              ),
         setKeySource: (id: number, keySource: ReviewKeySource) =>
           databaseEffect("review_runs.set_key_source", () =>
             client
@@ -320,6 +406,7 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
                   trigger: "manual",
                   attempt: sql`${reviewRuns.attempt} + 1`,
                   keySource: null,
+                  trialWorkspaceId: null,
                   model: null,
                   verdict: null,
                   summary: null,

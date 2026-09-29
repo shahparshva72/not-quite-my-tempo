@@ -9,6 +9,7 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 import { repositories } from "./repositories.js";
+import { workspaces } from "./workspaces.js";
 
 export const reviewRunStatuses = [
   "queued",
@@ -48,6 +49,13 @@ export const reviewRuns = sqliteTable(
     verdict: text("verdict", { enum: reviewVerdicts }),
     summary: text("summary"),
     keySource: text("key_source", { enum: reviewKeySources }),
+    // The workspace whose free trial this run used, fixed when it claims
+    // one, so repository transfers can't move trial history between
+    // workspaces.
+    trialWorkspaceId: integer("trial_workspace_id").references(
+      () => workspaces.id,
+      { onDelete: "set null" },
+    ),
     // Bumped when "/fletcher again" retries a failed run on the same
     // commit; part of the Workflow instance ID, which can't be reused.
     attempt: integer("attempt").notNull().default(1),

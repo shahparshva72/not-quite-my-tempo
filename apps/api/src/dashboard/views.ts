@@ -14,6 +14,7 @@ import {
   workspaceActionAllowed,
 } from "../application/authorization.js";
 import { trialStatus } from "../application/workspace-settings.js";
+import type { TrialStatus } from "../application/workspace-settings.js";
 
 import type {
   RepositoryOverview,
@@ -186,8 +187,8 @@ const roleLabels = {
 } as const satisfies Record<WorkspaceRole, string>;
 
 /** One line on the dashboard: whose Gemini key reviews use. */
-const keyStatusLine = (workspace: Workspace) => {
-  const trial = trialStatus(workspace);
+const keyStatusLine = (workspace: Workspace, trialReviewsUsed: number) => {
+  const trial = trialStatus(trialReviewsUsed);
 
   return workspace.geminiKeyLast4 !== null
     ? html`<span class="quiet">Reviews use this workspace's Gemini key.</span>`
@@ -207,7 +208,7 @@ const keyStatusLine = (workspace: Workspace) => {
 };
 
 const workspaceSection = (
-  { workspace, role, repositories }: WorkspaceOverview,
+  { workspace, role, repositories, trialReviewsUsed }: WorkspaceOverview,
   now: Date,
 ) =>
   html`<section class="workspace">
@@ -217,7 +218,7 @@ const workspaceSection = (
       <a href="/workspaces/${workspace.id}/members">Members</a>
       <a href="/workspaces/${workspace.id}/settings">Settings</a>
     </div>
-    <p class="key-status">${keyStatusLine(workspace)}</p>
+    <p class="key-status">${keyStatusLine(workspace, trialReviewsUsed)}</p>
     ${
       repositories.length === 0
         ? html`<p class="quiet">
@@ -373,9 +374,7 @@ const settingsNotice = (notice: SettingsNotice | null) =>
           ${noticeMessages[notice]}
         </p>`;
 
-const keySummary = (workspace: Workspace, now: Date) => {
-  const trial = trialStatus(workspace);
-
+const keySummary = (workspace: Workspace, trial: TrialStatus, now: Date) => {
   if (workspace.geminiKeyLast4 !== null) {
     return html`<p>
       Reviews use this workspace's
@@ -405,11 +404,12 @@ export const settingsPage = (
   data: {
     readonly workspace: Workspace;
     readonly viewerRole: WorkspaceRole;
+    readonly trial: TrialStatus;
   },
   notice: SettingsNotice | null,
   now: Date,
 ) => {
-  const { workspace, viewerRole } = data;
+  const { workspace, viewerRole, trial } = data;
   const canManage = workspaceActionAllowed(viewerRole, "manage_settings");
   const hasKey = workspace.geminiKeyLast4 !== null;
 
@@ -420,7 +420,7 @@ export const settingsPage = (
       <h1 class="page-title">Settings for ${workspace.githubAccountLogin}</h1>
       ${settingsNotice(notice)}
       <h2>Gemini API key</h2>
-      ${keySummary(workspace, now)}
+      ${keySummary(workspace, trial, now)}
       ${
         canManage
           ? html`<form

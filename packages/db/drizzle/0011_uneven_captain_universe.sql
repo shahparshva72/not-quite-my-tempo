@@ -1,0 +1,1 @@
+ALTER TABLE `workspaces` DROP COLUMN `trial_reviews_used`;

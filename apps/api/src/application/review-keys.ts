@@ -62,6 +62,12 @@ export const chooseReviewKey = (reviewRunId: number) =>
       workspaceId: Option.getOrNull(workspace)?.id ?? null,
     });
 
+    // A retried step finds the source it already recorded, so it never
+    // claims a second free review for the same run.
+    if (run.keySource !== null) {
+      return choice(run.keySource);
+    }
+
     if (Option.isNone(workspace)) {
       return choice("none");
     }
@@ -72,20 +78,19 @@ export const chooseReviewKey = (reviewRunId: number) =>
       return choice("workspace");
     }
 
-    const trial = yield* WorkspaceRepository.takeTrialReview(
+    const claimed = yield* ReviewRunRepository.claimTrialReview(
+      reviewRunId,
       workspace.value.id,
       FREE_TRIAL_REVIEWS,
     );
 
-    if (Option.isNone(trial)) {
+    if (!claimed) {
       return choice("none");
     }
 
-    yield* ReviewRunRepository.setKeySource(reviewRunId, "platform");
-    yield* logInfo("trial_review_taken", {
+    yield* logInfo("trial_review_claimed", {
       workspaceId: workspace.value.id,
       reviewRunId,
-      remaining: FREE_TRIAL_REVIEWS - trial.value,
     });
 
     return choice("platform");
@@ -189,38 +194,3 @@ export const explainMissingKey = (
       }),
     ),
   );
-
-/**
- * Gives a free trial review back when the review used the platform key and
- * failed because Gemini did (outage, quota, or an unusable answer): people
- * shouldn't lose trial reviews to our provider's failures. Runs as its own
- * Workflow step, so a retried workflow can't refund twice.
- */
-export const refundTrialIfGeminiFailed = (reviewRunId: number) =>
-  Effect.gen(function* () {
-    const run = yield* ReviewRunRepository.findById(reviewRunId);
-
-    if (
-      Option.isNone(run) ||
-      run.value.keySource !== "platform" ||
-      run.value.errorCode !== "gemini_error"
-    ) {
-      return false;
-    }
-
-    const workspace = yield* WorkspaceRepository.findByRepositoryId(
-      run.value.repositoryId,
-    );
-
-    if (Option.isNone(workspace)) {
-      return false;
-    }
-
-    yield* WorkspaceRepository.refundTrialReview(workspace.value.id);
-    yield* logInfo("trial_review_refunded", {
-      workspaceId: workspace.value.id,
-      reviewRunId,
-    });
-
-    return true;
-  });

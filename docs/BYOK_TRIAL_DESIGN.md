@@ -23,7 +23,7 @@ workspaces
   + gemini_key_last4       text      -- shown in the UI; the key never is
   + gemini_key_updated_at  timestamp
   + gemini_key_updated_by  integer references users(id) on delete set null
-  + trial_reviews_used     integer not null default 0
+  (trial usage is derived from review_runs; see "Counting free reviews")
 
 review_runs
   + key_source             text      -- 'workspace' | 'platform'; null for
@@ -48,23 +48,38 @@ never use up trial reviews.
    posts one comment on the pull request explaining how to add a key.
    There is one comment per pull request, not one per push.
 
-Taking a trial review is a single conditional update, so concurrent
-reviews can't overspend:
+### Counting free reviews (revised 2026-09-30)
+
+There is no counter. A free review **counts while its run is queued,
+running, or completed on the platform key**; failed and cancelled runs never
+count. The first version kept a `trial_reviews_used` counter that the key
+step incremented and a refund step decremented. Reviewing every path showed
+four ways that miscounts:
+
+| Case                                                                | Counter behaviour                    | Derived count                                                                |
+| ------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------- |
+| DB write fails after the trial is taken; Workflows retries the step | Takes a second review                | The run records its own claim; a retry sees it and claims nothing            |
+| Refund write succeeds but its reply is lost; the step retries       | Refunds twice                        | Nothing to refund: a failed run just stops counting                          |
+| `/fletcher again` after a non-Gemini failure (post, DB, stuck)      | Charges the pull request twice       | The failed attempt stopped counting; the retry claims once, within the limit |
+| Gemini answered but saving or posting the review failed             | User loses a review and gets nothing | Failed runs don't count                                                      |
+
+Claiming is one statement, so concurrent runs can't pass 5:
 
 ```sql
-UPDATE workspaces SET trial_reviews_used = trial_reviews_used + 1
-WHERE id = ? AND trial_reviews_used < 5
-RETURNING trial_reviews_used
+UPDATE review_runs
+SET key_source = 'platform', trial_workspace_id = :workspace
+WHERE id = :run AND key_source IS NULL
+  AND (SELECT count(*) FROM review_runs
+       WHERE trial_workspace_id = :workspace AND key_source = 'platform'
+         AND status IN ('queued', 'running', 'completed')) < 5
 ```
 
-The step's output is only the key **source**, never the key. Workflows
-persist step outputs, so the key is decrypted inside the Gemini step itself
-and never stored. Because step outputs are cached, a retried Gemini step
-does not take a second trial review. A trial review is refunded when the run used the platform key and failed
-with `gemini_error` (outage, quota, or an unusable answer), in its own
-workflow step so a retry can't refund twice. Live testing found Gemini
-returning 503 "high demand", which would otherwise cost users a trial
-review. Failures before the key step never take one.
+`trial_workspace_id` (migration `0012`) fixes which workspace was charged
+when the claim happens, so transferring a repository to another account
+doesn't move its trial history. Migration `0011` drops the old counter.
+Retries clear the claim (`requeueFailed`) and must claim again under the
+same limit. We absorb the Gemini cost of failed reviews; that is the price
+of never charging someone for a review they didn't get.
 
 When Gemini rejects a **workspace** key (HTTP 400, 401, or 403), the run
 fails with `gemini_key_rejected`: "your workspace's Gemini key was

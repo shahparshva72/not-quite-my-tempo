@@ -41,7 +41,8 @@ Then Stripe billing (Phase 16, part 2).
 Design: [BYOK_TRIAL_DESIGN.md](./BYOK_TRIAL_DESIGN.md).
 
 - Migration `0008`: encrypted workspace Gemini key (+ last4, updated
-  at/by), `workspaces.trial_reviews_used`, `review_runs.key_source`.
+  at/by) and `review_runs.key_source`; trial usage is derived from runs
+  (`0011`–`0012`, see BYOK_TRIAL_DESIGN.md "Counting free reviews").
 - Workflow step "choose gemini key" runs just before Gemini: the
   workspace key, else one of 5 trial reviews (atomic conditional update),
   else the run fails `no_gemini_key` and Fletcher comments once per PR.

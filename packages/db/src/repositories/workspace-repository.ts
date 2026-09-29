@@ -1,4 +1,4 @@
-import { and, eq, gt, lt, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 
 import { databaseEffect } from "../errors.js";
@@ -58,48 +58,6 @@ export class WorkspaceRepository extends Effect.Service<WorkspaceRepository>()(
               ),
             ),
           ),
-        /**
-         * Takes one free trial review if any remain. A single conditional
-         * update, so concurrent reviews can't take more than `limit`.
-         * Returns how many are used after taking one, or None when the
-         * trial is spent.
-         */
-        takeTrialReview: (workspaceId: number, limit: number) =>
-          databaseEffect("workspaces.take_trial_review", () =>
-            client
-              .update(workspaces)
-              .set({
-                trialReviewsUsed: sql`${workspaces.trialReviewsUsed} + 1`,
-              })
-              .where(
-                and(
-                  eq(workspaces.id, workspaceId),
-                  lt(workspaces.trialReviewsUsed, limit),
-                ),
-              )
-              .returning({ used: workspaces.trialReviewsUsed })
-              .get(),
-          ).pipe(
-            Effect.map((row) =>
-              Option.fromNullable(row).pipe(Option.map((found) => found.used)),
-            ),
-          ),
-        /** Gives one trial review back; never goes below zero. */
-        refundTrialReview: (workspaceId: number) =>
-          databaseEffect("workspaces.refund_trial_review", () =>
-            client
-              .update(workspaces)
-              .set({
-                trialReviewsUsed: sql`${workspaces.trialReviewsUsed} - 1`,
-              })
-              .where(
-                and(
-                  eq(workspaces.id, workspaceId),
-                  gt(workspaces.trialReviewsUsed, 0),
-                ),
-              )
-              .run(),
-          ).pipe(Effect.asVoid),
         /** Stores an encrypted key and records who saved it, in one batch. */
         saveGeminiKeyWithAudit: (saved: SavedGeminiKey) =>
           databaseEffect("workspaces.save_gemini_key", () => {
