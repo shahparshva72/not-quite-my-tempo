@@ -139,6 +139,7 @@ export interface RepositoryOverview {
 export interface WorkspaceOverview {
   readonly workspace: Workspace;
   readonly role: WorkspaceRole;
+  readonly trialReviewsUsed: number;
   readonly repositories: readonly RepositoryOverview[];
 }
 
@@ -157,10 +158,18 @@ export const dashboardOverview = (access: SessionAccess) =>
     const latest = yield* summarizeRuns(latestRuns);
     const usage = yield* ReviewRunRepository.usageByRepositoryIds(ids);
 
+    const trialUsage = yield* ReviewRunRepository.trialReviewsUsed(
+      memberships.map((membership) => membership.workspace.id),
+    );
+
     const workspaces: readonly WorkspaceOverview[] = memberships.map(
       (membership) => ({
         workspace: membership.workspace,
         role: membership.role,
+        trialReviewsUsed:
+          trialUsage.find(
+            (entry) => entry.workspaceId === membership.workspace.id,
+          )?.used ?? 0,
         repositories: visible
           .filter((entry) => entry.workspaceId === membership.workspace.id)
           .map(({ repository }) => ({

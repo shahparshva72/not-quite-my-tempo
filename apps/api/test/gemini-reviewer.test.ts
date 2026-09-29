@@ -106,6 +106,27 @@ describe("GeminiReviewer.review", () => {
     );
   });
 
+  it("sends Vertex AI keys to Vertex AI's express endpoint", async () => {
+    const urls: string[] = [];
+
+    const fetchImpl: typeof fetch = (url, init) => {
+      urls.push(String(url));
+      expect(new Headers(init?.headers).get("x-goog-api-key")).toBe(
+        "test-api-key",
+      );
+
+      return Promise.resolve(successResponse());
+    };
+
+    await Effect.runPromise(
+      runReview({ provider: "vertex_express", fetchImpl }),
+    );
+
+    expect(urls).toEqual([
+      "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.8-flash:generateContent",
+    ]);
+  });
+
   it("decodes the candidate JSON into a review with usage metadata", async () => {
     const fetchImpl: typeof fetch = () => Promise.resolve(successResponse());
 

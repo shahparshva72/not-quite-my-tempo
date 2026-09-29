@@ -6,7 +6,6 @@ import {
 import { Data, Effect, Inspectable, Match, Schema } from "effect";
 import { makeLiveLayer } from "@not-quite-my-tempo/db";
 import { GeminiReviewerLive } from "@not-quite-my-tempo/gemini";
-import type { GeminiReviewerConfig } from "@not-quite-my-tempo/gemini";
 
 import {
   fetchReviewablePullRequest,
@@ -22,6 +21,13 @@ import {
   reviewErrorCode,
 } from "../application/review-workflow.js";
 import type { ReviewPipelineError } from "../application/review-workflow.js";
+import {
+  chooseReviewKey,
+  explainMissingKey,
+  resolveGeminiKey,
+  WorkspaceGeminiKeyRejectedError,
+} from "../application/review-keys.js";
+import type { ResolvedGeminiKey } from "../application/review-keys.js";
 import { ReviewWorkflowParams } from "../application/review-requests.js";
 import { GitHubAppAuthLive } from "../github/app-auth.js";
 import { GitHubPullRequestClientLive } from "../github/pull-request-client.js";
@@ -33,6 +39,10 @@ type WorkflowEnv = {
   readonly GITHUB_APP_PRIVATE_KEY: string;
   readonly GEMINI_API_KEY: string;
   readonly GEMINI_MODEL?: string;
+  // "vertex_express" when GEMINI_API_KEY is a Vertex AI key; otherwise the
+  // Gemini Developer API (Google AI Studio key).
+  readonly GEMINI_API_PROVIDER?: string;
+  readonly TOKEN_ENCRYPTION_KEY: string;
 };
 
 class WorkflowExecutionError extends Data.TaggedError(
@@ -124,16 +134,27 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
       privateKey: env.GITHUB_APP_PRIVATE_KEY,
     });
 
-    const geminiConfig: GeminiReviewerConfig =
-      env.GEMINI_MODEL === undefined
-        ? { apiKey: env.GEMINI_API_KEY }
-        : { apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL };
+    // Built per run: the key depends on the workspace (its own key, or the
+    // platform key for trial reviews). See docs/BYOK_TRIAL_DESIGN.md.
+    const geminiLayerFor = ({ apiKey, provider }: ResolvedGeminiKey) =>
+      GeminiReviewerLive(
+        env.GEMINI_MODEL === undefined
+          ? { apiKey, provider }
+          : { apiKey, provider, model: env.GEMINI_MODEL },
+      );
 
-    const geminiLayer = GeminiReviewerLive(geminiConfig);
+    const platformKey: ResolvedGeminiKey = {
+      apiKey: env.GEMINI_API_KEY,
+      provider:
+        env.GEMINI_API_PROVIDER === "vertex_express"
+          ? "vertex_express"
+          : "gemini_api",
+    };
+
     const pullRequestLayer = GitHubPullRequestClientLive({});
 
     const program = Effect.gen(function* () {
-      const { request, reviewRunId } = yield* Schema.decodeUnknown(
+      const { request, reviewRunId, appOrigin } = yield* Schema.decodeUnknown(
         ReviewWorkflowParams,
       )(event.payload);
 
@@ -190,11 +211,77 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           loadPriorReview(reviewRunId).pipe(Effect.provide(databaseLayer)),
         );
 
+        const keyChoice = yield* runStep(
+          step,
+          "choose gemini key",
+          chooseReviewKey(reviewRunId).pipe(Effect.provide(databaseLayer)),
+        );
+
+        const keySource = keyChoice.source;
+
+        if (keySource === "none") {
+          yield* runStep(
+            step,
+            "explain missing gemini key",
+            explainMissingKey(
+              installationToken,
+              request,
+              reviewRunId,
+              keyChoice.repositoryId,
+              keyChoice.workspaceId,
+              appOrigin,
+            ).pipe(
+              Effect.provide(pullRequestLayer),
+              Effect.provide(databaseLayer),
+            ),
+          );
+
+          yield* runStep(
+            step,
+            "mark review run blocked",
+            markReviewFailed(
+              reviewRunId,
+              "no_gemini_key",
+              "No Gemini API key and no free trial reviews left",
+            ).pipe(Effect.provide(databaseLayer)),
+          );
+
+          yield* logInfo("review_blocked_no_gemini_key", fields);
+
+          return { blocked: true } as const;
+        }
+
+        // The key is looked up and decrypted inside this step so it never
+        // appears in a persisted step output.
         const reviewResult = yield* runStep(
           step,
           "run gemini review",
-          performGeminiReview(request, pullRequest, priorReview).pipe(
-            Effect.provide(geminiLayer),
+          resolveGeminiKey(
+            keyChoice.repositoryId,
+            keySource,
+            platformKey,
+            env.TOKEN_ENCRYPTION_KEY,
+          ).pipe(
+            Effect.provide(databaseLayer),
+            Effect.flatMap((key) =>
+              performGeminiReview(request, pullRequest, priorReview).pipe(
+                Effect.provide(geminiLayerFor(key)),
+              ),
+            ),
+            Effect.catchTag("GeminiResponseError", (error) =>
+              Effect.gen(function* () {
+                if (
+                  keySource === "workspace" &&
+                  [400, 401, 403].includes(error.status)
+                ) {
+                  return yield* new WorkspaceGeminiKeyRejectedError({
+                    status: error.status,
+                  });
+                }
+
+                return yield* error;
+              }),
+            ),
           ),
         );
 

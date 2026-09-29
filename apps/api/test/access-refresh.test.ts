@@ -259,6 +259,7 @@ const deliver = async (githubEvent: string, payload: RevocationPayload) => {
             fetchDetails: () => Effect.die("unused"),
             createReview: () => Effect.die("unused"),
             listReviewComments: () => Effect.succeed([]),
+            createIssueComment: () => Effect.void,
             fetchRepositoryFile: () => Effect.succeed(Option.none()),
           }),
         ),

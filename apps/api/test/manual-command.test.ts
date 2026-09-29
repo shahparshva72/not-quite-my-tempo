@@ -138,6 +138,7 @@ describe("handleManualReviewCommand", () => {
           }),
         createReview: () => Effect.succeed({ reviewId: 1 }),
         listReviewComments: () => Effect.succeed([]),
+        createIssueComment: () => Effect.void,
         fetchRepositoryFile: () => Effect.succeed(Option.none()),
       }),
     );

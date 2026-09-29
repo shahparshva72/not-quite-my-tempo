@@ -8,6 +8,7 @@ import { MembershipRepository } from "../repositories/membership-repository.js";
 import { ReviewRunRepository } from "../repositories/review-run-repository.js";
 import { SessionRepository } from "../repositories/session-repository.js";
 import { UserRepository } from "../repositories/user-repository.js";
+import { WorkspaceRepository } from "../repositories/workspace-repository.js";
 import { DatabaseLive } from "../services/database.js";
 
 export const makeLiveLayer = (database: D1Database) =>
@@ -19,4 +20,5 @@ export const makeLiveLayer = (database: D1Database) =>
     ReviewRunRepository.Default,
     SessionRepository.Default,
     UserRepository.Default,
+    WorkspaceRepository.Default,
   ).pipe(Layer.provide(DatabaseLive(database)));

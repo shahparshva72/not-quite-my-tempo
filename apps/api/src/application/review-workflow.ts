@@ -32,6 +32,10 @@ import type {
 } from "../github/pull-request-client.js";
 import type { ReviewRequest } from "../github/review-request.js";
 import { logError } from "../logging.js";
+import type {
+  GeminiKeyUnreadableError,
+  WorkspaceGeminiKeyRejectedError,
+} from "./review-keys.js";
 import {
   buildFindingCommentBody,
   buildReviewSummaryBody,
@@ -49,7 +53,9 @@ export type ReviewPipelineError =
   | ReviewSubmitError
   | GeminiReviewerError
   | DatabaseError
-  | ReviewRunNotFoundError;
+  | ReviewRunNotFoundError
+  | GeminiKeyUnreadableError
+  | WorkspaceGeminiKeyRejectedError;
 
 /**
  * Maps a review pipeline failure to the stable `review_runs.error_code`
@@ -71,6 +77,8 @@ export const reviewErrorCode = (error: ReviewPipelineError): string =>
     Match.tag("GeminiTimeoutError", () => "gemini_error"),
     Match.tag("DatabaseError", () => "db_error"),
     Match.tag("ReviewRunNotFoundError", () => "review_run_not_found"),
+    Match.tag("GeminiKeyUnreadableError", () => "gemini_key_unreadable"),
+    Match.tag("WorkspaceGeminiKeyRejectedError", () => "gemini_key_rejected"),
     Match.exhaustive,
   );
 

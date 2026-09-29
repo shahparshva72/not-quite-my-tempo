@@ -1,0 +1,1 @@
+ALTER TABLE `review_runs` ADD `trial_workspace_id` integer REFERENCES workspaces(id) ON DELETE SET NULL;

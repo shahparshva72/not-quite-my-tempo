@@ -7,6 +7,7 @@ export const resetAndSeedRepository = async () => {
     env.DB.prepare("DELETE FROM sessions"),
     env.DB.prepare("DELETE FROM users"),
     env.DB.prepare("DELETE FROM findings"),
+    env.DB.prepare("DELETE FROM review_run_retries"),
     env.DB.prepare("DELETE FROM review_runs"),
     env.DB.prepare("DELETE FROM repositories"),
     env.DB.prepare("DELETE FROM github_installations"),
