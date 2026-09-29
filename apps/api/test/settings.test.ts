@@ -118,7 +118,7 @@ describe("workspace settings: Gemini key", () => {
       {
         action: "gemini_key.saved",
         before: '{"last4":null}',
-        after: '{"last4":"7890"}',
+        after: '{"last4":"7890","provider":"gemini_api"}',
       },
     ]);
 
@@ -136,7 +136,7 @@ describe("workspace settings: Gemini key", () => {
 
   it("accepts Google's newer key format, which contains dots", async () => {
     const calls = geminiAnswers(200);
-    const newFormatKey = "AQ.Ab8RN6LmTestOnlyNewFormatKey-0123456789abcdef_XYZ";
+    const newFormatKey = "AQ.test-only-fake-new-format-key-0123456789ab_XYZ";
 
     const response = await saveKey(
       await sessionCookie([3001], "admin"),
@@ -146,6 +146,43 @@ describe("workspace settings: Gemini key", () => {
     expect(response.status).toBe(303);
     expect(calls).toHaveLength(1);
     expect((await workspaceKey())?.gemini_key_last4).toBe("_XYZ");
+  });
+
+  it("saves a Vertex AI key after the Gemini API refuses it", async () => {
+    const calls: string[] = [];
+
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      calls.push(String(input));
+
+      return Promise.resolve(
+        new Response("{}", {
+          status: String(input).includes("aiplatform") ? 200 : 403,
+        }),
+      );
+    });
+
+    const cookie = await sessionCookie([3001], "admin");
+    const vertexKey = "AQ.test-only-fake-vertex-key-for-settings-tests_VRTX";
+
+    expect((await saveKey(cookie, vertexKey)).status).toBe(303);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("aiplatform.googleapis.com");
+
+    const stored = await env.DB.prepare(
+      "SELECT gemini_key_provider, gemini_key_last4 FROM workspaces WHERE id = 1",
+    ).first();
+
+    expect(stored).toEqual({
+      gemini_key_provider: "vertex_express",
+      gemini_key_last4: "VRTX",
+    });
+
+    const page = await (
+      await request("/workspaces/1/settings", { headers: { cookie } })
+    ).text();
+
+    expect(page).toContain("Vertex AI");
+    expect(page).not.toContain(vertexKey);
   });
 
   it("refuses malformed keys without calling Google", async () => {

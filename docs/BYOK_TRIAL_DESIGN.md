@@ -70,6 +70,24 @@ When Gemini rejects a **workspace** key (HTTP 400, 401, or 403), the run
 fails with `gemini_key_rejected`: "your workspace's Gemini key was
 rejected; an admin can replace it in settings."
 
+## Gemini API and Vertex AI keys (added 2026-09-30)
+
+Keys work with one of two Google APIs, and both take the key in the
+`x-goog-api-key` header and the same `generateContent` body:
+
+- **Gemini Developer API** (`generativelanguage.googleapis.com`): Google AI
+  Studio keys, classic `AIza…` or the newer format.
+- **Vertex AI express mode** (`aiplatform.googleapis.com/v1/publishers/google/models/...`):
+  Vertex AI API keys, which are bound to a service account with
+  `roles/aiplatform.expressUser` and often restricted to `aiplatform`.
+
+On save, Fletcher asks the Gemini API's free model list first, then Vertex's
+free `countTokens`, and stores which one accepted the key
+(`workspaces.gemini_key_provider`, migration `0010`). The platform key's API
+comes from `GEMINI_API_PROVIDER`. Verified live with a real Vertex express
+key: header auth, the default model, and Fletcher's full structured-output
+request all work.
+
 ## Managing the key
 
 - **Page**: `/workspaces/:id/settings` ("Gemini key").

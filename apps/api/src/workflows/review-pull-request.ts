@@ -28,6 +28,7 @@ import {
   resolveGeminiKey,
   WorkspaceGeminiKeyRejectedError,
 } from "../application/review-keys.js";
+import type { ResolvedGeminiKey } from "../application/review-keys.js";
 import { ReviewWorkflowParams } from "../application/review-requests.js";
 import { GitHubAppAuthLive } from "../github/app-auth.js";
 import { GitHubPullRequestClientLive } from "../github/pull-request-client.js";
@@ -39,6 +40,9 @@ type WorkflowEnv = {
   readonly GITHUB_APP_PRIVATE_KEY: string;
   readonly GEMINI_API_KEY: string;
   readonly GEMINI_MODEL?: string;
+  // "vertex_express" when GEMINI_API_KEY is a Vertex AI key; otherwise the
+  // Gemini Developer API (Google AI Studio key).
+  readonly GEMINI_API_PROVIDER?: string;
   readonly TOKEN_ENCRYPTION_KEY: string;
 };
 
@@ -133,12 +137,20 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
 
     // Built per run: the key depends on the workspace (its own key, or the
     // platform key for trial reviews). See docs/BYOK_TRIAL_DESIGN.md.
-    const geminiLayerFor = (apiKey: string) =>
+    const geminiLayerFor = ({ apiKey, provider }: ResolvedGeminiKey) =>
       GeminiReviewerLive(
         env.GEMINI_MODEL === undefined
-          ? { apiKey }
-          : { apiKey, model: env.GEMINI_MODEL },
+          ? { apiKey, provider }
+          : { apiKey, provider, model: env.GEMINI_MODEL },
       );
+
+    const platformKey: ResolvedGeminiKey = {
+      apiKey: env.GEMINI_API_KEY,
+      provider:
+        env.GEMINI_API_PROVIDER === "vertex_express"
+          ? "vertex_express"
+          : "gemini_api",
+    };
 
     const pullRequestLayer = GitHubPullRequestClientLive({});
 
@@ -248,13 +260,13 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           resolveGeminiKey(
             keyChoice.repositoryId,
             keySource,
-            env.GEMINI_API_KEY,
+            platformKey,
             env.TOKEN_ENCRYPTION_KEY,
           ).pipe(
             Effect.provide(databaseLayer),
-            Effect.flatMap((apiKey) =>
+            Effect.flatMap((key) =>
               performGeminiReview(request, pullRequest, priorReview).pipe(
-                Effect.provide(geminiLayerFor(apiKey)),
+                Effect.provide(geminiLayerFor(key)),
               ),
             ),
             Effect.catchTag("GeminiResponseError", (error) =>

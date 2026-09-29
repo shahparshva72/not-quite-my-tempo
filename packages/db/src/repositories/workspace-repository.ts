@@ -5,7 +5,7 @@ import { databaseEffect } from "../errors.js";
 import { auditEvents } from "../schema/audit-events.js";
 import { githubInstallations } from "../schema/github-installations.js";
 import { repositories } from "../schema/repositories.js";
-import { workspaces } from "../schema/workspaces.js";
+import { geminiKeyProviders, workspaces } from "../schema/workspaces.js";
 import { Database } from "../services/database.js";
 import type { Workspace } from "./membership-repository.js";
 
@@ -18,7 +18,10 @@ export interface GeminiKeyChange {
 export interface SavedGeminiKey extends GeminiKeyChange {
   readonly ciphertext: string;
   readonly last4: string;
+  readonly provider: GeminiKeyProvider;
 }
+
+export type GeminiKeyProvider = (typeof geminiKeyProviders)[number];
 
 export class WorkspaceRepository extends Effect.Service<WorkspaceRepository>()(
   "@not-quite-my-tempo/db/WorkspaceRepository",
@@ -108,6 +111,7 @@ export class WorkspaceRepository extends Effect.Service<WorkspaceRepository>()(
                 .set({
                   geminiKeyCiphertext: saved.ciphertext,
                   geminiKeyLast4: saved.last4,
+                  geminiKeyProvider: saved.provider,
                   geminiKeyUpdatedAt: now,
                   geminiKeyUpdatedBy: saved.actorUserId,
                   updatedAt: now,
@@ -119,7 +123,10 @@ export class WorkspaceRepository extends Effect.Service<WorkspaceRepository>()(
                 action: "gemini_key.saved",
                 target: `workspace:${saved.workspaceId}`,
                 before: JSON.stringify({ last4: saved.previousLast4 }),
-                after: JSON.stringify({ last4: saved.last4 }),
+                after: JSON.stringify({
+                  last4: saved.last4,
+                  provider: saved.provider,
+                }),
               }),
             ]);
           }).pipe(Effect.asVoid),
@@ -133,6 +140,7 @@ export class WorkspaceRepository extends Effect.Service<WorkspaceRepository>()(
                 .set({
                   geminiKeyCiphertext: null,
                   geminiKeyLast4: null,
+                  geminiKeyProvider: null,
                   geminiKeyUpdatedAt: now,
                   geminiKeyUpdatedBy: change.actorUserId,
                   updatedAt: now,

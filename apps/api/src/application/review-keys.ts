@@ -3,7 +3,8 @@ import {
   ReviewRunRepository,
   WorkspaceRepository,
 } from "@not-quite-my-tempo/db";
-import type { ReviewKeySource } from "@not-quite-my-tempo/db";
+import type { DatabaseError, ReviewKeySource } from "@not-quite-my-tempo/db";
+import type { GeminiProvider } from "@not-quite-my-tempo/gemini";
 
 import { decryptToken } from "../auth/token-cipher.js";
 import { GitHubPullRequestClient } from "../github/pull-request-client.js";
@@ -90,18 +91,29 @@ export const chooseReviewKey = (reviewRunId: number) =>
     return choice("platform");
   });
 
+/** A decrypted key and the Google API it works with. */
+export interface ResolvedGeminiKey {
+  readonly apiKey: string;
+  readonly provider: GeminiProvider;
+}
+
 /**
  * The key for a run's chosen source. Called inside the Gemini step so the
- * decrypted key never leaves it.
+ * decrypted key never leaves it. Workspace keys saved before providers were
+ * recorded are Gemini API keys.
  */
 export const resolveGeminiKey = (
   repositoryId: number,
   source: ReviewKeySource,
-  platformKey: string,
+  platform: ResolvedGeminiKey,
   encryptionKey: string | undefined,
-) =>
+): Effect.Effect<
+  ResolvedGeminiKey,
+  GeminiKeyUnreadableError | DatabaseError,
+  WorkspaceRepository
+> =>
   source === "platform"
-    ? Effect.succeed(platformKey)
+    ? Effect.succeed(platform)
     : WorkspaceRepository.findByRepositoryId(repositoryId).pipe(
         Effect.flatMap((workspace) =>
           Option.match(workspace, {
@@ -113,7 +125,13 @@ export const resolveGeminiKey = (
                     encryptionKey,
                     found.geminiKeyCiphertext,
                     geminiKeyContext(found.id),
-                  ).pipe(Effect.mapError(() => new GeminiKeyUnreadableError())),
+                  ).pipe(
+                    Effect.map((apiKey): ResolvedGeminiKey => ({
+                      apiKey,
+                      provider: found.geminiKeyProvider ?? "gemini_api",
+                    })),
+                    Effect.mapError(() => new GeminiKeyUnreadableError()),
+                  ),
           }),
         ),
       );

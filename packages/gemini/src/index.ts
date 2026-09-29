@@ -28,9 +28,11 @@ export {
   GeminiReviewer,
   GeminiReviewerLive,
   GeminiTimeoutError,
+  generateContentUrl,
 } from "./reviewer.js";
 
 export type {
+  GeminiProvider,
   GeminiReviewerConfig,
   GeminiReviewerError,
   GeminiReviewerService,

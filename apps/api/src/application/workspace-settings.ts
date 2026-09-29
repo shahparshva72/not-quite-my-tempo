@@ -1,8 +1,11 @@
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, Option } from "effect";
 import { WorkspaceRepository } from "@not-quite-my-tempo/db";
 import type { Workspace } from "@not-quite-my-tempo/db";
 import { checkGeminiKey } from "@not-quite-my-tempo/gemini";
-import type { GeminiRequestError } from "@not-quite-my-tempo/gemini";
+import type {
+  GeminiProvider,
+  GeminiRequestError,
+} from "@not-quite-my-tempo/gemini";
 
 import { encryptToken } from "../auth/token-cipher.js";
 import { logInfo } from "../logging.js";
@@ -27,9 +30,10 @@ export class GeminiUnavailableError extends Data.TaggedError(
 ) {}
 
 export interface GeminiKeyCheckerService {
+  /** The Google API that accepts the key, or None when both reject it. */
   readonly check: (
     apiKey: string,
-  ) => Effect.Effect<boolean, GeminiRequestError>;
+  ) => Effect.Effect<Option.Option<GeminiProvider>, GeminiRequestError>;
 }
 
 export class GeminiKeyChecker extends Context.Tag(
@@ -100,11 +104,11 @@ export const saveGeminiKey = (
 
     const checker = yield* GeminiKeyChecker;
 
-    const accepted = yield* checker
+    const provider = yield* checker
       .check(apiKey)
       .pipe(Effect.mapError(() => new GeminiUnavailableError()));
 
-    if (!accepted) {
+    if (Option.isNone(provider)) {
       return yield* new InvalidGeminiKeyError({ reason: "rejected" });
     }
 
@@ -120,11 +124,13 @@ export const saveGeminiKey = (
       previousLast4: viewer.workspace.geminiKeyLast4,
       ciphertext,
       last4: apiKey.slice(-4),
+      provider: provider.value,
     });
 
     yield* logInfo("gemini_key_saved", {
       workspaceId,
       actorUserId: access.userId,
+      provider: provider.value,
     });
   });
 

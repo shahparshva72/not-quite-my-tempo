@@ -359,7 +359,7 @@ const noticeMessages = {
   invalid_format:
     "That doesn't look like a Gemini API key. Paste only the key, with no spaces or quotes.",
   rejected:
-    "Google rejected that key. Check that it's active and allowed to use the Gemini API.",
+    "Google rejected that key for both the Gemini API and Vertex AI. Check that it's active and allowed to use one of them.",
   unavailable:
     "Google didn't answer, so the key wasn't saved. Try again in a minute.",
 } as const satisfies Record<SettingsNotice, string>;
@@ -378,8 +378,9 @@ const keySummary = (workspace: Workspace, now: Date) => {
 
   if (workspace.geminiKeyLast4 !== null) {
     return html`<p>
-      Reviews use this workspace's Gemini key, ending in
-      <span class="code">…${workspace.geminiKeyLast4}</span>.
+      Reviews use this workspace's
+      ${workspace.geminiKeyProvider === "vertex_express" ? "Vertex AI" : "Gemini API"}
+      key, ending in <span class="code">…${workspace.geminiKeyLast4}</span>.
       ${
         workspace.geminiKeyUpdatedAt === null
           ? ""
@@ -440,10 +441,10 @@ export const settingsPage = (
                   aria-describedby="api-key-help"
                 />
                 <p id="api-key-help" class="fine">
-                  Create a key in Google AI Studio. Fletcher checks it with
-                  Google before saving, stores it encrypted, and only ever shows
-                  its last 4 characters. Google bills reviews that use it to
-                  your account.
+                  Paste a Gemini API key from Google AI Studio or a Vertex AI
+                  API key. Fletcher checks it with Google before saving, stores
+                  it encrypted, and only ever shows its last 4 characters.
+                  Google bills reviews that use it to your account.
                 </p>
                 <button class="btn" type="submit">
                   ${hasKey ? "Replace key" : "Save key"}

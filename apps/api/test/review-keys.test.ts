@@ -124,21 +124,29 @@ describe("resolving the key inside the Gemini step", () => {
   ) =>
     Effect.runPromise(
       Effect.either(
-        resolveGeminiKey(1, source, "platform-key", encryptionKey).pipe(
-          Effect.provide(db()),
-        ),
+        resolveGeminiKey(
+          1,
+          source,
+          { apiKey: "platform-key", provider: "gemini_api" },
+          encryptionKey,
+        ).pipe(Effect.provide(db())),
       ),
     );
 
   it("returns the platform key for trial reviews", async () => {
-    expect(await resolve("platform")).toEqual(Either.right("platform-key"));
+    expect(await resolve("platform")).toEqual(
+      Either.right({ apiKey: "platform-key", provider: "gemini_api" }),
+    );
   });
 
   it("decrypts the workspace key, and only with the right encryption key", async () => {
     await storeWorkspaceKey("AIzaWorkspaceKey1234567890");
 
     expect(await resolve("workspace")).toEqual(
-      Either.right("AIzaWorkspaceKey1234567890"),
+      Either.right({
+        apiKey: "AIzaWorkspaceKey1234567890",
+        provider: "gemini_api",
+      }),
     );
 
     const wrongKey = await resolve("workspace", btoa("\x07".repeat(32)));
@@ -271,19 +279,36 @@ describe("refunding trial reviews lost to Gemini", () => {
 });
 
 describe("checking a Gemini key", () => {
-  const check = (status: number) =>
+  // Answers per API: the Gemini API model list, then Vertex's countTokens.
+  const check = (gemini: number, vertex: number) =>
     Effect.runPromise(
       Effect.either(
-        checkGeminiKey("AIzaCheck", {
-          fetchImpl: () => Promise.resolve(new Response("{}", { status })),
+        checkGeminiKey("AQ.check", {
+          fetchImpl: (input) =>
+            Promise.resolve(
+              new Response("{}", {
+                status: String(input).includes("aiplatform") ? vertex : gemini,
+              }),
+            ),
         }),
       ),
     );
 
-  it("accepts, rejects, or reports Gemini unavailable", async () => {
-    expect(await check(200)).toEqual(Either.right(true));
-    expect(await check(400)).toEqual(Either.right(false));
-    expect(await check(403)).toEqual(Either.right(false));
-    expect(Either.isLeft(await check(503))).toBe(true);
+  it("tells which Google API accepts the key", async () => {
+    expect(await check(200, 500)).toEqual(
+      Either.right(Option.some("gemini_api")),
+    );
+    expect(await check(403, 200)).toEqual(
+      Either.right(Option.some("vertex_express")),
+    );
+    expect(await check(404, 200)).toEqual(
+      Either.right(Option.some("vertex_express")),
+    );
+  });
+
+  it("rejects a key both APIs refuse, and reports when it couldn't tell", async () => {
+    expect(await check(400, 401)).toEqual(Either.right(Option.none()));
+    expect(Either.isLeft(await check(503, 401))).toBe(true);
+    expect(Either.isLeft(await check(403, 503))).toBe(true);
   });
 });

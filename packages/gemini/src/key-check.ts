@@ -1,17 +1,37 @@
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 
-import { GEMINI_API_BASE_URL, GeminiRequestError } from "./reviewer.js";
+import {
+  DEFAULT_GEMINI_MODEL,
+  GEMINI_API_BASE_URL,
+  GeminiRequestError,
+  VERTEX_API_BASE_URL,
+} from "./reviewer.js";
+import type { GeminiProvider } from "./reviewer.js";
 
 export interface GeminiKeyCheckConfig {
-  readonly baseUrl?: string;
+  readonly geminiBaseUrl?: string;
+  readonly vertexBaseUrl?: string;
+  readonly model?: string;
   readonly fetchImpl?: typeof fetch;
 }
 
+type Answer = "accepted" | "rejected" | "unavailable";
+
+// 400/401/403/404: this API doesn't accept the key (wrong key, or a key
+// restricted to the other API). Anything else non-2xx: couldn't tell.
+const answerFor = (status: number): Answer =>
+  status >= 200 && status < 300
+    ? "accepted"
+    : [400, 401, 403, 404].includes(status)
+      ? "rejected"
+      : "unavailable";
+
 /**
- * Whether Gemini accepts an API key, using the free model-list call.
- * 400/401/403 mean the key is wrong or lacks access (false); any other
- * failure means Gemini couldn't answer and is a GeminiRequestError, so a
- * caller never stores a key it couldn't verify.
+ * Which Google API accepts a key, using only free calls: the Gemini
+ * Developer API's model list, then Vertex AI express mode's countTokens.
+ * None means both rejected it. Fails with GeminiRequestError when neither
+ * accepted it and at least one couldn't answer, so a caller never stores a
+ * key it couldn't verify.
  */
 export const checkGeminiKey = (
   apiKey: string,
@@ -23,30 +43,48 @@ export const checkGeminiKey = (
       ((input: RequestInfo | URL, init?: RequestInit) =>
         globalThis.fetch(input, init));
 
-    const response = yield* Effect.tryPromise({
-      try: () =>
-        fetchImpl(
-          `${config.baseUrl ?? GEMINI_API_BASE_URL}/v1beta/models?pageSize=1`,
-          { method: "GET", headers: { "x-goog-api-key": apiKey } },
-        ),
-      catch: (cause) => new GeminiRequestError({ cause }),
-    }).pipe(
-      Effect.timeout("10 seconds"),
-      Effect.catchTag(
-        "TimeoutException",
-        (cause) => new GeminiRequestError({ cause }),
-      ),
+    const ask = (url: string, init: RequestInit) =>
+      Effect.tryPromise({
+        try: () => fetchImpl(url, init),
+        catch: () => "unavailable" as const,
+      }).pipe(
+        Effect.timeout("10 seconds"),
+        Effect.map((response) => answerFor(response.status)),
+        Effect.orElseSucceed((): Answer => "unavailable"),
+      );
+
+    const gemini = yield* ask(
+      `${config.geminiBaseUrl ?? GEMINI_API_BASE_URL}/v1beta/models?pageSize=1`,
+      { method: "GET", headers: { "x-goog-api-key": apiKey } },
     );
 
-    if (response.ok) {
-      return true;
+    if (gemini === "accepted") {
+      return Option.some<GeminiProvider>("gemini_api");
     }
 
-    if ([400, 401, 403].includes(response.status)) {
-      return false;
+    const vertex = yield* ask(
+      `${config.vertexBaseUrl ?? VERTEX_API_BASE_URL}/v1/publishers/google/models/${config.model ?? DEFAULT_GEMINI_MODEL}:countTokens`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: "ok" }] }],
+        }),
+      },
+    );
+
+    if (vertex === "accepted") {
+      return Option.some<GeminiProvider>("vertex_express");
     }
 
-    return yield* new GeminiRequestError({
-      cause: `Gemini answered ${response.status}`,
-    });
+    if (gemini === "unavailable" || vertex === "unavailable") {
+      return yield* new GeminiRequestError({
+        cause: `Gemini API ${gemini}, Vertex AI ${vertex}`,
+      });
+    }
+
+    return Option.none<GeminiProvider>();
   });

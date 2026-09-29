@@ -72,6 +72,10 @@ For self-service onboarding, also set in the App's settings:
   organization owners from members and to remove access when someone leaves
   the organization.
 
+Keys can be Gemini Developer API keys (Google AI Studio) or Vertex AI API
+keys (express mode). Workspace keys are detected when saved; for a Vertex AI
+platform key, set `GEMINI_API_PROVIDER=vertex_express`.
+
 Each workspace gets 5 free reviews on the platform `GEMINI_API_KEY`; after
 that, reviews use the key an admin saves at `/workspaces/:id/settings`
 (stored encrypted with `TOKEN_ENCRYPTION_KEY`). See

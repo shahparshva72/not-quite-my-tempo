@@ -15,6 +15,24 @@ import type { GeminiReviewInput } from "./prompt.js";
 
 export const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com";
 
+export const VERTEX_API_BASE_URL = "https://aiplatform.googleapis.com";
+
+/**
+ * Where a key works: the Gemini Developer API (Google AI Studio keys) or
+ * Vertex AI in express mode (Vertex API keys). Both take the key in the
+ * x-goog-api-key header and the same generateContent body.
+ */
+export type GeminiProvider = "gemini_api" | "vertex_express";
+
+export const generateContentUrl = (
+  provider: GeminiProvider,
+  model: string,
+  baseUrl?: string,
+) =>
+  provider === "vertex_express"
+    ? `${baseUrl ?? VERTEX_API_BASE_URL}/v1/publishers/google/models/${model}:generateContent`
+    : `${baseUrl ?? GEMINI_API_BASE_URL}/v1beta/models/${model}:generateContent`;
+
 export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
 
 const DEFAULT_TIMEOUT_MILLIS = 60_000;
@@ -95,6 +113,8 @@ export class GeminiReviewer extends Context.Tag(
 
 export interface GeminiReviewerConfig {
   readonly apiKey: string;
+  // Defaults to the Gemini Developer API.
+  readonly provider?: GeminiProvider;
   readonly model?: string;
   readonly baseUrl?: string;
   readonly fetchImpl?: typeof fetch;
@@ -119,8 +139,13 @@ const requestReview = (
   input: GeminiReviewInput,
 ) =>
   Effect.gen(function* () {
-    const baseUrl = config.baseUrl ?? GEMINI_API_BASE_URL;
     const model = config.model ?? DEFAULT_GEMINI_MODEL;
+
+    const url = generateContentUrl(
+      config.provider ?? "gemini_api",
+      model,
+      config.baseUrl,
+    );
 
     const fetchImpl =
       config.fetchImpl ??
@@ -129,7 +154,7 @@ const requestReview = (
 
     const response = yield* Effect.tryPromise({
       try: () =>
-        fetchImpl(`${baseUrl}/v1beta/models/${model}:generateContent`, {
+        fetchImpl(url, {
           method: "POST",
           headers: {
             "content-type": "application/json",
