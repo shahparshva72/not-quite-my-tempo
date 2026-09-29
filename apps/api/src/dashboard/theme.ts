@@ -176,6 +176,25 @@ section.band { padding: 3rem 0; border-top: 1px solid var(--staff); }
 
 .review-state { display: inline-flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; justify-content: flex-end; }
 
+/* Settings */
+.key-status { margin: -0.25rem 0 0.75rem; display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; }
+.key-form { display: grid; gap: 0.5rem; max-width: 32rem; margin: 1.25rem 0 1rem; }
+.key-form label { font-weight: 700; }
+.key-form input {
+  font: inherit; font-family: var(--code); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--staff);
+  border-radius: 2px; padding: 0.6rem 0.75rem;
+}
+.key-form .btn { justify-self: start; }
+.key-form p { margin: 0; }
+.notice {
+  border-left: 3px solid var(--brass); padding: 0.5rem 0.9rem;
+  background: var(--surface); max-width: 40rem;
+}
+.notice-error { border-left-color: var(--red-pencil); }
+.danger { color: var(--red-pencil); }
+.page-title + h2, .notice + h2 { margin-top: 2rem; }
+
 /* Message pages: one headline, one sentence, one action */
 .message { padding: clamp(2rem, 8vw, 6rem) 0; max-width: 40rem; }
 .message .page-title { font-size: clamp(2.2rem, 6vw, 3.5rem); font-variation-settings: "wdth" 62; }

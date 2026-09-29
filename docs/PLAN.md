@@ -38,7 +38,9 @@ their historical descriptions are not the current release status. See
    see [WORKSPACES_DESIGN.md](./WORKSPACES_DESIGN.md).
 4. Dashboard management (Phase 14).
 5. Production readiness (Phase 15).
-6. BYOK, trial, and billing (Phase 16).
+6. BYOK, trial, and billing (Phase 16) — BYOK and the 5-review trial
+   **done 2026-09-29** ([BYOK_TRIAL_DESIGN.md](./BYOK_TRIAL_DESIGN.md));
+   billing remains.
 
 ### Phase 12 — Accounts, sessions, and authorization
 

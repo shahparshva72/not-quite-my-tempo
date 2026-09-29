@@ -72,6 +72,11 @@ For self-service onboarding, also set in the App's settings:
   organization owners from members and to remove access when someone leaves
   the organization.
 
+Each workspace gets 5 free reviews on the platform `GEMINI_API_KEY`; after
+that, reviews use the key an admin saves at `/workspaces/:id/settings`
+(stored encrypted with `TOKEN_ENCRYPTION_KEY`). See
+`docs/BYOK_TRIAL_DESIGN.md`.
+
 Workspaces and roles are described in `docs/WORKSPACES_DESIGN.md`. Sessions
 store the user's GitHub token encrypted with `TOKEN_ENCRYPTION_KEY` so
 repository access can be re-checked every 10 minutes:

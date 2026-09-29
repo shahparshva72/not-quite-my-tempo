@@ -9,7 +9,11 @@ import type {
   WorkspaceRole,
 } from "@not-quite-my-tempo/db";
 
-import { repositoryActionAllowed } from "../application/authorization.js";
+import {
+  repositoryActionAllowed,
+  workspaceActionAllowed,
+} from "../application/authorization.js";
+import { trialStatus } from "../application/workspace-settings.js";
 
 import type {
   RepositoryOverview,
@@ -181,6 +185,27 @@ const roleLabels = {
   member: "Member",
 } as const satisfies Record<WorkspaceRole, string>;
 
+/** One line on the dashboard: whose Gemini key reviews use. */
+const keyStatusLine = (workspace: Workspace) => {
+  const trial = trialStatus(workspace);
+
+  return workspace.geminiKeyLast4 !== null
+    ? html`<span class="quiet">Reviews use this workspace's Gemini key.</span>`
+    : trial.remaining > 0
+      ? html`<span class="quiet"
+            >${trial.remaining} of ${trial.total} free reviews left.</span
+          >
+          <a href="/workspaces/${workspace.id}/settings"
+            >Add your Gemini key</a
+          >`
+      : html`<span class="state-failed"
+            >Free reviews used up. Reviews are paused.</span
+          >
+          <a href="/workspaces/${workspace.id}/settings"
+            >Add your Gemini key</a
+          >`;
+};
+
 const workspaceSection = (
   { workspace, role, repositories }: WorkspaceOverview,
   now: Date,
@@ -190,7 +215,9 @@ const workspaceSection = (
       <h2>${workspace.githubAccountLogin}</h2>
       <span class="quiet">${roleLabels[role]}</span>
       <a href="/workspaces/${workspace.id}/members">Members</a>
+      <a href="/workspaces/${workspace.id}/settings">Settings</a>
     </div>
+    <p class="key-status">${keyStatusLine(workspace)}</p>
     ${
       repositories.length === 0
         ? html`<p class="quiet">
@@ -316,6 +343,128 @@ export const membersPage = (
         People appear here after they sign in, if GitHub shows them this
         account's installation.
       </p>`,
+  );
+};
+
+export type SettingsNotice =
+  | "saved"
+  | "removed"
+  | "invalid_format"
+  | "rejected"
+  | "unavailable";
+
+const noticeMessages = {
+  saved: "Key saved. Reviews now use it.",
+  removed: "Key removed.",
+  invalid_format:
+    "That doesn't look like a Gemini API key. Paste only the key, with no spaces or quotes.",
+  rejected:
+    "Google rejected that key. Check that it's active and allowed to use the Gemini API.",
+  unavailable:
+    "Google didn't answer, so the key wasn't saved. Try again in a minute.",
+} as const satisfies Record<SettingsNotice, string>;
+
+const settingsNotice = (notice: SettingsNotice | null) =>
+  notice === null
+    ? ""
+    : notice === "saved" || notice === "removed"
+      ? html`<p class="notice" role="status">${noticeMessages[notice]}</p>`
+      : html`<p class="notice notice-error" role="alert">
+          ${noticeMessages[notice]}
+        </p>`;
+
+const keySummary = (workspace: Workspace, now: Date) => {
+  const trial = trialStatus(workspace);
+
+  if (workspace.geminiKeyLast4 !== null) {
+    return html`<p>
+      Reviews use this workspace's Gemini key, ending in
+      <span class="code">…${workspace.geminiKeyLast4}</span>.
+      ${
+        workspace.geminiKeyUpdatedAt === null
+          ? ""
+          : html`Added ${relativeTime(workspace.geminiKeyUpdatedAt, now)}.`
+      }
+    </p>`;
+  }
+
+  return trial.remaining > 0
+    ? html`<p>
+        No key yet. ${trial.remaining} of ${trial.total} free reviews are left
+        on Fletcher's key. After that, reviews need this workspace's own key.
+      </p>`
+    : html`<p class="state-failed">
+        No key, and the ${trial.total} free reviews are used. Fletcher won't
+        review pull requests until an admin or owner adds a key.
+      </p>`;
+};
+
+export const settingsPage = (
+  login: string,
+  data: {
+    readonly workspace: Workspace;
+    readonly viewerRole: WorkspaceRole;
+  },
+  notice: SettingsNotice | null,
+  now: Date,
+) => {
+  const { workspace, viewerRole } = data;
+  const canManage = workspaceActionAllowed(viewerRole, "manage_settings");
+  const hasKey = workspace.geminiKeyLast4 !== null;
+
+  return layout(
+    `Settings for ${workspace.githubAccountLogin}`,
+    login,
+    html`<p class="crumbs"><a href="/dashboard">Your repositories</a></p>
+      <h1 class="page-title">Settings for ${workspace.githubAccountLogin}</h1>
+      ${settingsNotice(notice)}
+      <h2>Gemini API key</h2>
+      ${keySummary(workspace, now)}
+      ${
+        canManage
+          ? html`<form
+                class="key-form"
+                method="post"
+                action="/workspaces/${workspace.id}/settings/gemini-key"
+              >
+                <label for="api-key"
+                  >${hasKey ? "New Gemini API key" : "Gemini API key"}</label
+                >
+                <input
+                  id="api-key"
+                  name="api_key"
+                  type="password"
+                  autocomplete="off"
+                  spellcheck="false"
+                  required
+                  aria-describedby="api-key-help"
+                />
+                <p id="api-key-help" class="fine">
+                  Create a key in Google AI Studio. Fletcher checks it with
+                  Google before saving, stores it encrypted, and only ever shows
+                  its last 4 characters. Google bills reviews that use it to
+                  your account.
+                </p>
+                <button class="btn" type="submit">
+                  ${hasKey ? "Replace key" : "Save key"}
+                </button>
+              </form>
+              ${
+                hasKey
+                  ? html`<form
+                      method="post"
+                      action="/workspaces/${workspace.id}/settings/gemini-key/remove"
+                    >
+                      <button class="link-button danger" type="submit">
+                        Remove key
+                      </button>
+                    </form>`
+                  : ""
+              }`
+          : html`<p class="quiet">
+              Only admins and owners can change the key.
+            </p>`
+      }`,
   );
 };
 

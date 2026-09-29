@@ -148,6 +148,15 @@ const failureReasons = new Map<string, string>([
   ["gemini_error", "the Gemini API didn't return a review"],
   ["db_error", "a storage error on our side"],
   ["review_run_not_found", "a storage error on our side"],
+  [
+    "no_gemini_key",
+    "this workspace has no Gemini key and its free reviews are used up",
+  ],
+  ["gemini_key_rejected", "Google rejected this workspace's Gemini key"],
+  [
+    "gemini_key_unreadable",
+    "the saved Gemini key couldn't be read; an admin needs to save it again",
+  ],
 ]);
 
 /** Why a review failed, in words a repository owner can act on. */

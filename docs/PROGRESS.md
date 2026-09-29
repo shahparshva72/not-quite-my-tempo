@@ -29,11 +29,26 @@ then this file for exactly where things stand and what to do next.
 | 11    | Dashboard UI              | 🟡 v1 shipped |
 | 12    | Accounts & authorization  | ✅ Done       |
 | 13    | GitHub onboarding         | ✅ Core done  |
-| 16    | BYOK, trial, billing      | ⬜ Planned    |
+| 16    | BYOK, trial, billing      | 🟡 BYOK+trial |
 
-**Next task:** the workspace Gemini key (BYOK) and the 5-review trial
-(Phase 16, first half), attached to `workspaces`. See PLAN.md Phase 16 and
-"Recommended order".
+**Next task:** first production deploy (Phase 15 essentials): Worker on
+notmytempo.dev, the production "Fletcher" GitHub App and secrets, a privacy
+page, stuck-run recovery, and an end-to-end run with two GitHub accounts.
+Then Stripe billing (Phase 16, part 2).
+
+### Workspace Gemini keys and the free trial — 2026-09-29
+
+Design: [BYOK_TRIAL_DESIGN.md](./BYOK_TRIAL_DESIGN.md).
+
+- Migration `0008`: encrypted workspace Gemini key (+ last4, updated
+  at/by), `workspaces.trial_reviews_used`, `review_runs.key_source`.
+- Workflow step "choose gemini key" runs just before Gemini: the
+  workspace key, else one of 5 trial reviews (atomic conditional update),
+  else the run fails `no_gemini_key` and Fletcher comments once per PR.
+  Keys are decrypted only inside the Gemini step, never in step output.
+- `/workspaces/:id/settings`: everyone sees key/trial status; admins and
+  owners save (checked with Google first), replace, or remove the key,
+  audited with last4 only. The dashboard shows the status per workspace.
 
 ### Workspaces, memberships, and roles — 2026-09-29
 

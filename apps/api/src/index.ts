@@ -1,4 +1,4 @@
-import { Data, Effect, Inspectable, Match, Option } from "effect";
+import { Data, Effect, Inspectable, Match, Option, Schema } from "effect";
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { logger } from "hono/logger";
@@ -31,6 +31,12 @@ import {
   changeAdminRole,
   workspaceMembers,
 } from "./application/workspace-members.js";
+import {
+  GeminiKeyCheckerLive,
+  removeGeminiKey,
+  saveGeminiKey,
+  workspaceSettings,
+} from "./application/workspace-settings.js";
 import { GitHubOAuthLive } from "./auth/github-oauth.js";
 import { createAuthRoutes } from "./auth/routes.js";
 import {
@@ -48,9 +54,11 @@ import {
   notFoundPage,
   onboardingPage,
   ownerRolePage,
+  settingsPage,
   repositoryRunsPage,
   runFindingsPage,
 } from "./dashboard/views.js";
+import type { SettingsNotice } from "./dashboard/views.js";
 import { GitHubAppAuthLive } from "./github/app-auth.js";
 import { GitHubInstallationClientLive } from "./github/installation-client.js";
 import { GitHubPullRequestClientLive } from "./github/pull-request-client.js";
@@ -515,6 +523,151 @@ app.post("/workspaces/:id/members/:userId/role", (c) =>
             ),
           onSuccess: () =>
             c.redirect(`/workspaces/${workspaceId}/members`, 303),
+        }),
+      ),
+    );
+  }),
+);
+
+const GeminiKeyForm = Schema.Struct({ api_key: Schema.String });
+
+const settingsNotices = new Map<string, SettingsNotice>([
+  ["saved", "saved"],
+  ["removed", "removed"],
+]);
+
+const renderSettings = (
+  c: AppContext,
+  session: SessionPayload,
+  workspaceId: number,
+  notice: SettingsNotice | null,
+  status: 200 | 422 | 503,
+) =>
+  Effect.runPromise(
+    workspaceSettings(session, workspaceId).pipe(
+      Effect.provide(makeLiveLayer(c.env.DB)),
+      Effect.match({
+        onFailure: (cause) =>
+          Match.value(cause).pipe(
+            Match.tag("ResourceNotFoundError", () =>
+              c.html(notFoundPage(session.login), 404),
+            ),
+            Match.orElse((error) => internalError(c, error)),
+          ),
+        onSuccess: (data) =>
+          c.html(settingsPage(session.login, data, notice, new Date()), status),
+      }),
+    ),
+  );
+
+app.get("/workspaces/:id/settings", (c) =>
+  withSessionPage(c, (session) => {
+    const workspaceId = Number(c.req.param("id"));
+
+    if (!Number.isInteger(workspaceId)) {
+      return Promise.resolve(c.html(notFoundPage(session.login), 404));
+    }
+
+    return renderSettings(
+      c,
+      session,
+      workspaceId,
+      settingsNotices.get(c.req.query("notice") ?? "") ?? null,
+      200,
+    );
+  }),
+);
+
+app.post("/workspaces/:id/settings/gemini-key", (c) =>
+  withSessionPage(c, async (session) => {
+    const workspaceId = Number(c.req.param("id"));
+
+    if (!Number.isInteger(workspaceId)) {
+      return c.html(notFoundPage(session.login), 404);
+    }
+
+    const form = Schema.decodeUnknownOption(GeminiKeyForm)(
+      await c.req.parseBody(),
+    );
+
+    if (Option.isNone(form)) {
+      return renderSettings(c, session, workspaceId, "invalid_format", 422);
+    }
+
+    return Effect.runPromise(
+      saveGeminiKey(
+        session,
+        workspaceId,
+        form.value.api_key,
+        c.env.TOKEN_ENCRYPTION_KEY,
+      ).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.provide(GeminiKeyCheckerLive),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                Promise.resolve(c.html(notFoundPage(session.login), 404)),
+              ),
+              Match.tag("ForbiddenError", (error) =>
+                Promise.resolve(
+                  c.html(forbiddenPage(session.login, error.requiredRole), 403),
+                ),
+              ),
+              Match.tag("InvalidGeminiKeyError", (error) =>
+                renderSettings(
+                  c,
+                  session,
+                  workspaceId,
+                  error.reason === "format" ? "invalid_format" : "rejected",
+                  422,
+                ),
+              ),
+              Match.tag("GeminiUnavailableError", () =>
+                renderSettings(c, session, workspaceId, "unavailable", 503),
+              ),
+              Match.orElse((error) => Promise.resolve(internalError(c, error))),
+            ),
+          onSuccess: () =>
+            Promise.resolve(
+              c.redirect(
+                `/workspaces/${workspaceId}/settings?notice=saved`,
+                303,
+              ),
+            ),
+        }),
+      ),
+    );
+  }),
+);
+
+app.post("/workspaces/:id/settings/gemini-key/remove", (c) =>
+  withSessionPage(c, (session) => {
+    const workspaceId = Number(c.req.param("id"));
+
+    if (!Number.isInteger(workspaceId)) {
+      return Promise.resolve(c.html(notFoundPage(session.login), 404));
+    }
+
+    return Effect.runPromise(
+      removeGeminiKey(session, workspaceId).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                c.html(notFoundPage(session.login), 404),
+              ),
+              Match.tag("ForbiddenError", (error) =>
+                c.html(forbiddenPage(session.login, error.requiredRole), 403),
+              ),
+              Match.orElse((error) => internalError(c, error)),
+            ),
+          onSuccess: () =>
+            c.redirect(
+              `/workspaces/${workspaceId}/settings?notice=removed`,
+              303,
+            ),
         }),
       ),
     );
