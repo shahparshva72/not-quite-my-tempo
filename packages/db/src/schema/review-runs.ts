@@ -48,6 +48,9 @@ export const reviewRuns = sqliteTable(
     verdict: text("verdict", { enum: reviewVerdicts }),
     summary: text("summary"),
     keySource: text("key_source", { enum: reviewKeySources }),
+    // Bumped when "/fletcher again" retries a failed run on the same
+    // commit; part of the Workflow instance ID, which can't be reused.
+    attempt: integer("attempt").notNull().default(1),
     startedAt: integer("started_at", { mode: "timestamp_ms" }),
     completedAt: integer("completed_at", { mode: "timestamp_ms" }),
     errorCode: text("error_code"),

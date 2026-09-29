@@ -5,6 +5,7 @@ import {
   Effect,
   Inspectable,
   Layer,
+  Option,
   Schema,
 } from "effect";
 import {
@@ -26,9 +27,21 @@ export const ReviewWorkflowParams = Schema.Struct({
   // Public origin of this Worker (from the webhook request), for links in
   // comments Fletcher posts. Optional so in-flight runs still decode.
   appOrigin: Schema.optional(Schema.String),
+  // 1 for a first review; higher for "/fletcher again" retries of a failed
+  // run on the same commit. Optional so in-flight runs still decode.
+  attempt: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
 });
 
 export type ReviewWorkflowParams = typeof ReviewWorkflowParams.Type;
+
+/**
+ * The Workflow instance ID for a run's attempt. Instance IDs can't be
+ * reused, so retries get a suffix; the stuck-run check uses the same IDs.
+ */
+export const workflowInstanceId = (reviewRunId: number, attempt = 1) =>
+  attempt === 1
+    ? `review-run-${reviewRunId}`
+    : `review-run-${reviewRunId}-attempt-${attempt}`;
 
 export class WorkflowStartError extends Data.TaggedError("WorkflowStartError")<{
   readonly cause: unknown;
@@ -55,13 +68,17 @@ export const ReviewWorkflowLive = (
         Effect.tryPromise({
           try: () =>
             workflow.create({
-              id: `review-run-${params.reviewRunId}`,
+              id: workflowInstanceId(params.reviewRunId, params.attempt),
               params: { ...params, appOrigin },
             }),
           catch: (cause) => new WorkflowStartError({ cause }),
         }).pipe(Effect.map((instance) => instance.id)),
     }),
   );
+
+type QueueOutcome =
+  | { readonly status: "queued"; readonly reviewRunId: number }
+  | { readonly status: "already_processed"; readonly reviewRunId: number };
 
 // Per-installation cost guardrail: at most this many review runs per
 // rolling 24 hours before deliveries are acknowledged without a review.
@@ -166,40 +183,60 @@ export const handleReviewRequest = (
       trigger: request.trigger,
     });
 
-    return yield* ReviewRunCreation.$match(result, {
-      Existing: ({ reviewRun }) =>
-        logInfo("github_webhook_duplicate", {
-          ...fields,
-          reviewRunId: reviewRun.id,
-        }).pipe(
-          Effect.as({
-            status: "already_processed" as const,
-            reviewRunId: reviewRun.id,
-          }),
-        ),
-      Created: ({ reviewRun }) =>
-        Effect.gen(function* () {
-          const workflows = yield* ReviewWorkflow;
+    const startWorkflow = (
+      reviewRunId: number,
+      attempt: number,
+    ): Effect.Effect<QueueOutcome, WorkflowStartError, ReviewWorkflow> =>
+      Effect.gen(function* () {
+        const workflows = yield* ReviewWorkflow;
 
-          const workflowInstanceId = yield* workflows
-            .start({ reviewRunId: reviewRun.id, request })
-            .pipe(
-              Effect.tapError((error) =>
-                logError("review_workflow_start_failed", {
-                  ...fields,
-                  reviewRunId: reviewRun.id,
-                  error: Inspectable.toStringUnknown(error.cause),
+        const workflowInstanceId = yield* workflows
+          .start({ reviewRunId, request, attempt })
+          .pipe(
+            Effect.tapError((error) =>
+              logError("review_workflow_start_failed", {
+                ...fields,
+                reviewRunId,
+                attempt,
+                error: Inspectable.toStringUnknown(error.cause),
+              }),
+            ),
+          );
+
+        yield* logInfo("review_workflow_queued", {
+          ...fields,
+          reviewRunId,
+          attempt,
+          workflowInstanceId,
+        });
+
+        return { status: "queued", reviewRunId };
+      });
+
+    const alreadyProcessed = (
+      reviewRunId: number,
+    ): Effect.Effect<QueueOutcome> =>
+      logInfo("github_webhook_duplicate", { ...fields, reviewRunId }).pipe(
+        Effect.as({ status: "already_processed", reviewRunId }),
+      );
+
+    return yield* ReviewRunCreation.$match(result, {
+      // "/fletcher again" on a commit whose review failed (blocked for a
+      // missing key, Gemini down, stuck, ...) retries it; any other repeat
+      // delivery for the same commit is a duplicate.
+      Existing: ({ reviewRun }) =>
+        request.trigger === "manual" && reviewRun.status === "failed"
+          ? ReviewRunRepository.requeueFailed(reviewRun.id).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => alreadyProcessed(reviewRun.id),
+                  onSome: (requeued) =>
+                    startWorkflow(requeued.id, requeued.attempt),
                 }),
               ),
-            );
-
-          yield* logInfo("review_workflow_queued", {
-            ...fields,
-            reviewRunId: reviewRun.id,
-            workflowInstanceId,
-          });
-
-          return { status: "queued" as const, reviewRunId: reviewRun.id };
-        }),
+            )
+          : alreadyProcessed(reviewRun.id),
+      Created: ({ reviewRun }) =>
+        startWorkflow(reviewRun.id, reviewRun.attempt),
     });
   });

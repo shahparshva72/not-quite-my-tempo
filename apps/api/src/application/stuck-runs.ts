@@ -2,6 +2,7 @@ import { Clock, Context, Effect, Layer, Option } from "effect";
 import { ReviewRunRepository } from "@not-quite-my-tempo/db";
 
 import { logInfo } from "../logging.js";
+import { workflowInstanceId } from "./review-requests.js";
 import type { ReviewWorkflowParams } from "./review-requests.js";
 
 /** A run unchanged for this long while queued or running is checked. */
@@ -63,7 +64,9 @@ export const recoverStuckRuns = Effect.gen(function* () {
   let recovered = 0;
 
   for (const run of candidates) {
-    const status = yield* workflows.status(`review-run-${run.id}`);
+    const status = yield* workflows.status(
+      workflowInstanceId(run.id, run.attempt),
+    );
 
     if (Option.isSome(status) && liveStatuses.has(status.value)) {
       continue;

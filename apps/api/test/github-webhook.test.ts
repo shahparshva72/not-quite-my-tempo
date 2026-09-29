@@ -233,6 +233,7 @@ describe("GitHub webhook", () => {
       params: {
         reviewRunId: responseBody.reviewRunId,
         appOrigin: "https://example.com",
+        attempt: 1,
         request: expect.objectContaining({
           githubRepositoryId: 3001,
           pullRequestNumber: 42,

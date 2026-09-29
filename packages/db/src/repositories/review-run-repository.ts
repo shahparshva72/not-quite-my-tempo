@@ -9,6 +9,7 @@ import {
   reviewRunTriggers,
   reviewVerdicts,
 } from "../schema/review-runs.js";
+import { findings } from "../schema/findings.js";
 import { repositories } from "../schema/repositories.js";
 import { Database } from "../services/database.js";
 
@@ -302,6 +303,50 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
               .returning()
               .get(),
           ).pipe(Effect.map(Option.fromNullable)),
+        /**
+         * Re-queues a failed run for "/fletcher again" on the same commit:
+         * only while it is still failed (so concurrent retries start one),
+         * bumping `attempt` and clearing the failed attempt's results and
+         * findings, in one batch. Returns the re-queued run, or None when
+         * it wasn't failed.
+         */
+        requeueFailed: (id: number) =>
+          databaseEffect("review_runs.requeue_failed", () =>
+            client.batch([
+              client
+                .update(reviewRuns)
+                .set({
+                  status: "queued",
+                  trigger: "manual",
+                  attempt: sql`${reviewRuns.attempt} + 1`,
+                  keySource: null,
+                  model: null,
+                  verdict: null,
+                  summary: null,
+                  errorCode: null,
+                  errorMessage: null,
+                  inputTokens: null,
+                  outputTokens: null,
+                  totalTokens: null,
+                  startedAt: null,
+                  completedAt: null,
+                })
+                .where(
+                  and(eq(reviewRuns.id, id), eq(reviewRuns.status, "failed")),
+                )
+                .returning(),
+              // Deletes only after the update above re-queued the run (now
+              // queued and not started); any other run keeps its findings.
+              client
+                .delete(findings)
+                .where(
+                  and(
+                    eq(findings.reviewRunId, id),
+                    sql`exists (select 1 from ${reviewRuns} where ${reviewRuns.id} = ${id} and ${reviewRuns.status} = 'queued' and ${reviewRuns.startedAt} is null)`,
+                  ),
+                ),
+            ]),
+          ).pipe(Effect.map(([rows]) => Array.head(rows))),
         /** Runs still queued or running that haven't changed since `before`. */
         listStuck: (before: Date, limit: number) =>
           databaseEffect("review_runs.list_stuck", () =>
