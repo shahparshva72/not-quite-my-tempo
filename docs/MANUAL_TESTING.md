@@ -148,6 +148,10 @@ For each case, add the file at the **PR branch** root and push:
 - [ ] `{"intensity": "sectional"}` → noticeably dry, catchphrase-free tone.
       `{"intensity": "carnegie"}` → harsher standard, still no personal
       attacks.
+- [ ] `{"tone": "ruthless"}` on the same PR as a `standard` run → full
+      Fletcher voice (interrogation, orders, "Not. Quite. My. Tempo."
+      heading, no "good job"), but the same findings, severities, and
+      verdict; nothing aimed at the author, no profanity or threats.
 - [ ] Malformed file (`{ not json`) → review proceeds with defaults; logs
       show `invalid_review_config`; nothing fails.
 

@@ -216,7 +216,8 @@ falls back to defaults and never fails a review:
   "enabled": true,
   "severityThreshold": "suggestion",
   "ignore": ["docs/**", "**/*.gen.ts"],
-  "intensity": "studio_band"
+  "intensity": "studio_band",
+  "tone": "standard"
 }
 ```
 
@@ -229,6 +230,14 @@ falls back to defaults and never fails a review:
   `?` do not.
 - `intensity`: persona dial — `sectional` (dry, no theatrics), `studio_band`
   (default), or `carnegie` (maximum exactness).
+- `tone`: who is reviewing — `standard` (default; the persona is seasoning
+  on a businesslike review) or `ruthless` (full Terence Fletcher, backed by
+  a principal engineer: interrogates every questionable choice, counts every
+  repeat, gives fixes as orders, never says "good job"). Tone changes the
+  voice only: findings, severities, confidence, and verdict follow the same
+  rubric, and criticism stays on the code, never the person (no profanity,
+  slurs, or threats). With `intensity: "sectional"`, ruthless becomes the
+  quiet Fletcher; with `carnegie`, it also raises the bar.
 
 Each installation is capped at 50 review runs per rolling 24 hours; deliveries
 beyond the cap are acknowledged with `rate_limited` and no review is started.

@@ -15,6 +15,7 @@ export {
   ReviewConfig,
   ReviewIntensity,
   ReviewSeverityThreshold,
+  ReviewTone,
 } from "./review-config.js";
 
 export type {

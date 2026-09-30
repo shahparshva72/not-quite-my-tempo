@@ -1,12 +1,35 @@
 import { Match } from "effect";
 import type { Finding } from "@not-quite-my-tempo/db";
-import type { GeminiReview, ReviewVerdict } from "@not-quite-my-tempo/gemini";
+import type {
+  GeminiReview,
+  ReviewTone,
+  ReviewVerdict,
+} from "@not-quite-my-tempo/gemini";
 
-export const verdictHeading = (verdict: ReviewVerdict): string =>
+const standardHeading = (verdict: ReviewVerdict): string =>
   Match.value(verdict).pipe(
     Match.when("not_my_tempo", () => "🥁 Not quite my tempo."),
     Match.when("almost", () => "🥁 Almost. Almost."),
     Match.when("good_job", () => "🥁 ...Good job."),
+    Match.exhaustive,
+  );
+
+// Ruthless Fletcher never says "good job".
+const ruthlessHeading = (verdict: ReviewVerdict): string =>
+  Match.value(verdict).pipe(
+    Match.when("not_my_tempo", () => "🥁 Not. Quite. My. Tempo."),
+    Match.when("almost", () => "🥁 Were you rushing or were you dragging?"),
+    Match.when("good_job", () => "🥁 ...Acceptable."),
+    Match.exhaustive,
+  );
+
+export const verdictHeading = (
+  verdict: ReviewVerdict,
+  tone: ReviewTone,
+): string =>
+  Match.value(tone).pipe(
+    Match.when("standard", () => standardHeading(verdict)),
+    Match.when("ruthless", () => ruthlessHeading(verdict)),
     Match.exhaustive,
   );
 
@@ -54,8 +77,9 @@ export const buildReviewSummaryBody = (
   review: GeminiReview,
   findings: readonly Finding[],
   unanchored: readonly Finding[],
+  tone: ReviewTone,
 ): string =>
-  `### ${verdictHeading(review.verdict)}
+  `### ${verdictHeading(review.verdict, tone)}
 
 ${review.summary}
 

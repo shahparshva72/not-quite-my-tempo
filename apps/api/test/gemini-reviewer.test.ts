@@ -4,6 +4,7 @@ import {
   buildReviewUserPrompt,
   buildSystemPrompt,
   filterReviewBySeverity,
+  FLETCHER_RUTHLESS_SYSTEM_PROMPT,
   FLETCHER_SYSTEM_PROMPT,
   GeminiReview,
   GeminiReviewer,
@@ -23,6 +24,7 @@ const input: GeminiReviewInput = {
   diff: "diff --git a/src/tempo.ts b/src/tempo.ts",
   priorReview: null,
   intensity: "studio_band",
+  tone: "standard",
 };
 
 const reviewJson = {
@@ -257,14 +259,55 @@ describe("golden review schema", () => {
 });
 
 describe("buildSystemPrompt", () => {
-  it("is the base persona at studio_band intensity", () => {
-    expect(buildSystemPrompt("studio_band")).toBe(FLETCHER_SYSTEM_PROMPT);
+  it("is the base persona at studio_band intensity and standard tone", () => {
+    expect(buildSystemPrompt("studio_band", "standard")).toBe(
+      FLETCHER_SYSTEM_PROMPT,
+    );
   });
 
   it("appends the intensity dial for the other settings", () => {
-    expect(buildSystemPrompt("sectional")).toContain("INTENSITY: sectional");
-    expect(buildSystemPrompt("carnegie")).toContain("INTENSITY: Carnegie");
-    expect(buildSystemPrompt("carnegie")).toContain("never fabricated");
+    expect(buildSystemPrompt("sectional", "standard")).toContain(
+      "INTENSITY: sectional",
+    );
+    expect(buildSystemPrompt("carnegie", "standard")).toContain(
+      "INTENSITY: Carnegie",
+    );
+    expect(buildSystemPrompt("carnegie", "standard")).toContain(
+      "never fabricated",
+    );
+  });
+
+  it("swaps in the full Fletcher persona for the ruthless tone", () => {
+    const prompt = buildSystemPrompt("studio_band", "ruthless");
+
+    expect(prompt).toBe(FLETCHER_RUTHLESS_SYSTEM_PROMPT);
+    expect(prompt).toContain("You are Terence Fletcher");
+    expect(prompt).toContain("principal engineer");
+    expect(prompt).not.toContain("The persona is seasoning");
+  });
+
+  it("keeps the rubric and guardrails intact in the ruthless tone", () => {
+    const prompt = buildSystemPrompt("studio_band", "ruthless");
+
+    expect(prompt).toContain("never to the person");
+    expect(prompt).toContain("never moves them");
+    expect(prompt).toContain("never the author");
+    expect(prompt).toContain("No profanity and no threats");
+    expect(prompt).toContain("Severity honesty");
+    expect(prompt).toContain("MEMORY");
+  });
+
+  it("makes sectional the quiet Fletcher in the ruthless tone", () => {
+    const prompt = buildSystemPrompt("sectional", "ruthless");
+
+    expect(prompt).toContain("The quiet Fletcher");
+    expect(prompt).not.toContain("Dial the persona down");
+  });
+
+  it("keeps Carnegie's bar in the ruthless tone", () => {
+    expect(buildSystemPrompt("carnegie", "ruthless")).toContain(
+      "INTENSITY: Carnegie",
+    );
   });
 });
 

@@ -18,6 +18,7 @@ import {
   performGeminiReview,
   persistReviewFindings,
   postReviewToGitHub,
+  reviewToneOf,
   reviewErrorCode,
 } from "../application/review-workflow.js";
 import type { ReviewPipelineError } from "../application/review-workflow.js";
@@ -302,6 +303,7 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
             reviewRunId,
             reviewResult.review,
             pullRequest.diff,
+            reviewToneOf(pullRequest.config),
           ).pipe(
             Effect.provide(pullRequestLayer),
             Effect.provide(databaseLayer),
