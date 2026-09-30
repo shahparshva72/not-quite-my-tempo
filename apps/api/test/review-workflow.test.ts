@@ -21,12 +21,14 @@ import {
   persistReviewFindings,
   postReviewToGitHub,
   reviewErrorCode,
+  reviewToneOf,
 } from "../src/application/review-workflow";
 import {
   GitHubPullRequestClient,
   PullRequestDiffTooLargeError,
   PullRequestResponseError,
 } from "../src/github/pull-request-client";
+import type { PersistedReviewConfig } from "../src/application/review-workflow";
 import type { CreateReviewInput } from "../src/github/pull-request-client";
 import { resetAndSeedRepository } from "./database";
 import pullRequestDiff from "./fixtures/pull-request.diff?raw";
@@ -311,6 +313,7 @@ describe("fetchReviewablePullRequest", () => {
       severityThreshold: "suggestion",
       ignore: [],
       intensity: "studio_band",
+      tone: "standard",
     });
     expect(result.diff).toContain("src/tempo.ts");
   });
@@ -323,6 +326,7 @@ describe("fetchReviewablePullRequest", () => {
             Option.some(
               JSON.stringify({
                 intensity: "carnegie",
+                tone: "ruthless",
                 ignore: ["src/charts/**"],
               }),
             ),
@@ -332,6 +336,7 @@ describe("fetchReviewablePullRequest", () => {
     );
 
     expect(result.config.intensity).toBe("carnegie");
+    expect(result.config.tone).toBe("ruthless");
     expect(result.config.enabled).toBe(true);
     expect(result.diff).not.toContain("src/charts/caravan.ts");
     expect(result.diff).toContain("src/tempo.ts");
@@ -346,6 +351,7 @@ describe("fetchReviewablePullRequest", () => {
 
     expect(result.config.enabled).toBe(true);
     expect(result.config.intensity).toBe("studio_band");
+    expect(result.config.tone).toBe("standard");
   });
 });
 
@@ -432,6 +438,7 @@ describe("postReviewToGitHub", () => {
           reviewRun.id,
           reviewResult.review,
           pullRequestDiff,
+          "standard",
         );
 
         const findings = yield* FindingRepository.listByReviewRun(reviewRun.id);
@@ -515,5 +522,22 @@ describe("review error taxonomy", () => {
     expect(
       isRetryableReviewError(new GeminiTimeoutError({ timeoutMillis: 1 })),
     ).toBe(false);
+  });
+});
+
+describe("reviewToneOf", () => {
+  it("keeps the standard tone for runs fetched before tone existed", () => {
+    // A "fetch pull request" step output persisted by an older deploy.
+    const persistedConfig: PersistedReviewConfig = {
+      enabled: true,
+      severityThreshold: "suggestion",
+      ignore: [],
+      intensity: "studio_band",
+    };
+
+    expect(reviewToneOf(persistedConfig)).toBe("standard");
+    expect(reviewToneOf({ ...persistedConfig, tone: "ruthless" })).toBe(
+      "ruthless",
+    );
   });
 });

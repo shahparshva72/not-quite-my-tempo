@@ -1,6 +1,7 @@
 export {
   buildReviewUserPrompt,
   buildSystemPrompt,
+  FLETCHER_RUTHLESS_SYSTEM_PROMPT,
   FLETCHER_SYSTEM_PROMPT,
 } from "./prompt.js";
 
@@ -9,6 +10,7 @@ export type {
   PriorFinding,
   PriorReview,
   ReviewIntensity,
+  ReviewTone,
 } from "./prompt.js";
 
 export {

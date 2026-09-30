@@ -162,7 +162,7 @@ const requestReview = (
           },
           body: JSON.stringify({
             systemInstruction: {
-              parts: [{ text: buildSystemPrompt(input.intensity) }],
+              parts: [{ text: buildSystemPrompt(input.intensity, input.tone) }],
             },
             contents: [
               {

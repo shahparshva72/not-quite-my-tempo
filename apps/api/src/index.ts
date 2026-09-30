@@ -26,6 +26,12 @@ import {
   authorizeRepository,
   visibleRepositories,
 } from "./application/authorization.js";
+import {
+  handlePolarWebhook,
+  openBillingPortal,
+  startCheckout,
+} from "./application/billing.js";
+import type { BillingLink } from "./application/billing.js";
 import { refreshSessionAccess } from "./application/session-access.js";
 import {
   recoverStuckRuns,
@@ -42,6 +48,11 @@ import {
   workspaceSettings,
 } from "./application/workspace-settings.js";
 import { GitHubOAuthLive } from "./auth/github-oauth.js";
+import { PolarClientLive, polarConfig } from "./billing/polar-client.js";
+import {
+  decodePolarWebhookEvent,
+  verifyPolarWebhook,
+} from "./billing/polar-webhook.js";
 import { createAuthRoutes } from "./auth/routes.js";
 import {
   PENDING_INSTALLATION_COOKIE,
@@ -80,6 +91,11 @@ type Bindings = Env & {
   readonly GITHUB_OAUTH_CLIENT_SECRET: string;
   readonly SESSION_SECRET: string;
   readonly TOKEN_ENCRYPTION_KEY: string;
+  // Billing is optional: unset means no paid plan (docs/BILLING.md).
+  readonly POLAR_ACCESS_TOKEN?: string;
+  readonly POLAR_WEBHOOK_SECRET?: string;
+  readonly POLAR_PRODUCT_ID?: string;
+  readonly POLAR_SERVER?: string;
   readonly REVIEW_PULL_REQUEST_WORKFLOW: Workflow<ReviewWorkflowParams>;
 };
 
@@ -215,6 +231,55 @@ app.post("/webhooks/github", (c) => {
           ),
         onSuccess: (result) => c.json(result, 202),
       }),
+    ),
+  );
+});
+
+// Polar subscription events. The signature, not the origin, authenticates
+// them. Each one only triggers a re-read of the workspace's subscriptions
+// from Polar (docs/BILLING.md); failures return 500 so Polar retries.
+app.post("/webhooks/polar", async (c): Promise<Response> => {
+  const config = polarConfig(c.env);
+
+  if (Option.isNone(config)) {
+    return errorResponse(c, 404, "billing_disabled", "Billing is off");
+  }
+
+  return Effect.runPromise(
+    Effect.tryPromise({
+      try: () => c.req.text(),
+      catch: (cause) => new RequestBodyError({ cause }),
+    }).pipe(
+      Effect.flatMap((body) =>
+        verifyPolarWebhook(
+          body,
+          {
+            id: c.req.header("webhook-id"),
+            timestamp: c.req.header("webhook-timestamp"),
+            signature: c.req.header("webhook-signature"),
+          },
+          config.value.webhookSecret,
+          new Date(),
+        ).pipe(
+          Effect.flatMap((valid) =>
+            valid
+              ? handlePolarWebhook(decodePolarWebhookEvent(body)).pipe(
+                  Effect.map((synced): Response => c.json({ synced }, 202)),
+                )
+              : Effect.succeed<Response>(
+                  errorResponse(
+                    c,
+                    401,
+                    "invalid_signature",
+                    "Polar webhook signature is invalid",
+                  ),
+                ),
+          ),
+        ),
+      ),
+      Effect.provide(makeLiveLayer(c.env.DB)),
+      Effect.provide(PolarClientLive(config.value)),
+      Effect.catchAll((error) => Effect.succeed(internalError(c, error))),
     ),
   );
 });
@@ -538,6 +603,7 @@ const GeminiKeyForm = Schema.Struct({ api_key: Schema.String });
 const settingsNotices = new Map<string, SettingsNotice>([
   ["saved", "saved"],
   ["removed", "removed"],
+  ["subscribed", "subscribed"],
 ]);
 
 const renderSettings = (
@@ -545,7 +611,7 @@ const renderSettings = (
   session: SessionPayload,
   workspaceId: number,
   notice: SettingsNotice | null,
-  status: 200 | 422 | 503,
+  status: 200 | 404 | 409 | 422 | 503,
 ) =>
   Effect.runPromise(
     workspaceSettings(session, workspaceId).pipe(
@@ -559,7 +625,15 @@ const renderSettings = (
             Match.orElse((error) => internalError(c, error)),
           ),
         onSuccess: (data) =>
-          c.html(settingsPage(session.login, data, notice, new Date()), status),
+          c.html(
+            settingsPage(
+              session.login,
+              { ...data, billingEnabled: Option.isSome(polarConfig(c.env)) },
+              notice,
+              new Date(),
+            ),
+            status,
+          ),
       }),
     ),
   );
@@ -676,6 +750,86 @@ app.post("/workspaces/:id/settings/gemini-key/remove", (c) =>
       ),
     );
   }),
+);
+
+/** Sends an admin to Polar: checkout to subscribe, or the portal. */
+const redirectToPolar = (c: AppContext, link: BillingLink) =>
+  withSessionPage(c, async (session) => {
+    const workspaceId = Number(c.req.param("id"));
+
+    if (!Number.isInteger(workspaceId)) {
+      return c.html(notFoundPage(session.login), 404);
+    }
+
+    const config = polarConfig(c.env);
+
+    if (Option.isNone(config)) {
+      return renderSettings(c, session, workspaceId, "billing_disabled", 404);
+    }
+
+    return Effect.runPromise(
+      link(session, workspaceId, new URL(c.req.url).origin).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.provide(PolarClientLive(config.value)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                Promise.resolve(c.html(notFoundPage(session.login), 404)),
+              ),
+              Match.tag("ForbiddenError", (error) =>
+                Promise.resolve(
+                  c.html(forbiddenPage(session.login, error.requiredRole), 403),
+                ),
+              ),
+              Match.tag("AlreadySubscribedError", () =>
+                renderSettings(
+                  c,
+                  session,
+                  workspaceId,
+                  "already_subscribed",
+                  409,
+                ),
+              ),
+              Match.tag("NoBillingAccountError", () =>
+                renderSettings(
+                  c,
+                  session,
+                  workspaceId,
+                  "no_billing_account",
+                  409,
+                ),
+              ),
+              Match.tag("PolarRequestError", (error) => {
+                Effect.runSync(
+                  logError("polar_request_failed", {
+                    operation: error.operation,
+                    status: error.status ?? "none",
+                  }),
+                );
+
+                return renderSettings(
+                  c,
+                  session,
+                  workspaceId,
+                  "billing_unavailable",
+                  503,
+                );
+              }),
+              Match.orElse((error) => Promise.resolve(internalError(c, error))),
+            ),
+          onSuccess: (url) => Promise.resolve(c.redirect(url, 303)),
+        }),
+      ),
+    );
+  });
+
+app.post("/workspaces/:id/billing/checkout", (c) =>
+  redirectToPolar(c, startCheckout),
+);
+
+app.post("/workspaces/:id/billing/portal", (c) =>
+  redirectToPolar(c, openBillingPortal),
 );
 
 app.get("/api/me", (c) =>

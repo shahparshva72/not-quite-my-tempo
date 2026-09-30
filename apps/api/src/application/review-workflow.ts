@@ -14,7 +14,11 @@ import {
   GeminiReviewer,
 } from "@not-quite-my-tempo/gemini";
 import type { DatabaseError, Finding, ReviewRun } from "@not-quite-my-tempo/db";
-import type { GeminiReview, PriorReview } from "@not-quite-my-tempo/gemini";
+import type {
+  GeminiReview,
+  PriorReview,
+  ReviewTone,
+} from "@not-quite-my-tempo/gemini";
 import type {
   GeminiReviewerError,
   GeminiReviewResult,
@@ -240,6 +244,19 @@ export const loadPriorReview = (
     });
   });
 
+/**
+ * A review config as a Workflow step output may hold it. The fetched pull
+ * request is persisted, so a run that fetched it before `tone` existed
+ * resumes without one.
+ */
+export type PersistedReviewConfig = Omit<ReviewConfig, "tone"> & {
+  readonly tone?: ReviewTone | undefined;
+};
+
+/** The pull request's review tone; the standard one when none was saved. */
+export const reviewToneOf = (config: PersistedReviewConfig): ReviewTone =>
+  config.tone ?? "standard";
+
 export const performGeminiReview = (
   request: ReviewRequest,
   pullRequest: ReviewablePullRequest,
@@ -256,6 +273,7 @@ export const performGeminiReview = (
       diff: pullRequest.diff,
       priorReview,
       intensity: pullRequest.config.intensity,
+      tone: reviewToneOf(pullRequest.config),
     });
 
     return {
@@ -339,6 +357,7 @@ export const postReviewToGitHub = (
   reviewRunId: number,
   review: GeminiReview,
   diff: string,
+  tone: ReviewTone,
 ) =>
   Effect.gen(function* () {
     const client = yield* GitHubPullRequestClient;
@@ -357,7 +376,7 @@ export const postReviewToGitHub = (
 
     const created = yield* client.createReview(installationToken, ref, {
       commitId: request.headSha,
-      body: buildReviewSummaryBody(review, findings, unanchored),
+      body: buildReviewSummaryBody(review, findings, unanchored, tone),
       comments: anchored.map(({ finding, line }) => ({
         path: finding.filePath,
         line,

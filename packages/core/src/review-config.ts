@@ -17,6 +17,15 @@ export const ReviewIntensity = Schema.Literal(
 export type ReviewIntensity = typeof ReviewIntensity.Type;
 
 /**
+ * How Fletcher phrases the review. Orthogonal to {@link ReviewIntensity}:
+ * tone changes the wording only, never which findings are raised or how
+ * severe they are.
+ */
+export const ReviewTone = Schema.Literal("standard", "ruthless");
+
+export type ReviewTone = typeof ReviewTone.Type;
+
+/**
  * Per-repository configuration read from `.fletcher.json` at the pull
  * request's head SHA. Every field is optional; a missing or malformed file
  * must resolve to {@link defaultReviewConfig}, never fail a review.
@@ -32,6 +41,9 @@ export const ReviewConfig = Schema.Struct({
   intensity: Schema.optionalWith(ReviewIntensity, {
     default: () => "studio_band" as const,
   }),
+  tone: Schema.optionalWith(ReviewTone, {
+    default: () => "standard" as const,
+  }),
 });
 
 export type ReviewConfig = typeof ReviewConfig.Type;
@@ -41,6 +53,7 @@ export const defaultReviewConfig: ReviewConfig = {
   severityThreshold: "suggestion",
   ignore: [],
   intensity: "studio_band",
+  tone: "standard",
 };
 
 export const REVIEW_CONFIG_PATH = ".fletcher.json";

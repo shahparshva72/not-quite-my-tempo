@@ -28,6 +28,26 @@ export const workspaces = sqliteTable("workspaces", {
     () => users.id,
     { onDelete: "set null" },
   ),
+  // The workspace's Polar subscription as Fletcher last read it from
+  // Polar's API (docs/BILLING.md). Webhooks only trigger that read, so
+  // these never come from a webhook payload. subscriptionStatus is Polar's
+  // raw status ("active", "past_due", "canceled", ...); only active and
+  // trialing count as paid. subscriptionSyncedAt is when the read started,
+  // so a slower, older read never overwrites a newer one.
+  polarCustomerId: text("polar_customer_id"),
+  polarSubscriptionId: text("polar_subscription_id"),
+  subscriptionStatus: text("subscription_status"),
+  subscriptionPeriodEnd: integer("subscription_period_end", {
+    mode: "timestamp_ms",
+  }),
+  subscriptionCancelAtPeriodEnd: integer("subscription_cancel_at_period_end", {
+    mode: "boolean",
+  })
+    .notNull()
+    .default(false),
+  subscriptionSyncedAt: integer("subscription_synced_at", {
+    mode: "timestamp_ms",
+  }),
   createdAt: integer("created_at", { mode: "timestamp_ms" })
     .notNull()
     .default(sql`(unixepoch() * 1000)`),

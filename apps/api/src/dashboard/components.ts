@@ -316,6 +316,9 @@ const plural = (value: number, unit: string) =>
  * "just now", "5 minutes ago", "3 days ago"; older than 30 days falls back
  * to the date. The exact time stays available in the title attribute.
  */
+/** A UTC calendar date, e.g. 2026-09-30. */
+export const isoDate = (date: Date) => date.toISOString().slice(0, 10);
+
 export const relativeTime = (date: Date, now: Date) => {
   const minutes = Math.floor((now.getTime() - date.getTime()) / 60_000);
 
@@ -328,7 +331,7 @@ export const relativeTime = (date: Date, now: Date) => {
           ? plural(Math.floor(minutes / 60), "hour")
           : minutes < 60 * 24 * 30
             ? plural(Math.floor(minutes / (60 * 24)), "day")
-            : date.toISOString().slice(0, 10);
+            : isoDate(date);
 
   return html`<time
     datetime="${date.toISOString()}"

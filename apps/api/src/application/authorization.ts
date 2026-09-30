@@ -97,13 +97,15 @@ export type WorkspaceAction =
   | "view_members"
   | "manage_roles"
   | "view_settings"
-  | "manage_settings";
+  | "manage_settings"
+  | "manage_billing";
 
 const workspaceRequiredRoles = {
   view_members: "member",
   manage_roles: "owner",
   view_settings: "member",
   manage_settings: "admin",
+  manage_billing: "admin",
 } as const satisfies Record<WorkspaceAction, WorkspaceRole>;
 
 export const workspaceActionAllowed = (
