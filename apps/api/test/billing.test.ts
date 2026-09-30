@@ -412,6 +412,7 @@ describe("billing routes", () => {
         products: [PRODUCT_ID],
         success_url:
           "https://example.com/workspaces/1/settings?notice=subscribed",
+        external_customer_id: "workspace-1",
         metadata: { workspace_id: "1" },
       },
     });
@@ -467,7 +468,7 @@ describe("billing routes", () => {
       "https://sandbox.polar.sh/portal/xyz",
     );
     expect(calls[0]?.body).toEqual({
-      customer_id: "cus_1",
+      external_customer_id: "workspace-1",
       return_url: "https://example.com/workspaces/1/settings",
     });
   });

@@ -225,16 +225,16 @@ export const openBillingPortal = (
       "manage_billing",
     );
 
-    const customerId = viewer.workspace.polarCustomerId;
-
-    if (customerId === null) {
+    if (viewer.workspace.polarCustomerId === null) {
       return yield* new NoBillingAccountError();
     }
 
     const polar = yield* PolarClient;
 
+    // Keyed by workspace, not the stored customer ID: a customer ID Polar
+    // reports can be shared with another workspace.
     return yield* polar.createPortalSession({
-      customerId,
+      workspaceId,
       returnUrl: settingsUrl(origin, workspaceId),
     });
   });
