@@ -439,7 +439,7 @@ describe("billing routes", () => {
   it("sends a past-due workspace to the portal instead of a new checkout", async () => {
     await setPlan("past_due", Date.now() + DAY_MS);
 
-    const calls = polarAnswers();
+    const calls = polarAnswers([polarSubscription("sub_1", "past_due")]);
 
     const response = await post(
       "/workspaces/1/billing/checkout",
@@ -447,10 +447,38 @@ describe("billing routes", () => {
     );
 
     expect(response.status).toBe(409);
-    expect(calls).toEqual([]);
+    expect(calls.map((call) => call.method)).toEqual(["GET"]);
     expect(await response.text()).toContain(
       'action="/workspaces/1/billing/portal"',
     );
+  });
+
+  it("lets a workspace resubscribe when Polar canceled a plan the webhook never reported", async () => {
+    await setPlan("active", Date.now() - 7 * DAY_MS);
+
+    const calls = polarAnswers([polarSubscription("sub_1", "canceled")]);
+
+    const response = await post(
+      "/workspaces/1/billing/checkout",
+      await sessionCookie([3001], "admin"),
+    );
+
+    expect(response.status).toBe(303);
+    expect(calls.map((call) => call.method)).toEqual(["GET", "POST"]);
+    expect((await plan())?.subscription_status).toBe("canceled");
+  });
+
+  it("keeps Manage billing after the plan ends or moves to another product", async () => {
+    await setPlan("canceled", Date.now() - 7 * DAY_MS);
+
+    const page = await (
+      await request("/workspaces/1/settings", {
+        headers: { cookie: await sessionCookie([3001], "admin") },
+      })
+    ).text();
+
+    expect(page).toContain('action="/workspaces/1/billing/portal"');
+    expect(page).toContain('action="/workspaces/1/billing/checkout"');
   });
 
   it("opens the customer portal for a subscribed workspace", async () => {
