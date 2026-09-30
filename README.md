@@ -146,6 +146,28 @@ The review itself is performed by the Gemini API through the
 - `GEMINI_MODEL` (optional): overrides the default `gemini-3.8-flash`. Not a
   secret; set it under `vars` in `apps/api/wrangler.jsonc` if needed.
 
+## Billing (Polar)
+
+The paid plan reviews on Fletcher's Gemini key, with no trial limit. Polar
+(polar.sh) is the merchant of record: it runs checkout, the customer portal,
+and sales tax. Billing is optional and turns on only when the token, product,
+and webhook secret are all set; otherwise settings pages show no Subscribe
+button and workspaces stay on bring-your-own-key plus the trial.
+See [docs/BILLING.md](docs/BILLING.md) for the full setup.
+
+- `POLAR_ACCESS_TOKEN` (optional secret): an organization access token with
+  `checkouts:write`, `customer_sessions:write`, and `subscriptions:read`.
+- `POLAR_PRODUCT_ID` (optional): the recurring product for the paid plan.
+- `POLAR_WEBHOOK_SECRET` (optional secret): the `whsec_…` secret of the
+  webhook pointing at `/webhooks/polar`.
+- `POLAR_SERVER` (optional): `sandbox` for sandbox.polar.sh; production by
+  default.
+
+```sh
+pnpm --filter @not-quite-my-tempo/api exec wrangler secret put POLAR_ACCESS_TOKEN
+pnpm --filter @not-quite-my-tempo/api exec wrangler secret put POLAR_WEBHOOK_SECRET
+```
+
 Lint and format the workspace with Oxlint and Oxfmt:
 
 ```sh

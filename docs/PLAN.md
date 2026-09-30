@@ -40,7 +40,7 @@ their historical descriptions are not the current release status. See
 5. Production readiness (Phase 15).
 6. BYOK, trial, and billing (Phase 16) — BYOK and the 5-review trial
    **done 2026-09-29** ([BYOK_TRIAL_DESIGN.md](./BYOK_TRIAL_DESIGN.md));
-   billing remains.
+   billing through Polar **done 2026-09-30** ([BILLING.md](./BILLING.md)).
 
 ### Phase 12 — Accounts, sessions, and authorization
 
@@ -125,9 +125,11 @@ data. Operational failures have a tested recovery path.
 - Trial: 5 platform-key reviews per workspace, decremented atomically when a
   run is queued so concurrent webhooks cannot overspend. Runs skipped for
   lack of a key post a clear "add a key or upgrade" message.
-- Paid plan: Stripe Checkout and Customer Portal; a signature-verified
-  Stripe webhook writes plan status onto the workspace. Past-due and
-  cancelled subscriptions fall back to the BYOK/trial rules.
+- Paid plan: Polar Checkout and Customer Portal (Polar instead of Stripe,
+  because Stripe doesn't onboard Indian sellers directly and Polar is the
+  merchant of record); a signature-verified Polar webhook writes plan
+  status onto the workspace. Past-due and cancelled subscriptions fall
+  back to the BYOK/trial rules.
 - Tie the trial and plan to the workspace, not the GitHub installation, so
   reinstalling the App does not reset the trial.
 

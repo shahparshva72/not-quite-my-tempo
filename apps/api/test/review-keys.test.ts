@@ -284,7 +284,11 @@ describe("explaining a blocked review", () => {
     trigger: "opened",
   };
 
-  const explain = async (runId: number, comments: string[]) =>
+  const explain = async (
+    runId: number,
+    comments: string[],
+    billingEnabled = false,
+  ) =>
     Effect.runPromise(
       explainMissingKey(
         "ghs_token",
@@ -292,6 +296,7 @@ describe("explaining a blocked review", () => {
         runId,
         1,
         1,
+        billingEnabled,
         "https://notmytempo.dev",
       ).pipe(
         Effect.provide(db()),
@@ -335,6 +340,18 @@ describe("explaining a blocked review", () => {
     expect(comments[0]).toContain(
       "https://notmytempo.dev/workspaces/1/settings",
     );
+  });
+
+  it("only mentions subscribing where billing is set up", async () => {
+    const withoutBilling: string[] = [];
+    const withBilling: string[] = [];
+
+    await explain((await createRun("blocked-free")).id, withoutBilling);
+    await explain((await createRun("blocked-paid", 43)).id, withBilling, true);
+
+    expect(withoutBilling[0]).not.toContain("subscribe");
+    expect(withoutBilling[0]).toContain("can add one at");
+    expect(withBilling[0]).toContain("add a key or subscribe at");
   });
 });
 

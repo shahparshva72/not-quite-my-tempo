@@ -23,7 +23,13 @@ export const reviewRunStatuses = [
 export const reviewVerdicts = ["not_my_tempo", "almost", "good_job"] as const;
 
 // Which Gemini key a run used; null when it never reached Gemini.
-export const reviewKeySources = ["workspace", "platform"] as const;
+// "platform" is a free trial review; "subscription" is the platform key on
+// a paid plan and never counts against the trial.
+export const reviewKeySources = [
+  "workspace",
+  "platform",
+  "subscription",
+] as const;
 
 export const reviewRunTriggers = [
   "opened",

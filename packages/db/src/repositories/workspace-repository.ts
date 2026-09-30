@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, lte, or } from "drizzle-orm";
 import { Effect, Option } from "effect";
 
 import { databaseEffect } from "../errors.js";
@@ -22,6 +22,24 @@ export interface SavedGeminiKey extends GeminiKeyChange {
 }
 
 export type GeminiKeyProvider = (typeof geminiKeyProviders)[number];
+
+/** Polar statuses that mean the workspace is paying. */
+export const paidSubscriptionStatuses = ["active", "trialing"] as const;
+
+/**
+ * A workspace's plan as Fletcher read it from Polar's API. All the
+ * subscription fields are null when Polar has no subscription for it.
+ */
+export interface SubscriptionState {
+  readonly workspaceId: number;
+  readonly customerId: string | null;
+  readonly subscriptionId: string | null;
+  readonly status: string | null;
+  readonly periodEnd: Date | null;
+  readonly cancelAtPeriodEnd: boolean;
+  /** When the read from Polar started. */
+  readonly syncedAt: Date;
+}
 
 export class WorkspaceRepository extends Effect.Service<WorkspaceRepository>()(
   "@not-quite-my-tempo/db/WorkspaceRepository",
@@ -88,6 +106,66 @@ export class WorkspaceRepository extends Effect.Service<WorkspaceRepository>()(
               }),
             ]);
           }).pipe(Effect.asVoid),
+        /**
+         * Stores the plan read from Polar and audits a status change.
+         * Returns false when a read that started later was already stored,
+         * so concurrent syncs can't go backwards.
+         */
+        applySubscription: (
+          state: SubscriptionState,
+          previousStatus: string | null,
+        ) =>
+          Effect.gen(function* () {
+            const updated = yield* databaseEffect(
+              "workspaces.apply_subscription",
+              () =>
+                client
+                  .update(workspaces)
+                  .set({
+                    polarCustomerId: state.customerId,
+                    polarSubscriptionId: state.subscriptionId,
+                    subscriptionStatus: state.status,
+                    subscriptionPeriodEnd: state.periodEnd,
+                    subscriptionCancelAtPeriodEnd: state.cancelAtPeriodEnd,
+                    subscriptionSyncedAt: state.syncedAt,
+                    updatedAt: new Date(),
+                  })
+                  .where(
+                    and(
+                      eq(workspaces.id, state.workspaceId),
+                      or(
+                        isNull(workspaces.subscriptionSyncedAt),
+                        lte(workspaces.subscriptionSyncedAt, state.syncedAt),
+                      ),
+                    ),
+                  )
+                  .returning({ id: workspaces.id })
+                  .all(),
+            );
+
+            const applied = updated.length > 0;
+
+            if (applied && state.status !== previousStatus) {
+              yield* databaseEffect("workspaces.audit_plan_change", () =>
+                client
+                  .insert(auditEvents)
+                  .values({
+                    workspaceId: state.workspaceId,
+                    actorUserId: null,
+                    action: "billing.plan_changed",
+                    target: `workspace:${state.workspaceId}`,
+                    before: JSON.stringify({ status: previousStatus }),
+                    after: JSON.stringify({
+                      status: state.status,
+                      subscriptionId: state.subscriptionId,
+                    }),
+                  })
+                  .run(),
+              );
+            }
+
+            return applied;
+          }),
         removeGeminiKeyWithAudit: (change: GeminiKeyChange) =>
           databaseEffect("workspaces.remove_gemini_key", () => {
             const now = new Date();

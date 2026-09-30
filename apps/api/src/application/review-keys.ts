@@ -10,6 +10,7 @@ import { decryptToken } from "../auth/token-cipher.js";
 import { GitHubPullRequestClient } from "../github/pull-request-client.js";
 import type { ReviewRequest } from "../github/review-request.js";
 import { logError, logInfo } from "../logging.js";
+import { hasPaidPlan } from "./billing.js";
 import { ReviewRunNotFoundError } from "./review-workflow.js";
 import { FREE_TRIAL_REVIEWS, geminiKeyContext } from "./workspace-settings.js";
 
@@ -37,9 +38,10 @@ export interface ReviewKeyChoice {
 
 /**
  * Decides which Gemini key a run uses, just before the Gemini call
- * (docs/BYOK_TRIAL_DESIGN.md): the workspace's key, else one free trial
- * review on the platform key (taken atomically), else none. Returns only
- * the source, never the key, because Workflow step outputs are persisted.
+ * (docs/BYOK_TRIAL_DESIGN.md): the workspace's key, else the platform key
+ * on a paid plan (docs/BILLING.md), else one free trial review on the
+ * platform key (taken atomically), else none. Returns only the source,
+ * never the key, because Workflow step outputs are persisted.
  */
 export const chooseReviewKey = (reviewRunId: number) =>
   Effect.gen(function* () {
@@ -76,6 +78,12 @@ export const chooseReviewKey = (reviewRunId: number) =>
       yield* ReviewRunRepository.setKeySource(reviewRunId, "workspace");
 
       return choice("workspace");
+    }
+
+    if (hasPaidPlan(workspace.value, new Date())) {
+      yield* ReviewRunRepository.setKeySource(reviewRunId, "subscription");
+
+      return choice("subscription");
     }
 
     const claimed = yield* ReviewRunRepository.claimTrialReview(
@@ -117,7 +125,7 @@ export const resolveGeminiKey = (
   GeminiKeyUnreadableError | DatabaseError,
   WorkspaceRepository
 > =>
-  source === "platform"
+  source === "platform" || source === "subscription"
     ? Effect.succeed(platform)
     : WorkspaceRepository.findByRepositoryId(repositoryId).pipe(
         Effect.flatMap((workspace) =>
@@ -141,15 +149,24 @@ export const resolveGeminiKey = (
         ),
       );
 
-const blockedComment = (workspaceId: number | null, appOrigin?: string) => {
+const blockedComment = (
+  workspaceId: number | null,
+  billingEnabled: boolean,
+  appOrigin?: string,
+) => {
   const where =
     appOrigin === undefined || workspaceId === null
       ? "in Not Quite My Tempo's workspace settings"
       : `at ${appOrigin}/workspaces/${workspaceId}/settings`;
 
+  // Subscribing is only offered where billing is set up (docs/BILLING.md).
+  const situation = billingEnabled
+    ? `has no Gemini API key, and isn't on the paid plan. An admin or owner can add a key or subscribe ${where}`
+    : `and has no Gemini API key. An admin or owner can add one ${where}`;
+
   return `### 🥁 Fletcher can't review this yet
 
-This workspace has used its 5 free reviews and has no Gemini API key. An admin or owner can add one ${where}, then comment \`/fletcher again\` here.`;
+This workspace has used its 5 free reviews ${situation}, then comment \`/fletcher again\` here.`;
 };
 
 /**
@@ -162,6 +179,7 @@ export const explainMissingKey = (
   reviewRunId: number,
   repositoryId: number,
   workspaceId: number | null,
+  billingEnabled: boolean,
   appOrigin?: string,
 ) =>
   Effect.gen(function* () {
@@ -184,7 +202,7 @@ export const explainMissingKey = (
         repo: request.repo,
         pullRequestNumber: request.pullRequestNumber,
       },
-      blockedComment(workspaceId, appOrigin),
+      blockedComment(workspaceId, billingEnabled, appOrigin),
     );
   }).pipe(
     Effect.catchAll((error) =>

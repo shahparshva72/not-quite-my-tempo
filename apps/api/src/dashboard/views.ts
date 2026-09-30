@@ -13,6 +13,7 @@ import {
   repositoryActionAllowed,
   workspaceActionAllowed,
 } from "../application/authorization.js";
+import { hasOpenSubscription, hasPaidPlan } from "../application/billing.js";
 import { trialStatus } from "../application/workspace-settings.js";
 import type { TrialStatus } from "../application/workspace-settings.js";
 
@@ -29,6 +30,7 @@ import {
   failureReason,
   formatNumber,
   icon,
+  isoDate,
   layout,
   logo,
   messagePage,
@@ -599,9 +601,14 @@ export const membersPage = (
 export type SettingsNotice =
   | "saved"
   | "removed"
+  | "subscribed"
   | "invalid_format"
   | "rejected"
-  | "unavailable";
+  | "unavailable"
+  | "already_subscribed"
+  | "no_billing_account"
+  | "billing_unavailable"
+  | "billing_disabled";
 
 const noticeMessages = {
   saved: "Key saved. Reviews now use it.",
@@ -612,12 +619,21 @@ const noticeMessages = {
     "Google rejected that key for both the Gemini API and Vertex AI. Check that it's active and allowed to use one of them.",
   unavailable:
     "Google didn't answer, so the key wasn't saved. Try again in a minute.",
+  subscribed:
+    "Thanks for subscribing. The plan starts as soon as Polar confirms the payment, usually within a minute.",
+  already_subscribed:
+    "This workspace already has a subscription. Use Manage billing to change it or update its payment method.",
+  no_billing_account:
+    "This workspace has no billing account yet. Subscribe first.",
+  billing_unavailable:
+    "Polar didn't answer, so nothing changed. Try again in a minute.",
+  billing_disabled: "Billing isn't set up on this server.",
 } as const satisfies Record<SettingsNotice, string>;
 
 const settingsNotice = (notice: SettingsNotice | null) =>
   notice === null
     ? ""
-    : notice === "saved" || notice === "removed"
+    : notice === "saved" || notice === "removed" || notice === "subscribed"
       ? html`<p class="notice" role="status">
           ${icon("check")}<span>${noticeMessages[notice]}</span>
         </p>`
@@ -642,6 +658,16 @@ const keySummary = (workspace: Workspace, trial: TrialStatus, now: Date) => {
     </div>`;
   }
 
+  if (hasPaidPlan(workspace, now)) {
+    return html`<div class="key-chip">
+      <span class="feature-icon">${icon("key")}</span>
+      <p>
+        No key needed: the paid plan reviews on Fletcher's key. Add one here to
+        use your own instead.
+      </p>
+    </div>`;
+  }
+
   return trial.remaining > 0
     ? html`<div class="key-chip">
         ${trialMeter(trial.remaining, trial.total)}
@@ -659,17 +685,91 @@ const keySummary = (workspace: Workspace, trial: TrialStatus, now: Date) => {
       </div>`;
 };
 
+const planSummary = (workspace: Workspace, now: Date) => {
+  const periodEnd = workspace.subscriptionPeriodEnd;
+
+  if (hasPaidPlan(workspace, now)) {
+    return html`<p>
+      <span class="badge badge-brass">Paid plan</span>
+      ${
+        workspace.geminiKeyLast4 === null
+          ? "Reviews use Fletcher's key, with no trial limit."
+          : "Reviews use this workspace's own key while one is saved; remove it to use Fletcher's."
+      }
+      ${
+        periodEnd === null
+          ? ""
+          : workspace.subscriptionCancelAtPeriodEnd
+            ? html`The plan ends on ${isoDate(periodEnd)}.`
+            : html`Renews on ${isoDate(periodEnd)}.`
+      }
+    </p>`;
+  }
+
+  // Past due, unpaid, or a period that ended without a renewal.
+  if (hasOpenSubscription(workspace)) {
+    return html`<p class="state-failed">
+      Polar hasn't confirmed this period's payment. Until it does, reviews use
+      this workspace's key or free trial.
+    </p>`;
+  }
+
+  return html`<p>
+    Free: reviews use this workspace's own Gemini key after the free trial. The
+    paid plan reviews on Fletcher's key instead, billed per workspace through
+    Polar.
+  </p>`;
+};
+
+const planCard = (
+  workspace: Workspace,
+  canManage: boolean,
+  billingEnabled: boolean,
+  now: Date,
+) => {
+  const manage = hasOpenSubscription(workspace);
+
+  return html`<section class="card">
+    <div class="card-head"><h2>Plan</h2></div>
+    <div class="card-body">
+      ${planSummary(workspace, now)}
+      ${
+        !billingEnabled
+          ? ""
+          : !canManage
+            ? html`<p class="quiet" style="margin: 1rem 0 0">
+                Only admins and owners can change the plan.
+              </p>`
+            : html`<form
+                method="post"
+                action="/workspaces/${workspace.id}/billing/${
+                  manage ? "portal" : "checkout"
+                }"
+              >
+                <button
+                  class="btn${manage ? " btn-secondary" : ""}"
+                  type="submit"
+                >
+                  ${manage ? "Manage billing" : "Subscribe"}
+                </button>
+              </form>`
+      }
+    </div>
+  </section>`;
+};
+
 export const settingsPage = (
   login: string,
   data: {
     readonly workspace: Workspace;
     readonly viewerRole: WorkspaceRole;
     readonly trial: TrialStatus;
+    readonly billingEnabled: boolean;
   },
   notice: SettingsNotice | null,
   now: Date,
 ) => {
-  const { workspace, viewerRole, trial } = data;
+  const { workspace, viewerRole, trial, billingEnabled } = data;
   const canManage = workspaceActionAllowed(viewerRole, "manage_settings");
   const hasKey = workspace.geminiKeyLast4 !== null;
 
@@ -686,6 +786,7 @@ export const settingsPage = (
       )}
       ${settingsNotice(notice)}
       <div class="stack">
+        ${planCard(workspace, canManage, billingEnabled, now)}
         <section class="card">
           <div class="card-head"><h2>Gemini API key</h2></div>
           <div class="card-body">

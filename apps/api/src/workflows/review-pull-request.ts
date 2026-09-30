@@ -3,7 +3,7 @@ import {
   type WorkflowEvent,
   type WorkflowStep,
 } from "cloudflare:workers";
-import { Data, Effect, Inspectable, Match, Schema } from "effect";
+import { Data, Effect, Inspectable, Match, Option, Schema } from "effect";
 import { makeLiveLayer } from "@not-quite-my-tempo/db";
 import { GeminiReviewerLive } from "@not-quite-my-tempo/gemini";
 
@@ -30,6 +30,7 @@ import {
 } from "../application/review-keys.js";
 import type { ResolvedGeminiKey } from "../application/review-keys.js";
 import { ReviewWorkflowParams } from "../application/review-requests.js";
+import { polarConfig } from "../billing/polar-client.js";
 import { GitHubAppAuthLive } from "../github/app-auth.js";
 import { GitHubPullRequestClientLive } from "../github/pull-request-client.js";
 import { logError, logInfo } from "../logging.js";
@@ -44,6 +45,10 @@ type WorkflowEnv = {
   // Gemini Developer API (Google AI Studio key).
   readonly GEMINI_API_PROVIDER?: string;
   readonly TOKEN_ENCRYPTION_KEY: string;
+  // Only to tell blocked pull requests whether subscribing is an option.
+  readonly POLAR_ACCESS_TOKEN?: string;
+  readonly POLAR_PRODUCT_ID?: string;
+  readonly POLAR_WEBHOOK_SECRET?: string;
 };
 
 class WorkflowExecutionError extends Data.TaggedError(
@@ -230,6 +235,7 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
               reviewRunId,
               keyChoice.repositoryId,
               keyChoice.workspaceId,
+              Option.isSome(polarConfig(env)),
               appOrigin,
             ).pipe(
               Effect.provide(pullRequestLayer),
