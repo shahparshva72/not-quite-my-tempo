@@ -3,6 +3,9 @@
   "name": "not-quite-my-tempo-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-10",
+  // Production origin. Cloudflare creates the DNS record and certificate on
+  // deploy; the zone must be in the same account.
+  "routes": [{ "pattern": "notmytempo.dev", "custom_domain": true }],
   // Every 15 minutes: fail reviews whose workflow died (stuck-runs.ts).
   "triggers": { "crons": ["*/15 * * * *"] },
   "workflows": [

@@ -166,8 +166,9 @@ const settingsUrl = (origin: string, workspaceId: number, notice?: string) =>
 
 /**
  * A Polar checkout link for the workspace's paid plan. Polar is asked
- * first, because a payment finished moments ago may not have reached
- * Fletcher's webhook yet; finding one records it and refuses a second.
+ * first, never the stored plan: a payment finished moments ago may not have
+ * reached Fletcher's webhook yet, and a cancellation may have been missed.
+ * An open subscription is recorded and refuses a second checkout.
  */
 export const startCheckout = (
   access: SessionAccess,
@@ -181,21 +182,19 @@ export const startCheckout = (
       "manage_billing",
     );
 
-    if (hasOpenSubscription(viewer.workspace)) {
-      return yield* new AlreadySubscribedError();
-    }
-
     const syncedAt = new Date();
     const polar = yield* PolarClient;
     const existing = yield* polar.listSubscriptions(workspaceId);
+
+    // Stored either way, so a cancellation whose webhook never arrived is
+    // corrected here instead of blocking a new checkout.
+    yield* recordPlan(viewer.workspace, existing, syncedAt);
 
     if (
       existing.some((subscription) =>
         statusIn(openSubscriptionStatuses, subscription.status),
       )
     ) {
-      yield* recordPlan(viewer.workspace, existing, syncedAt);
-
       return yield* new AlreadySubscribedError();
     }
 
@@ -225,16 +224,16 @@ export const openBillingPortal = (
       "manage_billing",
     );
 
-    const customerId = viewer.workspace.polarCustomerId;
-
-    if (customerId === null) {
+    if (viewer.workspace.polarCustomerId === null) {
       return yield* new NoBillingAccountError();
     }
 
     const polar = yield* PolarClient;
 
+    // Keyed by workspace, not the stored customer ID: a customer ID Polar
+    // reports can be shared with another workspace.
     return yield* polar.createPortalSession({
-      customerId,
+      workspaceId,
       returnUrl: settingsUrl(origin, workspaceId),
     });
   });

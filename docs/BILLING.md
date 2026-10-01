@@ -38,11 +38,16 @@ the status `active` until the period ends, so the plan runs out on its own.
   count, so switching products in the portal ends the plan.
 - **Subscribe**: an admin or owner clicks Subscribe on
   `/workspaces/:id/settings`. `POST /workspaces/:id/billing/checkout` first
-  asks Polar for the workspace's subscriptions: a payment that finished
-  before its webhook arrived is recorded and a second checkout is refused.
+  asks Polar for the workspace's subscriptions, never the stored plan, and
+  records what it finds: a payment that finished before its webhook arrived
+  refuses a second checkout, and a cancellation whose webhook was missed
+  no longer blocks resubscribing.
   Otherwise it creates a checkout for `POLAR_PRODUCT_ID` with
   `metadata.workspace_id` (Polar copies it onto the subscription) and
-  redirects there. Two checkouts paid at the same moment can still both
+  `external_customer_id = workspace-<id>`, and redirects there. The
+  external ID keeps each workspace its own Polar customer: without it Polar
+  matches customers by billing email, so two workspaces paid with the same
+  email would share a customer and their admins the same portal. Two checkouts paid at the same moment can still both
   succeed; the sync logs `billing_duplicate_subscriptions` so the extra
   one can be refunded.
 - **Webhook**: `POST /webhooks/polar` verifies the Standard Webhooks
@@ -55,8 +60,13 @@ the status `active` until the period ends, so the plan runs out on its own.
   500 so Polar retries it.
 - **Manage**: a workspace with an active, trialing, past-due, or unpaid
   subscription gets Manage billing instead of Subscribe, and checkout is
-  refused. `POST /workspaces/:id/billing/portal` opens a Polar customer
-  session for the stored customer.
+  refused. Any workspace that has ever had a Polar customer keeps Manage
+  billing, even after the plan ends or moves to another product in the
+  portal, since invoices or charges may remain. `POST
+/workspaces/:id/billing/portal` opens a Polar customer session for
+  `external_customer_id = workspace-<id>`, never for the stored
+  `polar_customer_id`. A subscription moved to another product is not
+  visible to checkout, so Subscribe stays offered; check the portal first.
 - **Audit**: every plan status change is recorded in `audit_events` as
   `billing.plan_changed`.
 

@@ -727,7 +727,24 @@ const planCard = (
   billingEnabled: boolean,
   now: Date,
 ) => {
-  const manage = hasOpenSubscription(workspace);
+  const subscribed = hasOpenSubscription(workspace);
+  // A billing account can outlive the plan (canceled, or moved to another
+  // product in the portal), and may still hold invoices or charges.
+  const hasBillingAccount = workspace.polarCustomerId !== null;
+
+  const action = (
+    path: "portal" | "checkout",
+    label: string,
+    primary: boolean,
+  ) =>
+    html`<form
+      method="post"
+      action="/workspaces/${workspace.id}/billing/${path}"
+    >
+      <button class="btn${primary ? "" : " btn-secondary"}" type="submit">
+        ${label}
+      </button>
+    </form>`;
 
   return html`<section class="card">
     <div class="card-head"><h2>Plan</h2></div>
@@ -740,19 +757,8 @@ const planCard = (
             ? html`<p class="quiet" style="margin: 1rem 0 0">
                 Only admins and owners can change the plan.
               </p>`
-            : html`<form
-                method="post"
-                action="/workspaces/${workspace.id}/billing/${
-                  manage ? "portal" : "checkout"
-                }"
-              >
-                <button
-                  class="btn${manage ? " btn-secondary" : ""}"
-                  type="submit"
-                >
-                  ${manage ? "Manage billing" : "Subscribe"}
-                </button>
-              </form>`
+            : html`${subscribed ? "" : action("checkout", "Subscribe", true)}
+              ${hasBillingAccount ? action("portal", "Manage billing", false) : ""}`
       }
     </div>
   </section>`;

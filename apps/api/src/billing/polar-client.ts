@@ -45,9 +45,9 @@ export interface PolarClientService {
     readonly workspaceId: number;
     readonly successUrl: string;
   }) => Effect.Effect<string, PolarRequestError>;
-  /** A short-lived link to Polar's customer portal. */
+  /** A short-lived link to the workspace's own customer portal. */
   readonly createPortalSession: (input: {
-    readonly customerId: string;
+    readonly workspaceId: number;
     readonly returnUrl: string;
   }) => Effect.Effect<string, PolarRequestError>;
   /**
@@ -98,13 +98,24 @@ export const polarConfig = (env: {
 interface CheckoutRequest {
   readonly products: readonly string[];
   readonly success_url: string;
+  readonly external_customer_id: string;
   readonly metadata: { readonly workspace_id: string };
 }
 
 interface CustomerSessionRequest {
-  readonly customer_id: string;
+  readonly external_customer_id: string;
   readonly return_url: string;
 }
+
+/**
+ * Ties a workspace to one Polar customer by our own ID rather than by
+ * billing email. Without this, Polar matches customers by the email
+ * entered at checkout: two workspaces whose admins share an email would
+ * be merged into the same customer, and the portal exposes a customer's
+ * full billing (invoices, payment methods, every subscription) - so one
+ * workspace's admin could reach another's.
+ */
+const externalCustomerId = (workspaceId: number) => `workspace-${workspaceId}`;
 
 interface PolarRequest {
   readonly operation: string;
@@ -169,6 +180,7 @@ export const PolarClientLive = (config: PolarConfig) =>
             body: {
               products: [config.productId],
               success_url: successUrl,
+              external_customer_id: externalCustomerId(workspaceId),
               // Copied onto the subscription, which is how Fletcher finds
               // a workspace's subscriptions again.
               metadata: { workspace_id: String(workspaceId) },
@@ -176,13 +188,16 @@ export const PolarClientLive = (config: PolarConfig) =>
           },
           CheckoutResponse,
         ).pipe(Effect.map((checkout) => checkout.url)),
-      createPortalSession: ({ customerId, returnUrl }) =>
+      createPortalSession: ({ workspaceId, returnUrl }) =>
         polarRequest(
           config,
           {
             operation: "create_customer_session",
             path: "/v1/customer-sessions/",
-            body: { customer_id: customerId, return_url: returnUrl },
+            body: {
+              external_customer_id: externalCustomerId(workspaceId),
+              return_url: returnUrl,
+            },
           },
           CustomerSessionResponse,
         ).pipe(Effect.map((session) => session.customer_portal_url)),
