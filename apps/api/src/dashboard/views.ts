@@ -732,7 +732,11 @@ const planCard = (
   // product in the portal), and may still hold invoices or charges.
   const hasBillingAccount = workspace.polarCustomerId !== null;
 
-  const action = (path: "portal" | "checkout", label: string, primary: boolean) =>
+  const action = (
+    path: "portal" | "checkout",
+    label: string,
+    primary: boolean,
+  ) =>
     html`<form
       method="post"
       action="/workspaces/${workspace.id}/billing/${path}"

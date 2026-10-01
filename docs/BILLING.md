@@ -63,7 +63,7 @@ the status `active` until the period ends, so the plan runs out on its own.
   refused. Any workspace that has ever had a Polar customer keeps Manage
   billing, even after the plan ends or moves to another product in the
   portal, since invoices or charges may remain. `POST
-  /workspaces/:id/billing/portal` opens a Polar customer session for
+/workspaces/:id/billing/portal` opens a Polar customer session for
   `external_customer_id = workspace-<id>`, never for the stored
   `polar_customer_id`. A subscription moved to another product is not
   visible to checkout, so Subscribe stays offered; check the portal first.
