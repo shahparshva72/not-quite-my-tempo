@@ -292,6 +292,15 @@ p { margin: 0 0 1rem; max-width: var(--measure); }
   .pencil ellipse { animation: none; stroke-dashoffset: 0; }
 }
 
+/* Legal pages */
+.legal { max-width: var(--measure); }
+.legal h2 { margin: 2.5rem 0 0.75rem; }
+.legal h3 { margin: 1.5rem 0 0.5rem; }
+.legal ul { padding-left: 1.25rem; margin: 0 0 1rem; }
+.legal li { margin-bottom: 0.4rem; }
+.consent { margin: 1rem 0 0; }
+.features + .fine { margin: 1.5rem 0 0; }
+
 /* Landing sections */
 section.band { padding: clamp(3rem, 7vw, 5rem) 0; border-top: 1px solid var(--staff); }
 .band-head { max-width: 40rem; margin-bottom: 2.5rem; }

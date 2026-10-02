@@ -75,6 +75,7 @@ import {
   runFindingsPage,
 } from "./dashboard/views.js";
 import type { PaidPlanOffer, SettingsNotice } from "./dashboard/views.js";
+import { privacyPage, termsPage } from "./dashboard/legal.js";
 import { GitHubAppAuthLive } from "./github/app-auth.js";
 import { GitHubInstallationClientLive } from "./github/installation-client.js";
 import { GitHubPullRequestClientLive } from "./github/pull-request-client.js";
@@ -447,6 +448,22 @@ app.get("/dashboard/runs/:id", (c) =>
 
 app.get("/", (c) =>
   withSessionPage(c, () => Promise.resolve(c.redirect("/dashboard"))),
+);
+
+const signedInLogin = (c: AppContext) =>
+  currentSession(c).then(
+    Option.match({
+      onNone: () => null,
+      onSome: (session) => session.login,
+    }),
+  );
+
+app.get("/privacy", (c) =>
+  signedInLogin(c).then((login) => c.html(privacyPage(login))),
+);
+
+app.get("/terms", (c) =>
+  signedInLogin(c).then((login) => c.html(termsPage(login))),
 );
 
 app.get("/onboarding", (c) =>

@@ -164,6 +164,11 @@ const pricingLede = (offer: PaidPlanOffer) => {
   return `${trial}, or subscribe to ${planName(offer)}${price} and skip the key.`;
 };
 
+const signInConsent = html`<p class="fine consent">
+  By signing in, you agree to the <a href="/terms">Terms of Service</a> and
+  <a href="/privacy">Privacy Policy</a>.
+</p>`;
+
 export const landingPage = (offer: PaidPlanOffer) =>
   layout(
     "Code review from Fletcher",
@@ -188,6 +193,7 @@ export const landingPage = (offer: PaidPlanOffer) =>
             >
             <a class="btn btn-secondary btn-lg" href="#how">See how it works</a>
           </div>
+          ${signInConsent}
           <ul class="checks">
             ${check("Your first 5 reviews are on us")}
             ${check("Free with your own Gemini API key")}
@@ -306,11 +312,15 @@ export const landingPage = (offer: PaidPlanOffer) =>
             Fletcher from GitHub at any time.`,
           )}
         </div>
+        <p class="fine">
+          The details are in our <a href="/privacy">Privacy Policy</a>.
+        </p>
       </section>
       <section class="card cta">
         <div>
           <h2>Ready for rehearsal?</h2>
           <p>Sign in, install on a repository, and open a pull request.</p>
+          ${signInConsent}
         </div>
         <a class="btn btn-lg" href="/auth/login"
           >${withGitHub("Sign in with GitHub")}</a
@@ -347,9 +357,8 @@ export const signInErrorPage = (explanation: string) =>
     "GitHub sign-in didn't finish",
     null,
     html`<p>${explanation}</p>
-      <a class="btn" href="/auth/login"
-        >${withGitHub("Sign in with GitHub")}</a
-      >`,
+      <a class="btn" href="/auth/login">${withGitHub("Sign in with GitHub")}</a>
+      ${signInConsent}`,
   );
 
 const pullRequestUrl = (fullName: string, pullRequestNumber: number) =>
