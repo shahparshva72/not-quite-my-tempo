@@ -68,6 +68,30 @@ describe("dashboard", () => {
     expect(body).toContain("/auth/login");
   });
 
+  it("asks for consent to the terms beside sign-in", async () => {
+    const body = await (await request("/")).text();
+
+    expect(body).toContain("By signing in, you agree to the");
+    expect(body).toContain('href="/terms"');
+    expect(body).toContain('href="/privacy"');
+  });
+
+  it("serves the privacy policy and terms without a session", async () => {
+    const privacy = await request("/privacy");
+    const terms = await request("/terms");
+
+    expect(privacy.status).toBe(200);
+    expect(await privacy.text()).toContain("support@notmytempo.dev");
+    expect(terms.status).toBe(200);
+    expect(await terms.text()).toContain("Terms of Service");
+  });
+
+  it("shows the legal pages as signed in when there is a session", async () => {
+    const response = await request("/privacy", await sessionCookie([3001]));
+
+    expect(await response.text()).toContain("Sign out");
+  });
+
   it("lists repositories with usage for a signed-in user", async () => {
     await seedRun();
 
