@@ -1,3 +1,4 @@
+import { Option } from "effect";
 import { html } from "hono/html";
 import type {
   Finding,
@@ -16,6 +17,7 @@ import {
 import { hasOpenSubscription, hasPaidPlan } from "../application/billing.js";
 import { trialStatus } from "../application/workspace-settings.js";
 import type { TrialStatus } from "../application/workspace-settings.js";
+import type { PlanPrice } from "../billing/polar-client.js";
 
 import type { HtmlContent } from "./components.js";
 import type {
@@ -83,7 +85,86 @@ const feature = (
 const check = (text: HtmlContent | string) =>
   html`<li>${icon("check")}<span>${text}</span></li>`;
 
-export const landingPage = () =>
+/** What pages know about the paid plan: whether it's sold, and for what. */
+export interface PaidPlanOffer {
+  readonly billingEnabled: boolean;
+  readonly price: Option.Option<PlanPrice>;
+}
+
+const PAID_PLAN_NAME = "Fletcher Pro";
+
+const planName = (offer: PaidPlanOffer) =>
+  Option.match(offer.price, {
+    onNone: () => PAID_PLAN_NAME,
+    onSome: (price) => price.productName,
+  });
+
+/** "$10", or "$9.50" when there are cents. */
+const formatAmount = (price: PlanPrice) =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: price.currency.toUpperCase(),
+    minimumFractionDigits: price.amount % 100 === 0 ? 0 : 2,
+  }).format(price.amount / 100);
+
+/** "$10/month", or "$49" for a one-time price. */
+const formatPrice = (price: PlanPrice) =>
+  price.interval === null
+    ? formatAmount(price)
+    : `${formatAmount(price)}/${price.interval}`;
+
+const hostedPlanCard = (offer: PaidPlanOffer) => {
+  const priceLine = Option.match(offer.price, {
+    onNone: () => html`<p class="price">Paid <small>per workspace</small></p>`,
+    onSome: (price) =>
+      html`<p class="price">
+        ${formatAmount(price)}
+        <small
+          >per
+          workspace${
+            price.interval === null ? "" : ` / ${price.interval}`
+          }</small
+        >
+      </p>`,
+  });
+
+  return html`<div class="card plan">
+    <div class="plan-top">
+      <h3>${offer.billingEnabled ? planName(offer) : "Hosted"}</h3>
+      ${offer.billingEnabled ? "" : html`<span class="badge">Coming soon</span>`}
+    </div>
+    ${priceLine}
+    <p>Reviews on Fletcher's key, so there's no Google account to set up.</p>
+    <ul class="checks">
+      ${check("Everything in Bring your own key")}
+      ${check("No Gemini key to manage, no trial limit")}
+      ${check("One bill for the whole workspace")}
+      ${offer.billingEnabled ? check("Cancel any time from the billing portal") : ""}
+    </ul>
+    <a class="btn btn-secondary" href="/auth/login"
+      >${offer.billingEnabled ? "Start with 5 free reviews" : "Start with the trial"}</a
+    >
+  </div>`;
+};
+
+const pricingLede = (offer: PaidPlanOffer) => {
+  const trial =
+    "Every workspace gets 5 reviews on Fletcher's key. After that, add a " +
+    "Gemini API key and Google bills its usage to you";
+
+  if (!offer.billingEnabled) {
+    return `${trial}.`;
+  }
+
+  const price = Option.match(offer.price, {
+    onNone: () => "",
+    onSome: (known) => ` for ${formatPrice(known)}`,
+  });
+
+  return `${trial}, or subscribe to ${planName(offer)}${price} and skip the key.`;
+};
+
+export const landingPage = (offer: PaidPlanOffer) =>
   layout(
     "Code review from Fletcher",
     null,
@@ -177,16 +258,13 @@ export const landingPage = () =>
         <div class="band-head">
           <span class="eyebrow">Pricing</span>
           <h2>Start free. Stay free with your own key.</h2>
-          <p>
-            Every workspace gets 5 reviews on Fletcher's key. After that, add a
-            Gemini API key and Google bills its usage to you.
-          </p>
+          <p>${pricingLede(offer)}</p>
         </div>
         <div class="plans">
           <div class="card plan plan-featured">
             <div class="plan-top">
               <h3>Bring your own key</h3>
-              <span class="badge badge-brass">Available now</span>
+              <span class="badge badge-brass">Free</span>
             </div>
             <p class="price">$0 <small>per workspace</small></p>
             <p>Unlimited reviews on your own Gemini or Vertex AI key.</p>
@@ -200,24 +278,7 @@ export const landingPage = () =>
               >${withGitHub("Sign in with GitHub")}</a
             >
           </div>
-          <div class="card plan">
-            <div class="plan-top">
-              <h3>Hosted</h3>
-              <span class="badge">Coming soon</span>
-            </div>
-            <p class="price">Paid <small>per workspace</small></p>
-            <p>
-              Reviews on Fletcher's key, so there's no Google account to set up.
-            </p>
-            <ul class="checks">
-              ${check("Everything in Bring your own key")}
-              ${check("No Gemini key to manage")}
-              ${check("One bill for the whole workspace")}
-            </ul>
-            <a class="btn btn-secondary" href="/auth/login"
-              >Start with the trial</a
-            >
-          </div>
+          ${hostedPlanCard(offer)}
         </div>
       </section>
       <section class="band" id="privacy">
@@ -685,12 +746,12 @@ const keySummary = (workspace: Workspace, trial: TrialStatus, now: Date) => {
       </div>`;
 };
 
-const planSummary = (workspace: Workspace, now: Date) => {
+const planSummary = (workspace: Workspace, offer: PaidPlanOffer, now: Date) => {
   const periodEnd = workspace.subscriptionPeriodEnd;
 
   if (hasPaidPlan(workspace, now)) {
     return html`<p>
-      <span class="badge badge-brass">Paid plan</span>
+      <span class="badge badge-brass">${planName(offer)}</span>
       ${
         workspace.geminiKeyLast4 === null
           ? "Reviews use Fletcher's key, with no trial limit."
@@ -714,17 +775,27 @@ const planSummary = (workspace: Workspace, now: Date) => {
     </p>`;
   }
 
+  if (!offer.billingEnabled) {
+    return html`<p>
+      Free: reviews use this workspace's own Gemini key after the free trial.
+    </p>`;
+  }
+
   return html`<p>
-    Free: reviews use this workspace's own Gemini key after the free trial. The
-    paid plan reviews on Fletcher's key instead, billed per workspace through
-    Polar.
+    Free: reviews use this workspace's own Gemini key after the free trial.
+    ${planName(offer)}${Option.match(offer.price, {
+      onNone: () => "",
+      onSome: (price) => ` (${formatPrice(price)} per workspace)`,
+    })}
+    reviews on Fletcher's key instead, with no trial limit. Polar handles
+    payment, tax, and invoices.
   </p>`;
 };
 
 const planCard = (
   workspace: Workspace,
   canManage: boolean,
-  billingEnabled: boolean,
+  offer: PaidPlanOffer,
   now: Date,
 ) => {
   const subscribed = hasOpenSubscription(workspace);
@@ -749,15 +820,27 @@ const planCard = (
   return html`<section class="card">
     <div class="card-head"><h2>Plan</h2></div>
     <div class="card-body">
-      ${planSummary(workspace, now)}
+      ${planSummary(workspace, offer, now)}
       ${
-        !billingEnabled
+        !offer.billingEnabled
           ? ""
           : !canManage
             ? html`<p class="quiet" style="margin: 1rem 0 0">
                 Only admins and owners can change the plan.
               </p>`
-            : html`${subscribed ? "" : action("checkout", "Subscribe", true)}
+            : html`${
+                subscribed
+                  ? ""
+                  : action(
+                      "checkout",
+                      Option.match(offer.price, {
+                        onNone: () => "Subscribe",
+                        onSome: (price) =>
+                          `Subscribe for ${formatPrice(price)}`,
+                      }),
+                      true,
+                    )
+              }
               ${hasBillingAccount ? action("portal", "Manage billing", false) : ""}`
       }
     </div>
@@ -770,12 +853,12 @@ export const settingsPage = (
     readonly workspace: Workspace;
     readonly viewerRole: WorkspaceRole;
     readonly trial: TrialStatus;
-    readonly billingEnabled: boolean;
+    readonly offer: PaidPlanOffer;
   },
   notice: SettingsNotice | null,
   now: Date,
 ) => {
-  const { workspace, viewerRole, trial, billingEnabled } = data;
+  const { workspace, viewerRole, trial, offer } = data;
   const canManage = workspaceActionAllowed(viewerRole, "manage_settings");
   const hasKey = workspace.geminiKeyLast4 !== null;
 
@@ -792,7 +875,7 @@ export const settingsPage = (
       )}
       ${settingsNotice(notice)}
       <div class="stack">
-        ${planCard(workspace, canManage, billingEnabled, now)}
+        ${planCard(workspace, canManage, offer, now)}
         <section class="card">
           <div class="card-head"><h2>Gemini API key</h2></div>
           <div class="card-body">

@@ -9,6 +9,7 @@ import {
 
 import app from "../src/index";
 import { chooseReviewKey } from "../src/application/review-keys";
+import { forgetPlanPrices } from "../src/billing/plan-price";
 import {
   sessionCookie,
   TEST_SESSION_SECRET,
@@ -125,6 +126,28 @@ const polarSubscription = (
   metadata: { workspace_id: workspaceId },
 });
 
+const polarProduct = {
+  id: PRODUCT_ID,
+  name: "Fletcher Pro",
+  recurring_interval: "month",
+  prices: [
+    {
+      amount_type: "fixed",
+      price_amount: 500,
+      price_currency: "usd",
+      is_archived: true,
+    },
+    {
+      amount_type: "fixed",
+      price_amount: 1000,
+      price_currency: "usd",
+      is_archived: false,
+    },
+  ],
+};
+
+let productReads = 0;
+
 interface PolarCall {
   readonly method: string;
   readonly url: string;
@@ -133,16 +156,26 @@ interface PolarCall {
 
 /**
  * Answers Polar's API like the sandbox: `subscriptions` is what the list
- * endpoint returns. Records every call.
+ * endpoint returns. Records every billing call; product reads only decorate
+ * pages (and are cached), so they're counted apart in `productReads`.
  */
 const polarAnswers = (
   subscriptions: readonly SubscriptionFixture[] = [],
   status = 200,
 ): PolarCall[] => {
   const calls: PolarCall[] = [];
+  productReads = 0;
 
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const url = String(input);
+
+    if (url.includes("/v1/products/")) {
+      productReads += 1;
+
+      return Promise.resolve(
+        new Response(JSON.stringify(polarProduct), { status }),
+      );
+    }
 
     calls.push({
       method: init?.method ?? "GET",
@@ -190,6 +223,7 @@ describe("Polar webhook", () => {
   beforeEach(resetAndSeedRepository);
   afterEach(() => {
     vi.restoreAllMocks();
+    forgetPlanPrices();
   });
 
   it("re-reads the workspace's subscriptions from Polar and stores the plan", async () => {
@@ -390,6 +424,7 @@ describe("billing routes", () => {
   beforeEach(resetAndSeedRepository);
   afterEach(() => {
     vi.restoreAllMocks();
+    forgetPlanPrices();
   });
 
   it("sends an admin to a Polar checkout tagged with the workspace", async () => {
@@ -556,6 +591,8 @@ describe("billing routes", () => {
   });
 
   it("offers admins the checkout on the settings page", async () => {
+    polarAnswers();
+
     const page = await (
       await request("/workspaces/1/settings", {
         headers: { cookie: await sessionCookie([3001], "admin") },
@@ -563,5 +600,68 @@ describe("billing routes", () => {
     ).text();
 
     expect(page).toContain('action="/workspaces/1/billing/checkout"');
+    expect(page).toContain("Subscribe for $10/month");
+  });
+});
+
+describe("paid plan price", () => {
+  beforeEach(resetAndSeedRepository);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    forgetPlanPrices();
+  });
+
+  const landing = async (testEnv: typeof billingEnv = billingEnv) =>
+    (await request("/", {}, testEnv)).text();
+
+  it("shows the price Polar sells the plan for, reading it once", async () => {
+    const calls = polarAnswers();
+
+    const first = await landing();
+    const second = await landing();
+
+    expect(first).toContain("Fletcher Pro");
+    expect(first).toContain("$10");
+    expect(first).toContain("for $10/month and skip the key");
+    expect(first).not.toContain("Coming soon");
+    expect(second).toContain("$10");
+    expect(productReads).toBe(1);
+    expect(calls).toEqual([]);
+  });
+
+  it("still renders when Polar can't be read, without a price", async () => {
+    polarAnswers([], 500);
+
+    const page = await landing();
+
+    expect(page).toContain("Fletcher Pro");
+    expect(page).toContain("Paid <small>per workspace</small>");
+    expect(page).not.toContain("$10");
+  });
+
+  it("keeps the last known price through a Polar outage", async () => {
+    polarAnswers();
+    await landing();
+    vi.restoreAllMocks();
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+    polarAnswers([], 500);
+
+    const page = await landing();
+    vi.useRealTimers();
+
+    expect(productReads).toBe(1);
+    expect(page).toContain("for $10/month");
+  });
+
+  it("calls the plan coming soon without asking Polar when billing is off", async () => {
+    const calls = polarAnswers();
+
+    const page = await landing(withoutWebhookSecret);
+
+    expect(page).toContain("Coming soon");
+    expect(productReads).toBe(0);
+    expect(calls).toEqual([]);
   });
 });

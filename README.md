@@ -156,7 +156,7 @@ button and workspaces stay on bring-your-own-key plus the trial.
 See [docs/BILLING.md](docs/BILLING.md) for the full setup.
 
 - `POLAR_ACCESS_TOKEN` (optional secret): an organization access token with
-  `checkouts:write`, `customer_sessions:write`, and `subscriptions:read`.
+  `checkouts:write`, `customer_sessions:write`, `subscriptions:read`, and `products:read`.
 - `POLAR_PRODUCT_ID` (optional): the recurring product for the paid plan.
 - `POLAR_WEBHOOK_SECRET` (optional secret): the `whsec_…` secret of the
   webhook pointing at `/webhooks/polar`.

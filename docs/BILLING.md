@@ -67,6 +67,13 @@ the status `active` until the period ends, so the plan runs out on its own.
   `external_customer_id = workspace-<id>`, never for the stored
   `polar_customer_id`. A subscription moved to another product is not
   visible to checkout, so Subscribe stays offered; check the portal first.
+- **Price**: the landing page and settings page show the product's name
+  and its first unarchived fixed price, read from `GET /v1/products/:id`
+  (`cachedPlanPrice` in `apps/api/src/billing/plan-price.ts`). Change the
+  price in Polar and pages follow within an hour: each isolate caches it for
+  an hour, waits 5 minutes after a failed read, and keeps the last known
+  price through an outage. With no price known, pages say "Paid" instead.
+  The read times out after 2.5 seconds so a slow Polar can't stall a page.
 - **Audit**: every plan status change is recorded in `audit_events` as
   `billing.plan_changed`.
 
@@ -83,7 +90,7 @@ of a key only suggest subscribing when billing is on.
 2. Create a recurring product for the paid plan and copy its ID into
    `POLAR_PRODUCT_ID`.
 3. Create an organization access token with `checkouts:write`,
-   `customer_sessions:write`, and `subscriptions:read`, and store it as
+   `customer_sessions:write`, `subscriptions:read`, and `products:read`, and store it as
    `POLAR_ACCESS_TOKEN`.
 4. Add a webhook endpoint at `https://<origin>/webhooks/polar`, format Raw,
    with the `subscription.created`, `subscription.updated`,

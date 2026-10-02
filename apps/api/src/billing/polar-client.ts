@@ -9,6 +9,9 @@ const POLAR_API_BASE_URLS = {
 /** Polar calls fail fast so the page can say so instead of hanging. */
 const POLAR_TIMEOUT_MS = 10_000;
 
+/** The price only decorates a page, so it waits far less than billing. */
+const PRICE_TIMEOUT_MS = 2_500;
+
 // More subscriptions than this for one workspace would be an incident.
 const SUBSCRIPTION_PAGE_SIZE = 100;
 
@@ -37,6 +40,53 @@ const Subscription = Schema.Struct({
 
 const SubscriptionList = Schema.Struct({ items: Schema.Array(Subscription) });
 
+// Only fixed prices are shown; custom, free, seat, and metered prices
+// decode too but are skipped.
+const ProductPrice = Schema.Struct({
+  amount_type: Schema.String,
+  price_amount: Schema.optional(Schema.Number),
+  price_currency: Schema.optional(Schema.String),
+  is_archived: Schema.Boolean,
+});
+
+const Product = Schema.Struct({
+  name: Schema.NonEmptyString,
+  recurring_interval: Schema.NullOr(Schema.String),
+  prices: Schema.Array(ProductPrice),
+});
+
+/** The paid plan as Polar sells it, for showing its price. */
+export interface PlanPrice {
+  readonly productName: string;
+  /** In the currency's smallest unit, as Polar stores it (cents). */
+  readonly amount: number;
+  readonly currency: string;
+  /** `month`, `year`, ... or null for a one-time price. */
+  readonly interval: string | null;
+}
+
+const planPriceFromProduct = (
+  product: typeof Product.Type,
+): Option.Option<PlanPrice> =>
+  Option.fromNullable(
+    product.prices.find(
+      (price) => !price.is_archived && price.amount_type === "fixed",
+    ),
+  ).pipe(
+    Option.flatMap((price) =>
+      Option.all({
+        amount: Option.fromNullable(price.price_amount),
+        currency: Option.fromNullable(price.price_currency),
+      }),
+    ),
+    Option.map(({ amount, currency }) => ({
+      productName: product.name,
+      amount,
+      currency,
+      interval: product.recurring_interval,
+    })),
+  );
+
 export type PolarSubscription = typeof Subscription.Type;
 
 export interface PolarClientService {
@@ -57,6 +107,14 @@ export interface PolarClientService {
   readonly listSubscriptions: (
     workspaceId: number,
   ) => Effect.Effect<readonly PolarSubscription[], PolarRequestError>;
+  /**
+   * The paid-plan product's current fixed price, or none when it has no
+   * fixed price. Read with a short timeout: it only decorates pages.
+   */
+  readonly getPlanPrice: Effect.Effect<
+    Option.Option<PlanPrice>,
+    PolarRequestError
+  >;
 }
 
 export class PolarClient extends Context.Tag(
@@ -121,6 +179,7 @@ interface PolarRequest {
   readonly operation: string;
   readonly path: string;
   readonly body?: CheckoutRequest | CustomerSessionRequest;
+  readonly timeoutMs?: number;
 }
 
 const polarRequest = <A, I>(
@@ -142,7 +201,7 @@ const polarRequest = <A, I>(
           },
           body:
             request.body === undefined ? null : JSON.stringify(request.body),
-          signal: AbortSignal.timeout(POLAR_TIMEOUT_MS),
+          signal: AbortSignal.timeout(request.timeoutMs ?? POLAR_TIMEOUT_MS),
         }),
       catch: () => new PolarRequestError({ operation, status: null }),
     });
@@ -229,5 +288,14 @@ export const PolarClientLive = (config: PolarConfig) =>
           ),
         );
       },
+      getPlanPrice: polarRequest(
+        config,
+        {
+          operation: "get_product",
+          path: `/v1/products/${encodeURIComponent(config.productId)}`,
+          timeoutMs: PRICE_TIMEOUT_MS,
+        },
+        Product,
+      ).pipe(Effect.map(planPriceFromProduct)),
     }),
   );

@@ -48,6 +48,7 @@ import {
   workspaceSettings,
 } from "./application/workspace-settings.js";
 import { GitHubOAuthLive } from "./auth/github-oauth.js";
+import { cachedPlanPrice } from "./billing/plan-price.js";
 import { PolarClientLive, polarConfig } from "./billing/polar-client.js";
 import {
   decodePolarWebhookEvent,
@@ -73,7 +74,7 @@ import {
   repositoryRunsPage,
   runFindingsPage,
 } from "./dashboard/views.js";
-import type { SettingsNotice } from "./dashboard/views.js";
+import type { PaidPlanOffer, SettingsNotice } from "./dashboard/views.js";
 import { GitHubAppAuthLive } from "./github/app-auth.js";
 import { GitHubInstallationClientLive } from "./github/installation-client.js";
 import { GitHubPullRequestClientLive } from "./github/pull-request-client.js";
@@ -331,6 +332,20 @@ const withSession = (
     }),
   );
 
+/** Whether the paid plan is sold here, and its price from Polar. */
+const paidPlanOffer = (c: AppContext): Promise<PaidPlanOffer> =>
+  Option.match(polarConfig(c.env), {
+    onNone: () =>
+      Promise.resolve({ billingEnabled: false, price: Option.none() }),
+    onSome: (config) =>
+      Effect.runPromise(
+        cachedPlanPrice(config).pipe(
+          Effect.provide(PolarClientLive(config)),
+          Effect.map((price) => ({ billingEnabled: true, price })),
+        ),
+      ),
+  });
+
 const withSessionPage = (
   c: AppContext,
   handle: (session: SessionPayload) => Promise<Response | Promise<Response>>,
@@ -338,7 +353,8 @@ const withSessionPage = (
   currentSession(c)
     .then(
       Option.match({
-        onNone: () => Promise.resolve(c.html(landingPage())),
+        onNone: () =>
+          paidPlanOffer(c).then((offer) => c.html(landingPage(offer))),
         onSome: handle,
       }),
     )
@@ -625,14 +641,16 @@ const renderSettings = (
             Match.orElse((error) => internalError(c, error)),
           ),
         onSuccess: (data) =>
-          c.html(
-            settingsPage(
-              session.login,
-              { ...data, billingEnabled: Option.isSome(polarConfig(c.env)) },
-              notice,
-              new Date(),
+          paidPlanOffer(c).then((offer) =>
+            c.html(
+              settingsPage(
+                session.login,
+                { ...data, offer },
+                notice,
+                new Date(),
+              ),
+              status,
             ),
-            status,
           ),
       }),
     ),
