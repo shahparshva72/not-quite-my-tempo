@@ -135,7 +135,8 @@ pnpm --filter @not-quite-my-tempo/api exec wrangler d1 execute DB --local --comm
 
 ## 7. .fletcher.json
 
-For each case, add the file at the **PR branch** root and push:
+For each case, commit the file at the root of the **default branch**, then
+open a PR (config on the PR branch alone must have no effect):
 
 - [ ] `{"enabled": false}` → run completes with **no** Gemini call and no PR
       comment; logs show `review_skipped_disabled`; run row `completed`,

@@ -43,7 +43,11 @@ never use up trial reviews.
 1. The workspace has a key: use it (`key_source = 'workspace'`).
 2. _(Part 2: the workspace is on a paid plan: use the platform key.)_
 3. Trial reviews remain: take one atomically and use the platform key
-   (`key_source = 'platform'`).
+   (`key_source = 'platform'`). The same statement also checks the
+   platform-wide daily cap (`TRIAL_DAILY_REVIEW_CAP`, default 100 trial
+   reviews per rolling 24 hours across all workspaces). When only the cap
+   refuses the claim, the run fails with `error_code = 'trial_paused'` and
+   Fletcher comments once per pull request; no free review is used.
 4. Otherwise: the run fails with `error_code = 'no_gemini_key'`. Fletcher
    posts one comment on the pull request explaining how to add a key.
    There is one comment per pull request, not one per push.

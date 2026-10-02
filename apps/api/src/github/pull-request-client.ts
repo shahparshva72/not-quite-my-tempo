@@ -349,7 +349,7 @@ export const GitHubPullRequestClientLive = (
           const response = yield* Effect.tryPromise({
             try: () =>
               fetchImpl(
-                `${baseUrl}/repos/${ref.owner}/${ref.repo}/contents/${filePath}?ref=${gitRef}`,
+                `${baseUrl}/repos/${ref.owner}/${ref.repo}/contents/${filePath}?ref=${encodeURIComponent(gitRef)}`,
                 {
                   method: "GET",
                   headers: {

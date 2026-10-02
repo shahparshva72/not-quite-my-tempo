@@ -6,6 +6,9 @@
   // Production origin. Cloudflare creates the DNS record and certificate on
   // deploy; the zone must be in the same account.
   "routes": [{ "pattern": "notmytempo.dev", "custom_domain": true }],
+  // Serve only on the custom domain: links and redirects are built from the
+  // request origin, so a second public hostname must not exist.
+  "workers_dev": false,
   // Every 15 minutes: fail reviews whose workflow died (stuck-runs.ts).
   "triggers": { "crons": ["*/15 * * * *"] },
   "workflows": [

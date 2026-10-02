@@ -64,6 +64,21 @@ const trialRunCount = (workspaceId: number) =>
         and counted.key_source = 'platform'
         and counted.status in ('queued', 'running', 'completed')`;
 
+// Free trial reviews started across every workspace since a moment, as a
+// subquery: the platform-wide brake on trial spend. A run counts from when
+// it started (or was created, before it starts), whatever its outcome,
+// because Gemini may have been paid for even when the run later failed.
+const trialRunsSince = (since: Date) =>
+  sql`select count(*) from review_runs as recent
+      where recent.key_source = 'platform'
+        and coalesce(recent.started_at, recent.created_at) >= ${since.getTime()}`;
+
+/** At most `limit` free trial reviews, platform-wide, since `since`. */
+export interface TrialDailyCap {
+  readonly limit: number;
+  readonly since: Date;
+}
+
 export type ReviewKeySource = (typeof reviewKeySources)[number];
 
 export type ReviewRunVerdict = (typeof reviewVerdicts)[number];
@@ -237,11 +252,18 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
         /**
          * Claims one of a workspace's free trial reviews for this run, in a
          * single statement: the run is marked 'platform' only if it has no
-         * key source yet and the workspace has fewer than `limit` counted
-         * trial runs. The run itself records the claim, so retrying this is
-         * harmless. Returns whether the claim succeeded.
+         * key source yet, the workspace has fewer than `limit` counted
+         * trial runs, and fewer than `dailyCap.limit` trial reviews started
+         * platform-wide since `dailyCap.since`. The run itself records the
+         * claim, so retrying this is harmless. Returns whether the claim
+         * succeeded.
          */
-        claimTrialReview: (id: number, workspaceId: number, limit: number) =>
+        claimTrialReview: (
+          id: number,
+          workspaceId: number,
+          limit: number,
+          dailyCap: TrialDailyCap,
+        ) =>
           databaseEffect("review_runs.claim_trial_review", () =>
             client
               .update(reviewRuns)
@@ -251,6 +273,7 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
                   eq(reviewRuns.id, id),
                   isNull(reviewRuns.keySource),
                   sql`(${trialRunCount(workspaceId)}) < ${limit}`,
+                  sql`(${trialRunsSince(dailyCap.since)}) < ${dailyCap.limit}`,
                 ),
               )
               .returning({ id: reviewRuns.id })
@@ -294,13 +317,14 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
               .run(),
           ).pipe(Effect.asVoid),
         /**
-         * Whether another run of this pull request was already blocked for
-         * a missing Gemini key, so the explanation is posted only once.
+         * Whether another run of this pull request was already blocked with
+         * this error code, so the explanation is posted only once.
          */
         hasEarlierBlockedRun: (
           repositoryId: number,
           pullRequestNumber: number,
           excludeRunId: number,
+          errorCode: string,
         ) =>
           databaseEffect("review_runs.has_earlier_blocked_run", () =>
             client
@@ -310,7 +334,7 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
                 and(
                   eq(reviewRuns.repositoryId, repositoryId),
                   eq(reviewRuns.pullRequestNumber, pullRequestNumber),
-                  eq(reviewRuns.errorCode, "no_gemini_key"),
+                  eq(reviewRuns.errorCode, errorCode),
                   ne(reviewRuns.id, excludeRunId),
                 ),
               )

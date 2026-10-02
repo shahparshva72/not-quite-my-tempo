@@ -26,8 +26,9 @@ export const ReviewTone = Schema.Literal("standard", "ruthless");
 export type ReviewTone = typeof ReviewTone.Type;
 
 /**
- * Per-repository configuration read from `.fletcher.json` at the pull
- * request's head SHA. Every field is optional; a missing or malformed file
+ * Per-repository configuration read from `.fletcher.json` on the
+ * repository's default branch (never the pull request, whose author could
+ * otherwise turn the review off). Every field is optional; a missing or malformed file
  * must resolve to {@link defaultReviewConfig}, never fail a review.
  */
 export const ReviewConfig = Schema.Struct({

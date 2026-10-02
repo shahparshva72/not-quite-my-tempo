@@ -33,15 +33,55 @@ export const verdictHeading = (
     Match.exhaustive,
   );
 
+// Code spans and fences, which are shown literally and left untouched.
+const CODE_SEGMENT = /(```[\s\S]*?```|`[^`\n]*`)/;
+
+const MARKDOWN_IMAGE = /!\[([^\]]*)\]\([^)]*\)/g;
+
+const MARKDOWN_LINK = /\[([^\]]*)\]\(\s*<?([^)\s>]*)>?[^)]*\)/g;
+
+const LINK_DEFINITION = /^(\s{0,3})\[([^\]]+)\]:/gm;
+
+const LINKING_HTML = /<\/?(?:a|img|picture|source|video|audio)\b[^>]*>/gi;
+
+/**
+ * Model text is shaped by the pull request it reviews, so a diff can steer
+ * it. Before Fletcher posts it under its own name, links show where they
+ * go and nothing loads from elsewhere: images become their alt text,
+ * `[text](url)` becomes `text (url)`, and link/image HTML tags are dropped.
+ * Code is left as written.
+ */
+export const defangModelMarkdown = (text: string): string =>
+  text
+    .split(CODE_SEGMENT)
+    .map((segment, index) =>
+      index % 2 === 1
+        ? segment
+        : segment
+            .replace(MARKDOWN_IMAGE, "$1")
+            .replace(MARKDOWN_LINK, (_match, label: string, url: string) =>
+              url === "" ? label : `${label} (${url})`,
+            )
+            .replace(LINK_DEFINITION, "$1\\[$2]:")
+            .replace(LINKING_HTML, ""),
+    )
+    .join("");
+
+// A file path shown in a code span; a backtick in it would end the span.
+const codePath = (path: string) => path.replaceAll("`", "'");
+
 export const buildFindingCommentBody = (finding: Finding): string => {
-  const heading = finding.title === null ? "" : `**${finding.title}**\n\n`;
+  const heading =
+    finding.title === null
+      ? ""
+      : `**${defangModelMarkdown(finding.title)}**\n\n`;
 
   const confidence =
     finding.confidence === null
       ? ""
       : ` · confidence ${finding.confidence.toFixed(2)}`;
 
-  return `${heading}${finding.message}\n\n_severity: ${finding.severity}${confidence}_`;
+  return `${heading}${defangModelMarkdown(finding.message)}\n\n_severity: ${finding.severity}${confidence}_`;
 };
 
 const severityCountLine = (findings: readonly Finding[]): string => {
@@ -60,14 +100,16 @@ const unanchoredSection = (unanchored: readonly Finding[]): string => {
   }
 
   const items = unanchored.map((finding) => {
-    const title = finding.title === null ? finding.message : finding.title;
+    const title = defangModelMarkdown(
+      finding.title === null ? finding.message : finding.title,
+    );
 
     const location =
       finding.line === null
-        ? `\`${finding.filePath}\``
-        : `\`${finding.filePath}:${finding.line}\``;
+        ? `\`${codePath(finding.filePath)}\``
+        : `\`${codePath(finding.filePath)}:${finding.line}\``;
 
-    return `- ${location} — ${title} (_${finding.severity}_)\n  ${finding.message}`;
+    return `- ${location} — ${title} (_${finding.severity}_)\n  ${defangModelMarkdown(finding.message)}`;
   });
 
   return `\n\n#### Off the chart (couldn't anchor these to the diff)\n\n${items.join("\n")}`;
@@ -81,6 +123,6 @@ export const buildReviewSummaryBody = (
 ): string =>
   `### ${verdictHeading(review.verdict, tone)}
 
-${review.summary}
+${defangModelMarkdown(review.summary)}
 
 ${severityCountLine(findings)}${unanchoredSection(unanchored)}`;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildReviewSummaryBody,
+  defangModelMarkdown,
   verdictHeading,
 } from "../src/application/review-presentation";
 
@@ -35,5 +36,47 @@ describe("buildReviewSummaryBody", () => {
 
     expect(body).toContain("### 🥁 ...Acceptable.");
     expect(body).not.toContain("Good job");
+  });
+});
+
+describe("defangModelMarkdown", () => {
+  it("shows where links go and drops images", () => {
+    expect(
+      defangModelMarkdown(
+        "See [the docs](https://evil.test/login) ![pixel](https://evil.test/p.png)",
+      ),
+    ).toBe("See the docs (https://evil.test/login) pixel");
+  });
+
+  it("drops link and image HTML and neutralizes link definitions", () => {
+    expect(
+      defangModelMarkdown(
+        '<a href="https://evil.test">click</a><img src="https://evil.test/p.png">\n[ref]: https://evil.test',
+      ),
+    ).toBe("click\n\\[ref]: https://evil.test");
+  });
+
+  it("leaves code spans and fences as written", () => {
+    const text =
+      "Use `fns[i](x)` here.\n```ts\nconst link = [a](b);\n```\nand [x](https://y.test)";
+
+    expect(defangModelMarkdown(text)).toBe(
+      "Use `fns[i](x)` here.\n```ts\nconst link = [a](b);\n```\nand x (https://y.test)",
+    );
+  });
+
+  it("applies to the posted summary", () => {
+    const body = buildReviewSummaryBody(
+      {
+        verdict: "almost",
+        summary: "Read [this](https://evil.test).",
+        findings: [],
+      },
+      [],
+      [],
+      "standard",
+    );
+
+    expect(body).toContain("Read this (https://evil.test).");
   });
 });

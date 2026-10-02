@@ -1,5 +1,7 @@
 import { Data, Effect, Option, Schema } from "effect";
 
+import { logInfo } from "../logging.js";
+
 export const ReviewTrigger = Schema.Literal(
   "opened",
   "synchronize",
@@ -18,6 +20,18 @@ export const ReviewRequestTrigger = Schema.Literal(
 export type ReviewRequestTrigger = typeof ReviewRequestTrigger.Type;
 
 export const GitHubId = Schema.Number.pipe(Schema.int(), Schema.positive());
+
+/**
+ * GitHub author associations with standing on the repository. Pull
+ * requests and `/fletcher again` comments from anyone else (forks,
+ * drive-by contributors) never start a review on their own, so they can't
+ * spend the workspace's trial, the daily cap, or the platform key.
+ */
+export const TRUSTED_AUTHOR_ASSOCIATIONS: ReadonlySet<string> = new Set([
+  "OWNER",
+  "MEMBER",
+  "COLLABORATOR",
+]);
 
 export const ReviewRequest = Schema.Struct({
   installationId: GitHubId,
@@ -41,7 +55,12 @@ const WebhookReviewRequest = Schema.Struct({
   trigger: ReviewTrigger,
 });
 
-const ActionEnvelope = Schema.Struct({ action: Schema.String });
+const ActionEnvelope = Schema.Struct({
+  action: Schema.String,
+  pull_request: Schema.optional(
+    Schema.Struct({ author_association: Schema.optional(Schema.String) }),
+  ),
+});
 
 const PullRequestWebhook = Schema.Struct({
   action: ReviewTrigger,
@@ -121,16 +140,32 @@ export const decodePullRequestBody = (rawBody: ArrayBuffer) =>
       envelope.action,
     ).pipe(Effect.option);
 
-    return yield* Option.match(supportedAction, {
-      onNone: () => Effect.succeed(Option.none<ReviewRequest>()),
-      onSome: () =>
-        Schema.decodeUnknown(Schema.parseJson(NormalizedPullRequestWebhook))(
-          json,
-        ).pipe(
-          Effect.map((request): Option.Option<ReviewRequest> =>
-            Option.some(request),
+    // Untrusted authors are ignored, not rejected: a member can still ask
+    // for a review with `/fletcher again`.
+    const trustedAuthor = TRUSTED_AUTHOR_ASSOCIATIONS.has(
+      envelope.pull_request?.author_association ?? "",
+    );
+
+    if (Option.isSome(supportedAction) && !trustedAuthor) {
+      yield* logInfo("review_skipped_untrusted_author", {
+        authorAssociation:
+          envelope.pull_request?.author_association ?? "missing",
+      });
+    }
+
+    return yield* Option.match(
+      Option.filter(supportedAction, () => trustedAuthor),
+      {
+        onNone: () => Effect.succeed(Option.none<ReviewRequest>()),
+        onSome: () =>
+          Schema.decodeUnknown(Schema.parseJson(NormalizedPullRequestWebhook))(
+            json,
+          ).pipe(
+            Effect.map((request): Option.Option<ReviewRequest> =>
+              Option.some(request),
+            ),
+            Effect.mapError(invalidPayload),
           ),
-          Effect.mapError(invalidPayload),
-        ),
-    });
+      },
+    );
   });

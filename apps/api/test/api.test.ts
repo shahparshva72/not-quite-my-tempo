@@ -18,6 +18,20 @@ describe("Worker", () => {
     expect(await response.text()).toContain('href="/auth/login"');
   });
 
+  it("sends security headers that forbid scripts and framing", async () => {
+    const response = await request("/");
+    const csp = response.headers.get("content-security-policy") ?? "";
+
+    expect(csp).toContain("script-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("form-action 'self' https://polar.sh");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("strict-transport-security")).toContain(
+      "max-age=",
+    );
+  });
+
   it("sends signed-in visitors from the root to the dashboard", async () => {
     await resetAndSeedRepository();
     const cookie = await sessionCookie([3001]);

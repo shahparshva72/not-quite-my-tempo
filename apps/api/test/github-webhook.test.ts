@@ -19,7 +19,7 @@ const pullRequestPayload = {
   action: "opened",
   installation: { id: 1001 },
   number: 42,
-  pull_request: { head: { sha: "abc123" } },
+  pull_request: { head: { sha: "abc123" }, author_association: "MEMBER" },
   repository: {
     id: 3001,
     name: "app",
@@ -172,6 +172,36 @@ describe("GitHub webhook", () => {
     await expect(response.json()).resolves.toEqual({ status: "ignored" });
     expect(workflow.create).not.toHaveBeenCalled();
   });
+
+  it.each(["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "NONE", undefined])(
+    "ignores pull requests from untrusted authors (%s)",
+    async (authorAssociation) => {
+      const workflow = makeWorkflow();
+
+      const body = JSON.stringify({
+        ...pullRequestPayload,
+        pull_request: {
+          head: { sha: "abc123" },
+          author_association: authorAssociation,
+        },
+      });
+
+      const response = await webhookRequest(
+        body,
+        "pull_request",
+        workflow.binding,
+      );
+
+      const runCount = await env.DB.prepare(
+        "SELECT count(*) AS total FROM review_runs",
+      ).first<{ total: number }>();
+
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toEqual({ status: "ignored" });
+      expect(workflow.create).not.toHaveBeenCalled();
+      expect(runCount?.total).toBe(0);
+    },
+  );
 
   it("normalizes a pull request payload into the internal request", async () => {
     const result = Option.getOrThrow(
