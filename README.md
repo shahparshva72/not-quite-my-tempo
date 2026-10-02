@@ -145,6 +145,12 @@ The review itself is performed by the Gemini API through the
 
 - `GEMINI_MODEL` (optional): overrides the default `gemini-3.8-flash`. Not a
   secret; set it under `vars` in `apps/api/wrangler.jsonc` if needed.
+- `TRIAL_DAILY_REVIEW_CAP` (optional): free trial reviews allowed per rolling
+  24 hours across all workspaces (default 100; `0` pauses the trial). Past
+  it, trial reviews fail with `trial_paused`, Fletcher comments once on the
+  pull request, and `trial_daily_cap_reached` is logged as an error. Reviews
+  on a workspace's own key or a paid plan are never capped. Also set a budget
+  alert on the Google Cloud project behind `GEMINI_API_KEY`.
 
 ## Billing (Polar)
 
@@ -208,18 +214,22 @@ curl http://localhost:8787/health
 `POST /webhooks/github` accepts signed GitHub App webhook deliveries. It handles
 the `opened`, `synchronize`, and `reopened` actions for the `pull_request` event.
 Other event types and pull request actions return success without starting a
-review. Supported deliveries upsert the GitHub installation and repository,
+review, as do pull requests whose author isn't the repository `OWNER`, an org
+`MEMBER`, or a `COLLABORATOR` (forks and drive-by contributors on public
+repositories, which would otherwise spend the workspace's trial and daily
+cap); a member can review those with `/fletcher again`. Supported deliveries upsert the GitHub installation and repository,
 create one queued review run per repository, pull request number, and head SHA,
-and start `review-pull-request`. The Workflow marks the run running, mints a
-GitHub App installation token, fetches the pull request metadata and unified
+and start `review-pull-request`. The Workflow marks the run running, fetches the pull request metadata and unified
 diff (filtering generated files and enforcing a size cap), reviews the diff
 with Gemini using structured JSON output, persists the findings and model to
 D1, posts the review to the pull request (a summary comment plus inline
 comments anchored to changed lines, with posted comment IDs written back to
-the findings), and marks the run completed. Failures record a stable
+the findings), and marks the run completed. Each step that calls GitHub mints
+its own installation token, so tokens never appear in persisted step
+outputs. Failures record a stable
 `error_code` (`github_auth_error`, `diff_fetch_error`, `diff_too_large`,
-`gemini_error`, `post_review_error`, `db_error`, `review_run_not_found`, or
-`workflow_error`) on the run.
+`gemini_error`, `post_review_error`, `db_error`, `review_run_not_found`,
+`no_gemini_key`, `trial_paused`, or `workflow_error`) on the run.
 
 Commenting `/fletcher again` on a pull request (via the `issue_comment`
 event) triggers a `manual` review of the PR's current head SHA through the
@@ -229,8 +239,9 @@ head SHA was already reviewed, the delivery reports `already_processed`.
 
 ## Per-repository configuration
 
-Repositories may include a `.fletcher.json` at the root (read from the pull
-request's head SHA). All fields are optional; a missing or malformed file
+Repositories may include a `.fletcher.json` at the root, read from the
+default branch. Changes in a pull request take effect once merged, so a pull
+request can't switch off or narrow its own review. All fields are optional; a missing or malformed file
 falls back to defaults and never fails a review:
 
 ```json

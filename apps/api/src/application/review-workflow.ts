@@ -182,11 +182,13 @@ export const fetchReviewablePullRequest = (
 
     const details = yield* client.fetchDetails(installationToken, ref);
 
+    // Read from the default branch, never the pull request: its author
+    // must not be able to switch the review off or hide files from it.
     const configFile = yield* client.fetchRepositoryFile(
       installationToken,
       ref,
       REVIEW_CONFIG_PATH,
-      request.headSha,
+      request.defaultBranch,
     );
 
     const config = yield* resolveReviewConfig(configFile);

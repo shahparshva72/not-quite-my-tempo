@@ -2,6 +2,7 @@ import { Data, Effect, Inspectable, Match, Option, Schema } from "effect";
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { logger } from "hono/logger";
+import { secureHeaders } from "hono/secure-headers";
 import {
   Database,
   DatabaseLive,
@@ -116,6 +117,28 @@ class RequestBodyError extends Data.TaggedError("RequestBodyError")<{
 }> {}
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+// Pages are server-rendered with no scripts: nothing may run, frame them,
+// or be loaded from anywhere but this site, Google Fonts, and GitHub
+// avatars. Forms post here; billing forms redirect on to Polar.
+app.use(
+  "*",
+  secureHeaders({
+    xFrameOptions: "DENY",
+    contentSecurityPolicy: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'none'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "https://avatars.githubusercontent.com"],
+      connectSrc: ["'self'"],
+      formAction: ["'self'", "https://polar.sh", "https://*.polar.sh"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'none'"],
+      objectSrc: ["'none'"],
+    },
+  }),
+);
 
 const errorResponse = (
   c: AppContext,

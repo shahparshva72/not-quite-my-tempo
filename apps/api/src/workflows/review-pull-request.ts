@@ -24,8 +24,9 @@ import {
 import type { ReviewPipelineError } from "../application/review-workflow.js";
 import {
   chooseReviewKey,
-  explainMissingKey,
+  explainBlockedReview,
   resolveGeminiKey,
+  trialDailyReviewCap,
   WorkspaceGeminiKeyRejectedError,
 } from "../application/review-keys.js";
 import type { ResolvedGeminiKey } from "../application/review-keys.js";
@@ -45,6 +46,8 @@ type WorkflowEnv = {
   // Gemini Developer API (Google AI Studio key).
   readonly GEMINI_API_PROVIDER?: string;
   readonly TOKEN_ENCRYPTION_KEY: string;
+  // Platform-wide free trial reviews per 24 hours (review-keys.ts).
+  readonly TRIAL_DAILY_REVIEW_CAP?: string;
   // Only to tell blocked pull requests whether subscribing is an option.
   readonly POLAR_ACCESS_TOKEN?: string;
   readonly POLAR_PRODUCT_ID?: string;
@@ -159,6 +162,18 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
 
     const pullRequestLayer = GitHubPullRequestClientLive({});
 
+    // Each step that calls GitHub mints its own installation token, so no
+    // token is ever a step output (Cloudflare persists those) and a step
+    // retried after an hour doesn't reuse an expired one.
+    const withInstallationToken = <A, E, R>(
+      installationId: number,
+      use: (token: string) => Effect.Effect<A, E, R>,
+    ) =>
+      mintInstallationToken(installationId).pipe(
+        Effect.provide(authLayer),
+        Effect.flatMap(use),
+      );
+
     const program = Effect.gen(function* () {
       const { request, reviewRunId, appOrigin } = yield* Schema.decodeUnknown(
         ReviewWorkflowParams,
@@ -181,20 +196,12 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           markReviewRunning(reviewRunId).pipe(Effect.provide(databaseLayer)),
         );
 
-        const installationToken = yield* runStep(
-          step,
-          "mint installation token",
-          mintInstallationToken(request.installationId).pipe(
-            Effect.provide(authLayer),
-          ),
-        );
-
         const pullRequest = yield* runStep(
           step,
           "fetch pull request",
-          fetchReviewablePullRequest(installationToken, request).pipe(
-            Effect.provide(pullRequestLayer),
-          ),
+          withInstallationToken(request.installationId, (token) =>
+            fetchReviewablePullRequest(token, request),
+          ).pipe(Effect.provide(pullRequestLayer)),
         );
 
         if (!pullRequest.config.enabled) {
@@ -220,26 +227,43 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
         const keyChoice = yield* runStep(
           step,
           "choose gemini key",
-          chooseReviewKey(reviewRunId).pipe(Effect.provide(databaseLayer)),
+          chooseReviewKey(
+            reviewRunId,
+            trialDailyReviewCap(env.TRIAL_DAILY_REVIEW_CAP),
+          ).pipe(Effect.provide(databaseLayer)),
         );
 
         const keySource = keyChoice.source;
 
-        if (keySource === "none") {
+        if (keySource === "none" || keySource === "trial_paused") {
+          const reason = keySource === "none" ? "no_gemini_key" : keySource;
+
           yield* runStep(
             step,
-            "explain missing gemini key",
-            explainMissingKey(
-              installationToken,
-              request,
-              reviewRunId,
-              keyChoice.repositoryId,
-              keyChoice.workspaceId,
-              Option.isSome(polarConfig(env)),
-              appOrigin,
+            keySource === "none"
+              ? "explain missing gemini key"
+              : "explain paused trial",
+            withInstallationToken(request.installationId, (token) =>
+              explainBlockedReview(
+                token,
+                request,
+                reviewRunId,
+                keyChoice.repositoryId,
+                keyChoice.workspaceId,
+                reason,
+                Option.isSome(polarConfig(env)),
+                appOrigin,
+              ),
             ).pipe(
               Effect.provide(pullRequestLayer),
               Effect.provide(databaseLayer),
+              // The run is marked blocked whether or not GitHub hears why.
+              Effect.catchAll((error) =>
+                logError("blocked_review_comment_failed", {
+                  reviewRunId,
+                  errorCode: error._tag,
+                }),
+              ),
             ),
           );
 
@@ -248,12 +272,14 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
             "mark review run blocked",
             markReviewFailed(
               reviewRunId,
-              "no_gemini_key",
-              "No Gemini API key and no free trial reviews left",
+              reason,
+              keySource === "none"
+                ? "No Gemini API key and no free trial reviews left"
+                : "Free trial reviews are paused: platform daily cap reached",
             ).pipe(Effect.provide(databaseLayer)),
           );
 
-          yield* logInfo("review_blocked_no_gemini_key", fields);
+          yield* logInfo(`review_blocked_${reason}`, fields);
 
           return { blocked: true } as const;
         }
@@ -303,13 +329,15 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
         const posted = yield* runStep(
           step,
           "post github review",
-          postReviewToGitHub(
-            installationToken,
-            request,
-            reviewRunId,
-            reviewResult.review,
-            pullRequest.diff,
-            reviewToneOf(pullRequest.config),
+          withInstallationToken(request.installationId, (token) =>
+            postReviewToGitHub(
+              token,
+              request,
+              reviewRunId,
+              reviewResult.review,
+              pullRequest.diff,
+              reviewToneOf(pullRequest.config),
+            ),
           ).pipe(
             Effect.provide(pullRequestLayer),
             Effect.provide(databaseLayer),

@@ -1,16 +1,8 @@
 import { Effect, Option, Schema } from "effect";
 
-import { GitHubId } from "./review-request.js";
+import { GitHubId, TRUSTED_AUTHOR_ASSOCIATIONS } from "./review-request.js";
 
 export const MANUAL_REVIEW_COMMAND = "/fletcher again";
-
-// Only people with write-ish standing on the repository may command a
-// re-review; drive-by commenters cannot burn the daily cap.
-const ALLOWED_AUTHOR_ASSOCIATIONS: ReadonlySet<string> = new Set([
-  "OWNER",
-  "MEMBER",
-  "COLLABORATOR",
-]);
 
 const IssueCommentWebhook = Schema.Struct({
   action: Schema.Literal("created"),
@@ -68,7 +60,7 @@ export const decodeIssueCommentBody = (
         .trim()
         .toLowerCase()
         .startsWith(MANUAL_REVIEW_COMMAND) &&
-      ALLOWED_AUTHOR_ASSOCIATIONS.has(payload.comment.author_association)
+      TRUSTED_AUTHOR_ASSOCIATIONS.has(payload.comment.author_association)
         ? Option.some<ManualReviewCommand>({
             installationId: payload.installation.id,
             installationAccountId: payload.repository.owner.id,

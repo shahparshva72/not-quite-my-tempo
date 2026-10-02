@@ -318,6 +318,34 @@ describe("fetchReviewablePullRequest", () => {
     expect(result.diff).toContain("src/tempo.ts");
   });
 
+  it("reads .fletcher.json from the default branch, not the PR head", async () => {
+    const gitRefs: string[] = [];
+
+    await Effect.runPromise(
+      fetchReviewablePullRequest("ghs_token", request).pipe(
+        Effect.provide(
+          Layer.succeed(
+            GitHubPullRequestClient,
+            GitHubPullRequestClient.of({
+              fetchDiff: () => Effect.succeed(pullRequestDiff),
+              fetchDetails: () => Effect.succeed(details),
+              createReview: () => Effect.succeed({ reviewId: 1 }),
+              listReviewComments: () => Effect.succeed([]),
+              createIssueComment: () => Effect.void,
+              fetchRepositoryFile: (_token, _ref, _path, gitRef) => {
+                gitRefs.push(gitRef);
+
+                return Effect.succeed(Option.none());
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+
+    expect(gitRefs).toEqual(["main"]);
+  });
+
   it("applies configured ignore globs to the diff", async () => {
     const result = await Effect.runPromise(
       fetchReviewablePullRequest("ghs_token", request).pipe(

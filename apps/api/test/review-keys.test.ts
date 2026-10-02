@@ -6,10 +6,13 @@ import { checkGeminiKey } from "@not-quite-my-tempo/gemini";
 
 import {
   chooseReviewKey,
-  explainMissingKey,
+  DEFAULT_TRIAL_DAILY_REVIEW_CAP,
+  explainBlockedReview,
   GeminiKeyUnreadableError,
   resolveGeminiKey,
+  trialDailyReviewCap,
 } from "../src/application/review-keys";
+import type { BlockedReviewCode } from "../src/application/review-keys";
 import { geminiKeyContext } from "../src/application/workspace-settings";
 import { encryptToken } from "../src/auth/token-cipher";
 import { GitHubPullRequestClient } from "../src/github/pull-request-client";
@@ -66,8 +69,26 @@ const storeWorkspaceKey = async (apiKey: string) => {
     .run();
 };
 
-const choose = (runId: number) =>
-  Effect.runPromise(chooseReviewKey(runId).pipe(Effect.provide(db())));
+const choose = (runId: number, trialDailyCap?: number) =>
+  Effect.runPromise(
+    chooseReviewKey(runId, trialDailyCap).pipe(Effect.provide(db())),
+  );
+
+// Trial runs other workspaces started `hoursAgo`, which count only against
+// the platform-wide daily cap.
+const seedOtherTrialRuns = async (count: number, hoursAgo = 1) => {
+  const startedAt = Date.now() - hoursAgo * 60 * 60 * 1000;
+
+  for (let index = 0; index < count; index += 1) {
+    const run = await createRun(`other-${hoursAgo}-${index}`, 500 + index);
+
+    await env.DB.prepare(
+      "UPDATE review_runs SET key_source = 'platform', status = 'completed', started_at = ?, created_at = ? WHERE id = ?",
+    )
+      .bind(startedAt, startedAt, run.id)
+      .run();
+  }
+};
 
 describe("choosing a review's Gemini key", () => {
   beforeEach(resetAndSeedRepository);
@@ -121,6 +142,61 @@ describe("choosing a review's Gemini key", () => {
       "platform",
     ]);
     expect(await trialUsed()).toBe(5);
+  });
+});
+
+describe("the platform-wide daily trial cap", () => {
+  beforeEach(resetAndSeedRepository);
+
+  it("pauses free reviews once the cap is reached, without using one", async () => {
+    await seedOtherTrialRuns(3);
+    const run = await createRun("capped");
+
+    expect(await choose(run.id, 3)).toEqual({
+      source: "trial_paused",
+      repositoryId: 1,
+      workspaceId: 1,
+    });
+    expect(await keySourceOf(run.id)).toBeNull();
+    expect(await trialUsed()).toBe(0);
+  });
+
+  it("still claims a free review below the cap", async () => {
+    await seedOtherTrialRuns(2);
+    const run = await createRun("under-cap");
+
+    expect((await choose(run.id, 3)).source).toBe("platform");
+  });
+
+  it("only counts trial reviews from the last 24 hours", async () => {
+    await seedOtherTrialRuns(3, 25);
+    const run = await createRun("old-runs");
+
+    expect((await choose(run.id, 3)).source).toBe("platform");
+  });
+
+  it("says the workspace is out of free reviews when it is, cap or not", async () => {
+    await seedTrialRuns(5, "completed");
+    const run = await createRun("spent-and-capped");
+
+    expect((await choose(run.id, 0)).source).toBe("none");
+  });
+
+  it("never pauses reviews on the workspace's own key", async () => {
+    await storeWorkspaceKey("AIzaWorkspaceKey1234567890");
+    const run = await createRun("own-key-capped");
+
+    expect((await choose(run.id, 0)).source).toBe("workspace");
+  });
+
+  it("reads the cap from the environment, falling back to the default", () => {
+    expect(trialDailyReviewCap("25")).toBe(25);
+    expect(trialDailyReviewCap("0")).toBe(0);
+    expect(trialDailyReviewCap(undefined)).toBe(DEFAULT_TRIAL_DAILY_REVIEW_CAP);
+    expect(trialDailyReviewCap("")).toBe(DEFAULT_TRIAL_DAILY_REVIEW_CAP);
+    expect(trialDailyReviewCap("-1")).toBe(DEFAULT_TRIAL_DAILY_REVIEW_CAP);
+    expect(trialDailyReviewCap("ten")).toBe(DEFAULT_TRIAL_DAILY_REVIEW_CAP);
+    expect(trialDailyReviewCap("2.5")).toBe(DEFAULT_TRIAL_DAILY_REVIEW_CAP);
   });
 });
 
@@ -288,14 +364,16 @@ describe("explaining a blocked review", () => {
     runId: number,
     comments: string[],
     billingEnabled = false,
+    reason: BlockedReviewCode = "no_gemini_key",
   ) =>
     Effect.runPromise(
-      explainMissingKey(
+      explainBlockedReview(
         "ghs_token",
         request,
         runId,
         1,
         1,
+        reason,
         billingEnabled,
         "https://notmytempo.dev",
       ).pipe(
@@ -338,6 +416,29 @@ describe("explaining a blocked review", () => {
     expect(comments).toHaveLength(1);
     expect(comments[0]).toContain("used its 5 free reviews");
     expect(comments[0]).toContain(
+      "https://notmytempo.dev/workspaces/1/settings",
+    );
+  });
+
+  it("explains a paused trial separately from a spent one", async () => {
+    const comments: string[] = [];
+    const missing = await createRun("blocked-missing");
+
+    await explain(missing.id, comments);
+
+    await env.DB.prepare(
+      "UPDATE review_runs SET status = 'failed', error_code = 'no_gemini_key' WHERE id = ?",
+    )
+      .bind(missing.id)
+      .run();
+
+    const paused = await createRun("blocked-paused");
+
+    await explain(paused.id, comments, false, "trial_paused");
+
+    expect(comments).toHaveLength(2);
+    expect(comments[1]).toContain("Free trial reviews are paused for today");
+    expect(comments[1]).toContain(
       "https://notmytempo.dev/workspaces/1/settings",
     );
   });
