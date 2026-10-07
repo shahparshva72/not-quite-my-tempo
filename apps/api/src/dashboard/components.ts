@@ -60,7 +60,7 @@ export const avatar = (login: string, large = false) =>
       referrerpolicy="no-referrer"
   /></span>`;
 
-export type NavItem = "repositories" | "setup";
+export type NavItem = "repositories" | "setup" | "account";
 
 const navLink = (href: string, label: string, current: boolean) =>
   html`<a href="${href}" ${current ? raw('aria-current="page"') : ""}
@@ -94,6 +94,7 @@ const navigation = (login: string | null, active: NavItem | null) =>
     : html`<nav class="nav" aria-label="Main">
         ${navLink("/dashboard", "Repositories", active === "repositories")}
         ${navLink("/onboarding", "Setup", active === "setup")}
+        ${navLink("/account", "Account", active === "account")}
       </nav>`;
 
 /**

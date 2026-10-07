@@ -48,6 +48,12 @@ export const workspaces = sqliteTable("workspaces", {
   subscriptionSyncedAt: integer("subscription_synced_at", {
     mode: "timestamp_ms",
   }),
+  // Counted free trial reviews whose runs were deleted with the workspace's
+  // data. Deleting keeps this row (docs/ACCOUNT_DELETION.md) so deleting
+  // and reinstalling can't reset the trial.
+  trialReviewsCarried: integer("trial_reviews_carried").notNull().default(0),
+  // When an owner last deleted the workspace's data.
+  dataDeletedAt: integer("data_deleted_at", { mode: "timestamp_ms" }),
   createdAt: integer("created_at", { mode: "timestamp_ms" })
     .notNull()
     .default(sql`(unixepoch() * 1000)`),

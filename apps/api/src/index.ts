@@ -1,6 +1,6 @@
 import { Data, Effect, Inspectable, Match, Option, Schema } from "effect";
 import { Hono } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import {
@@ -12,6 +12,11 @@ import {
 import { makeServiceInfo } from "@not-quite-my-tempo/core";
 import type { Context } from "hono";
 
+import {
+  accountWorkspaces,
+  deleteAccount,
+  deleteWorkspace,
+} from "./application/account-deletion.js";
 import { ReviewWorkflowLive } from "./application/review-requests.js";
 import type { ReviewWorkflowParams } from "./application/review-requests.js";
 import {
@@ -76,8 +81,13 @@ import {
   runFindingsPage,
 } from "./dashboard/views.js";
 import type { PaidPlanOffer, SettingsNotice } from "./dashboard/views.js";
+import { accountDeletedPage, accountPage } from "./dashboard/account.js";
+import type { AccountNotice } from "./dashboard/account.js";
 import { privacyPage, termsPage } from "./dashboard/legal.js";
-import { GitHubAppAuthLive } from "./github/app-auth.js";
+import {
+  GitHubAppAuthLive,
+  GitHubAppInstallationsLive,
+} from "./github/app-auth.js";
 import { GitHubInstallationClientLive } from "./github/installation-client.js";
 import { GitHubPullRequestClientLive } from "./github/pull-request-client.js";
 import { processGitHubWebhook } from "./github/webhook.js";
@@ -889,6 +899,191 @@ app.post("/workspaces/:id/billing/checkout", (c) =>
 app.post("/workspaces/:id/billing/portal", (c) =>
   redirectToPolar(c, openBillingPortal),
 );
+
+// Deletion confirmations: the name typed into the form (a missing field
+// counts as a mismatch, so nothing is deleted).
+const ConfirmationForm = Schema.Struct({ confirm: Schema.String });
+
+const confirmation = async (c: AppContext) =>
+  Option.match(
+    Schema.decodeUnknownOption(ConfirmationForm)(await c.req.parseBody()),
+    { onNone: () => "", onSome: (form) => form.confirm },
+  );
+
+app.post("/workspaces/:id/delete", (c) =>
+  withSessionPage(c, async (session) => {
+    const workspaceId = Number(c.req.param("id"));
+
+    if (!Number.isInteger(workspaceId)) {
+      return c.html(notFoundPage(session.login), 404);
+    }
+
+    const deletion = deleteWorkspace(
+      session,
+      workspaceId,
+      await confirmation(c),
+    );
+
+    // Without billing there's no Polar to ask; the stored plan decides.
+    const withBilling = Option.match(polarConfig(c.env), {
+      onNone: () => deletion,
+      onSome: (config) =>
+        deletion.pipe(Effect.provide(PolarClientLive(config))),
+    });
+
+    return Effect.runPromise(
+      withBilling.pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.provide(
+          GitHubAppInstallationsLive({
+            appId: c.env.GITHUB_APP_ID,
+            privateKey: c.env.GITHUB_APP_PRIVATE_KEY,
+          }),
+        ),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                Promise.resolve(c.html(notFoundPage(session.login), 404)),
+              ),
+              Match.tag("ForbiddenError", (error) =>
+                Promise.resolve(
+                  c.html(forbiddenPage(session.login, error.requiredRole), 403),
+                ),
+              ),
+              Match.tag("ConfirmationMismatchError", () =>
+                renderSettings(
+                  c,
+                  session,
+                  workspaceId,
+                  "confirmation_mismatch",
+                  422,
+                ),
+              ),
+              Match.tag("RenewingSubscriptionError", () =>
+                renderSettings(
+                  c,
+                  session,
+                  workspaceId,
+                  "subscription_renews",
+                  409,
+                ),
+              ),
+              Match.tag("PolarRequestError", (error) => {
+                Effect.runSync(
+                  logError("polar_request_failed", {
+                    operation: error.operation,
+                    status: error.status ?? "none",
+                  }),
+                );
+
+                return renderSettings(
+                  c,
+                  session,
+                  workspaceId,
+                  "billing_unavailable",
+                  503,
+                );
+              }),
+              Match.tag(
+                "GitHubAppUninstallError",
+                "GitHubApiRequestError",
+                (error) => {
+                  Effect.runSync(
+                    logError("github_uninstall_failed", {
+                      workspaceId,
+                      errorCode: error._tag,
+                    }),
+                  );
+
+                  return renderSettings(
+                    c,
+                    session,
+                    workspaceId,
+                    "github_unavailable",
+                    503,
+                  );
+                },
+              ),
+              Match.orElse((error) => Promise.resolve(internalError(c, error))),
+            ),
+          onSuccess: () =>
+            Promise.resolve(
+              c.redirect("/account?notice=workspace_deleted", 303),
+            ),
+        }),
+      ),
+    );
+  }),
+);
+
+const accountNotices = new Map<string, AccountNotice>([
+  ["workspace_deleted", "workspace_deleted"],
+]);
+
+const renderAccount = (
+  c: AppContext,
+  session: SessionPayload,
+  notice: AccountNotice | null,
+  status: 200 | 422,
+) =>
+  Effect.runPromise(
+    accountWorkspaces(session).pipe(
+      Effect.provide(makeLiveLayer(c.env.DB)),
+      Effect.match({
+        onFailure: (cause) => internalError(c, cause),
+        onSuccess: (workspaces) =>
+          c.html(accountPage(session.login, workspaces, notice), status),
+      }),
+    ),
+  );
+
+app.get("/account", (c) =>
+  withSessionPage(c, (session) =>
+    renderAccount(
+      c,
+      session,
+      accountNotices.get(c.req.query("notice") ?? "") ?? null,
+      200,
+    ),
+  ),
+);
+
+app.post("/account/delete", (c) =>
+  withSessionPage(c, async (session) =>
+    Effect.runPromise(
+      deleteAccount(
+        session,
+        await confirmation(c),
+        c.env.TOKEN_ENCRYPTION_KEY,
+      ).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.provide(
+          GitHubOAuthLive({
+            clientId: c.env.GITHUB_OAUTH_CLIENT_ID,
+            clientSecret: c.env.GITHUB_OAUTH_CLIENT_SECRET,
+          }),
+        ),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ConfirmationMismatchError", () =>
+                renderAccount(c, session, "confirmation_mismatch", 422),
+              ),
+              Match.orElse((error) => Promise.resolve(internalError(c, error))),
+            ),
+          onSuccess: () => {
+            deleteCookie(c, SESSION_COOKIE, { path: "/" });
+
+            return Promise.resolve(c.redirect("/account/deleted", 303));
+          },
+        }),
+      ),
+    ),
+  ),
+);
+
+app.get("/account/deleted", (c) => c.html(accountDeletedPage()));
 
 app.get("/api/me", (c) =>
   withSession(c, (session) =>

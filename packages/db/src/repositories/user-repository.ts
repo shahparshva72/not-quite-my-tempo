@@ -35,6 +35,15 @@ export class UserRepository extends Effect.Service<UserRepository>()(
               .returning()
               .get(),
           ),
+        /**
+         * Deletes the account. Its sessions and memberships go with it, and
+         * audit rows and Gemini keys it touched keep no link to it (the
+         * foreign keys cascade or set null).
+         */
+        deleteById: (id: number) =>
+          databaseEffect("users.delete_by_id", () =>
+            client.delete(users).where(eq(users.id, id)).run(),
+          ).pipe(Effect.asVoid),
         findByGithubUserId: (githubUserId: number) =>
           databaseEffect("users.find_by_github_user_id", () =>
             client
