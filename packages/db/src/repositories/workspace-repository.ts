@@ -1,10 +1,14 @@
-import { and, eq, isNull, lte, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 
 import { databaseEffect } from "../errors.js";
 import { auditEvents } from "../schema/audit-events.js";
+import { findings } from "../schema/findings.js";
 import { githubInstallations } from "../schema/github-installations.js";
+import { memberships } from "../schema/memberships.js";
 import { repositories } from "../schema/repositories.js";
+import { reviewRunRetries } from "../schema/review-run-retries.js";
+import { reviewRuns } from "../schema/review-runs.js";
 import { geminiKeyProviders, workspaces } from "../schema/workspaces.js";
 import { Database } from "../services/database.js";
 import type { Workspace } from "./membership-repository.js";
@@ -166,6 +170,111 @@ export class WorkspaceRepository extends Effect.Service<WorkspaceRepository>()(
 
             return applied;
           }),
+        /**
+         * Deletes everything stored for the workspace's GitHub account
+         * (installations, repositories, reviews, findings, members, audit
+         * history, and the Gemini key) in one batch, leaving the workspace
+         * row as a record of the account, its billing references, and its
+         * used free reviews (docs/ACCOUNT_DELETION.md). Free reviews used by
+         * the deleted runs are carried onto the workspaces they were
+         * charged to, so a repository transferred in can't refund another
+         * workspace's trial either. One audit row records the deletion.
+         */
+        deleteDataWithAudit: (workspaceId: number, actorUserId: number) =>
+          databaseEffect("workspaces.delete_data", () => {
+            const workspaceRepositories = client
+              .select({ id: repositories.id })
+              .from(repositories)
+              .innerJoin(
+                githubInstallations,
+                eq(repositories.installationId, githubInstallations.id),
+              )
+              .where(eq(githubInstallations.workspaceId, workspaceId));
+
+            const workspaceRuns = client
+              .select({ id: reviewRuns.id })
+              .from(reviewRuns)
+              .where(inArray(reviewRuns.repositoryId, workspaceRepositories));
+
+            const deletedTrialReviews = and(
+              eq(reviewRuns.trialWorkspaceId, workspaces.id),
+              eq(reviewRuns.keySource, "platform"),
+              inArray(reviewRuns.status, ["queued", "running", "completed"]),
+              inArray(reviewRuns.repositoryId, workspaceRepositories),
+            );
+
+            const now = new Date();
+
+            return client.batch([
+              client
+                .delete(auditEvents)
+                .where(eq(auditEvents.workspaceId, workspaceId)),
+              client.insert(auditEvents).values({
+                workspaceId,
+                actorUserId,
+                action: "workspace.data_deleted",
+                target: `workspace:${workspaceId}`,
+                after: sql`json_object(
+                  'repositories', (select count(*) from (${workspaceRepositories})),
+                  'reviews', (select count(*) from (${workspaceRuns}))
+                )`,
+              }),
+              client
+                .update(workspaces)
+                .set({
+                  trialReviewsCarried: sql`${workspaces.trialReviewsCarried} + (select count(*) from ${reviewRuns} where ${deletedTrialReviews})`,
+                })
+                .where(
+                  inArray(
+                    workspaces.id,
+                    client
+                      .select({ id: reviewRuns.trialWorkspaceId })
+                      .from(reviewRuns)
+                      .where(
+                        inArray(reviewRuns.repositoryId, workspaceRepositories),
+                      ),
+                  ),
+                ),
+              client
+                .delete(findings)
+                .where(inArray(findings.reviewRunId, workspaceRuns)),
+              client
+                .delete(reviewRunRetries)
+                .where(inArray(reviewRunRetries.reviewRunId, workspaceRuns)),
+              client
+                .delete(reviewRuns)
+                .where(inArray(reviewRuns.repositoryId, workspaceRepositories)),
+              client
+                .delete(repositories)
+                .where(
+                  inArray(
+                    repositories.installationId,
+                    client
+                      .select({ id: githubInstallations.id })
+                      .from(githubInstallations)
+                      .where(eq(githubInstallations.workspaceId, workspaceId)),
+                  ),
+                ),
+              client
+                .delete(githubInstallations)
+                .where(eq(githubInstallations.workspaceId, workspaceId)),
+              client
+                .delete(memberships)
+                .where(eq(memberships.workspaceId, workspaceId)),
+              client
+                .update(workspaces)
+                .set({
+                  geminiKeyCiphertext: null,
+                  geminiKeyLast4: null,
+                  geminiKeyProvider: null,
+                  geminiKeyUpdatedAt: null,
+                  geminiKeyUpdatedBy: null,
+                  dataDeletedAt: now,
+                  updatedAt: now,
+                })
+                .where(eq(workspaces.id, workspaceId)),
+            ]);
+          }).pipe(Effect.asVoid),
         removeGeminiKeyWithAudit: (change: GeminiKeyChange) =>
           databaseEffect("workspaces.remove_gemini_key", () => {
             const now = new Date();

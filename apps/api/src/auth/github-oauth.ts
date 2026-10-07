@@ -92,6 +92,13 @@ export interface GitHubOAuthService {
     accessToken: string,
     org: string,
   ) => Effect.Effect<boolean, GitHubOAuthError>;
+  /**
+   * Revokes the user's authorization of the App on GitHub, ending every
+   * token it issued them. One that's already gone (404) counts as revoked.
+   */
+  readonly revokeGrant: (
+    accessToken: string,
+  ) => Effect.Effect<void, GitHubOAuthError>;
 }
 
 export class GitHubOAuth extends Context.Tag(
@@ -233,6 +240,27 @@ export const GitHubOAuthLive = (config: GitHubOAuthConfig) => {
             error.status === 403 || error.status === 404
               ? Effect.succeed(false)
               : Effect.fail(error),
+          ),
+        ),
+      revokeGrant: (accessToken) =>
+        oauthRequest(
+          config,
+          `${apiBaseUrl}/applications/${encodeURIComponent(config.clientId)}/grant`,
+          {
+            method: "DELETE",
+            headers: {
+              accept: "application/vnd.github+json",
+              authorization: `Basic ${btoa(`${config.clientId}:${config.clientSecret}`)}`,
+              "content-type": "application/json",
+              "user-agent": USER_AGENT,
+              "x-github-api-version": GITHUB_API_VERSION,
+            },
+            body: JSON.stringify({ access_token: accessToken }),
+          },
+        ).pipe(
+          Effect.asVoid,
+          Effect.catchTag("OAuthResponseError", (error) =>
+            error.status === 404 ? Effect.void : Effect.fail(error),
           ),
         ),
       fetchUserAccess: (accessToken) =>

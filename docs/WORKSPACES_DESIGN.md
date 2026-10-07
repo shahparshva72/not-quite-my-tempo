@@ -113,7 +113,8 @@ the last org owner left). Admins keep working, and owner-only actions wait.
   refresh (section 4).
 - **Installation removed**: the workspace stays (trial, key, plan, and history
   kept). Repositories are already marked removed by installation sync.
-- **Workspace deleted**: Phase 15 (account deletion). Out of scope here.
+- **Workspace deleted**: an owner deletes its data from settings; the row
+  stays as a record. See [ACCOUNT_DELETION.md](./ACCOUNT_DELETION.md).
 
 ### Migration and backfill (one additive migration)
 
@@ -155,7 +156,8 @@ can't cross tenants.
 | Turn reviews on or off for a repository              | admin or owner, and GitHub access to that repository |
 | Change workspace settings (and later the Gemini key) | admin or owner                                       |
 | Promote or demote admins                             | owner                                                |
-| Billing, delete workspace (later phases)             | owner                                                |
+| Billing                                              | admin or owner                                       |
+| Delete workspace data                                | owner                                                |
 
 Responses: a resource the user can't see returns **404**, as today, so IDs
 can't be probed. A visible resource with too little role returns **403**, with

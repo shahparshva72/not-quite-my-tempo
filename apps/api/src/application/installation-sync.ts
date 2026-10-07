@@ -73,6 +73,21 @@ export const handleInstallationEvent = (event: InstallationEvent) =>
     ),
     Match.when("remove", () =>
       Effect.gen(function* () {
+        const [stored] =
+          yield* GitHubInstallationRepository.listByGithubInstallationIds([
+            event.installationId,
+          ]);
+
+        // Never stored, or deleted with its workspace's data (which is what
+        // uninstalls it). Storing it now would bring back deleted data.
+        if (stored === undefined) {
+          yield* logInfo("github_installation_remove_ignored", {
+            installationId: event.installationId,
+          });
+
+          return { status: "removed" as const };
+        }
+
         const installation = yield* upsertInstallation(event, "removed");
 
         yield* GitHubRepositoryRepository.removeAllForInstallation(

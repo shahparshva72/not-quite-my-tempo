@@ -4,7 +4,7 @@ import type { HtmlContent } from "./components.js";
 import { layout } from "./components.js";
 
 // Shown on both pages. Bump it whenever either document changes.
-const EFFECTIVE_DATE = "2 October 2026";
+const EFFECTIVE_DATE = "7 October 2026";
 
 const CONTACT_EMAIL = "support@notmytempo.dev";
 
@@ -161,9 +161,17 @@ export const privacyPage = (login: string | null) =>
       <h2>How long we keep it</h2>
       <ul>
         <li>
-          Account, workspace, and review history: for as long as the workspace
-          exists, or until you ask us to delete it. Uninstalling the App stops
-          new reviews but keeps past history unless you ask us to delete it.
+          Your account: until you delete it on your Account page, which also
+          deletes your sessions and roles and revokes Fletcher's access to your
+          GitHub account.
+        </li>
+        <li>
+          Workspace and review history: until an owner deletes the workspace's
+          data in its settings, which also uninstalls Fletcher. Uninstalling the
+          App on GitHub stops new reviews but keeps past history. After a
+          deletion we keep only the GitHub account's name and ID, its billing
+          references, and how many free reviews it used, so the free trial can't
+          be restarted.
         </li>
         <li>
           Gemini keys: until an admin removes or replaces the key in workspace
@@ -178,13 +186,15 @@ export const privacyPage = (login: string | null) =>
 
       <h2>Your choices and rights</h2>
       <p>
-        You can ask us to access, correct, export, or delete your personal data,
-        or object to how we use it. Email ${contact}, and we'll respond within
-        30 days. You can stop Fletcher at any time by uninstalling the GitHub
-        App or revoking its authorization in your GitHub settings. If you're in
-        the EU or UK, you can also complain to your data protection authority.
-        If you're in India, the contact above is our grievance contact under the
-        Digital Personal Data Protection Act, 2023.
+        You can delete your account yourself on your Account page, and an owner
+        can delete a workspace's data in its settings. You can also ask us to
+        access, correct, export, or delete your personal data, or object to how
+        we use it. Email ${contact}, and we'll respond within 30 days. You can
+        stop Fletcher at any time by uninstalling the GitHub App or revoking its
+        authorization in your GitHub settings. If you're in the EU or UK, you
+        can also complain to your data protection authority. If you're in India,
+        the contact above is our grievance contact under the Digital Personal
+        Data Protection Act, 2023.
       </p>
 
       <h2>Security</h2>
@@ -304,10 +314,12 @@ export const termsPage = (login: string | null) =>
 
       <h2>8. Suspension and ending</h2>
       <p>
-        You can stop using Fletcher at any time by uninstalling the GitHub App.
-        We may suspend or end access if you break these terms, or if we need to
-        in order to protect the service or other users. If we shut down
-        Fletcher, we'll give reasonable notice where we can.
+        You can stop using Fletcher at any time by uninstalling the GitHub App,
+        and delete your account or, as an owner, a workspace's data in Fletcher
+        (see the Privacy Policy for what that removes). We may suspend or end
+        access if you break these terms, or if we need to in order to protect
+        the service or other users. If we shut down Fletcher, we'll give
+        reasonable notice where we can.
       </p>
 
       <h2>9. Disclaimers</h2>

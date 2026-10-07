@@ -678,7 +678,10 @@ export type SettingsNotice =
   | "already_subscribed"
   | "no_billing_account"
   | "billing_unavailable"
-  | "billing_disabled";
+  | "billing_disabled"
+  | "confirmation_mismatch"
+  | "subscription_renews"
+  | "github_unavailable";
 
 const noticeMessages = {
   saved: "Key saved. Reviews now use it.",
@@ -698,6 +701,12 @@ const noticeMessages = {
   billing_unavailable:
     "Polar didn't answer, so nothing changed. Try again in a minute.",
   billing_disabled: "Billing isn't set up on this server.",
+  confirmation_mismatch:
+    "That doesn't match this workspace's GitHub account name, so nothing was deleted.",
+  subscription_renews:
+    "This workspace's subscription still renews, so nothing was deleted. Cancel it in Manage billing first.",
+  github_unavailable:
+    "GitHub didn't answer, so Fletcher wasn't uninstalled and nothing was deleted. Try again in a minute.",
 } as const satisfies Record<SettingsNotice, string>;
 
 const settingsNotice = (notice: SettingsNotice | null) =>
@@ -856,6 +865,55 @@ const planCard = (
   </section>`;
 };
 
+const deleteWorkspaceCard = (
+  workspace: Workspace,
+  viewerRole: WorkspaceRole,
+) =>
+  workspaceActionAllowed(viewerRole, "delete_workspace")
+    ? html`<section class="card">
+        <div class="card-head"><h2>Delete workspace data</h2></div>
+        <div class="card-body">
+          <p>
+            Uninstalls Fletcher from ${workspace.githubAccountLogin} on GitHub
+            and deletes this workspace's repositories, review history and
+            findings, members and admins, audit history, and Gemini key. It
+            can't be undone.
+          </p>
+          <p class="fine">
+            Fletcher keeps only the account's GitHub name and ID, its billing
+            references, and how many free reviews it used, so installing again
+            doesn't restart the trial. Reviews already posted on pull requests
+            stay on GitHub. A subscription that still renews must be cancelled
+            first.
+          </p>
+          <form
+            class="key-form"
+            method="post"
+            action="/workspaces/${workspace.id}/delete"
+          >
+            <label for="confirm-workspace"
+              >Type ${workspace.githubAccountLogin} to confirm</label
+            >
+            <input
+              id="confirm-workspace"
+              name="confirm"
+              type="text"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              required
+            />
+            <button class="btn btn-danger" type="submit">
+              Delete workspace data
+            </button>
+          </form>
+        </div>
+      </section>`
+    : html`<p class="fine">
+        An owner of ${workspace.githubAccountLogin} on GitHub can delete this
+        workspace's data.
+      </p>`;
+
 export const settingsPage = (
   login: string,
   data: {
@@ -948,6 +1006,7 @@ export const settingsPage = (
               </section>`
             : ""
         }
+        ${deleteWorkspaceCard(workspace, viewerRole)}
       </div>`,
   );
 };
