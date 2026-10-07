@@ -36,6 +36,11 @@ export class NoBillingAccountError extends Data.TaggedError(
   "NoBillingAccountError",
 ) {}
 
+/** The workspace has a subscription that will charge again. */
+export class RenewingSubscriptionError extends Data.TaggedError(
+  "RenewingSubscriptionError",
+) {}
+
 const statusIn = (
   statuses: readonly string[],
   status: string | null,
@@ -144,6 +149,47 @@ export const syncWorkspacePlan = (workspaceId: number) =>
     yield* recordPlan(workspace.value, subscriptions, syncedAt);
 
     return true;
+  });
+
+/** Whether a subscription will charge again: open and not set to end. */
+const renews = (status: string | null, cancelAtPeriodEnd: boolean) =>
+  statusIn(openSubscriptionStatuses, status) && !cancelAtPeriodEnd;
+
+/**
+ * Fails while the workspace has a subscription that would keep charging
+ * after its data is deleted. With billing on, Polar is asked rather than
+ * the stored plan (a cancellation's webhook may not have arrived yet), and
+ * its answer is stored. A plan cancelled at period end doesn't block.
+ */
+export const ensureNoRenewingSubscription = (workspace: Workspace) =>
+  Effect.gen(function* () {
+    const polar = yield* Effect.serviceOption(PolarClient);
+
+    if (Option.isNone(polar)) {
+      if (
+        renews(
+          workspace.subscriptionStatus,
+          workspace.subscriptionCancelAtPeriodEnd,
+        )
+      ) {
+        return yield* new RenewingSubscriptionError();
+      }
+
+      return;
+    }
+
+    const syncedAt = new Date();
+    const subscriptions = yield* polar.value.listSubscriptions(workspace.id);
+
+    yield* recordPlan(workspace, subscriptions, syncedAt);
+
+    if (
+      subscriptions.some((subscription) =>
+        renews(subscription.status, subscription.cancel_at_period_end),
+      )
+    ) {
+      return yield* new RenewingSubscriptionError();
+    }
   });
 
 /** Acts on a verified Polar delivery; true when a workspace was synced. */

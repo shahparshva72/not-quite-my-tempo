@@ -36,6 +36,25 @@ notmytempo.dev, the production "Fletcher" GitHub App and secrets, a privacy
 page, stuck-run recovery, and an end-to-end run with two GitHub accounts.
 Then Stripe billing (Phase 16, part 2).
 
+### Account and workspace deletion — 2026-10-07
+
+Design: [ACCOUNT_DELETION.md](./ACCOUNT_DELETION.md) (Phase 15 item).
+
+- `/account`: lists the user's workspaces; typing the GitHub username deletes
+  the user (sessions and memberships cascade) and revokes the App grant on
+  GitHub, best effort.
+- Workspace settings (owners): typing the account name refuses while a
+  subscription renews (Polar asked when billing is on), uninstalls the App
+  from each installation, then deletes installations, repositories, runs,
+  findings, retries, memberships, audit history, and the Gemini key in one
+  batch, with one `workspace.data_deleted` audit row.
+- Migration `0015`: `workspaces.trial_reviews_carried` keeps deleted runs'
+  free reviews counted, so delete-and-reinstall can't reset the trial;
+  `data_deleted_at` records when. `installation.deleted` for an unknown
+  installation no longer creates one.
+- Privacy policy and terms describe self-service deletion (effective
+  7 October 2026). Export and automatic retention limits remain open.
+
 ### Workspace Gemini keys and the free trial — 2026-09-29
 
 Design: [BYOK_TRIAL_DESIGN.md](./BYOK_TRIAL_DESIGN.md).

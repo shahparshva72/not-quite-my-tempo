@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Effect } from "effect";
 
 import { databaseEffect, DatabaseError } from "../errors.js";
@@ -84,6 +84,14 @@ export class GitHubInstallationRepository extends Effect.Service<GitHubInstallat
             }),
           );
         },
+        listForWorkspace: (workspaceId: number) =>
+          databaseEffect("github_installations.list_for_workspace", () =>
+            client
+              .select()
+              .from(githubInstallations)
+              .where(eq(githubInstallations.workspaceId, workspaceId))
+              .all(),
+          ),
         listByGithubInstallationIds: (
           githubInstallationIds: readonly number[],
         ) =>

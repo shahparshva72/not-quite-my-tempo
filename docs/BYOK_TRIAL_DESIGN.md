@@ -82,6 +82,11 @@ WHERE id = :run AND key_source IS NULL
          AND status IN ('queued', 'running', 'completed')) < 5
 ```
 
+Deleting a workspace's data deletes its runs, so their counted trial reviews
+first move to `workspaces.trial_reviews_carried` (migration `0015`), which
+the claim and the settings page add to the count. Deleting and reinstalling
+doesn't restart the trial ([ACCOUNT_DELETION.md](./ACCOUNT_DELETION.md)).
+
 `trial_workspace_id` (migration `0012`) fixes which workspace was charged
 when the claim happens, so transferring a repository to another account
 doesn't move its trial history. Migration `0011` drops the old counter.
