@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeLiveLayer, ReviewRunRepository } from "@not-quite-my-tempo/db";
-import type { GeminiReviewResult } from "@not-quite-my-tempo/gemini";
+import type { ReviewResult } from "@not-quite-my-tempo/reviewer";
 
 import app from "../src/index";
 import { persistReviewFindings } from "../src/application/review-workflow";
@@ -18,7 +18,8 @@ const request = (path: string, cookie?: string) =>
     testEnv,
   );
 
-const reviewResult: GeminiReviewResult = {
+const reviewResult: ReviewResult = {
+  provider: "gemini_api",
   review: {
     verdict: "almost",
     summary: "Not quite my tempo.",
@@ -104,7 +105,7 @@ describe("dashboard", () => {
     expect(body).toContain("Reviews on");
     expect(body).toContain("Pull request 42");
     expect(body).toContain("Reviewing now");
-    expect(body).toContain("1,200 Gemini");
+    expect(body).toContain("1,200 model");
   });
 
   it("summarizes a completed review by its loudest finding", async () => {

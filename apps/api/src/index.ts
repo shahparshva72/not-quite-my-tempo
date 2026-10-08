@@ -43,11 +43,19 @@ import {
   workspaceMembers,
 } from "./application/workspace-members.js";
 import {
-  GeminiKeyCheckerLive,
-  removeGeminiKey,
-  saveGeminiKey,
+  ownKeyModelOptions,
+  removeReviewKey,
+  ReviewKeyCheckerLive,
+  savePlanModel,
+  saveReviewKey,
+  saveReviewModel,
   workspaceSettings,
 } from "./application/workspace-settings.js";
+import {
+  planMonthlyCredits,
+  platformVendors,
+} from "./application/review-keys.js";
+import type { PlatformKeys } from "./application/review-keys.js";
 import { GitHubOAuthLive } from "./auth/github-oauth.js";
 import { cachedPlanPrice } from "./billing/plan-price.js";
 import { PolarClientLive, polarConfig } from "./billing/polar-client.js";
@@ -94,6 +102,12 @@ type Bindings = Env & {
   readonly GITHUB_OAUTH_CLIENT_SECRET: string;
   readonly SESSION_SECRET: string;
   readonly TOKEN_ENCRYPTION_KEY: string;
+  readonly GEMINI_API_KEY: string;
+  readonly GEMINI_API_PROVIDER?: string;
+  // Optional platform keys: paid-plan GPT and Claude models need them.
+  readonly OPENAI_API_KEY?: string;
+  readonly ANTHROPIC_API_KEY?: string;
+  readonly PLAN_MONTHLY_CREDITS?: string;
   // Billing is optional: unset means no paid plan (docs/BILLING.md).
   readonly POLAR_ACCESS_TOKEN?: string;
   readonly POLAR_WEBHOOK_SECRET?: string;
@@ -654,13 +668,32 @@ app.post("/workspaces/:id/members/:userId/role", (c) =>
   }),
 );
 
-const GeminiKeyForm = Schema.Struct({ api_key: Schema.String });
+const ReviewKeyForm = Schema.Struct({
+  vendor: Schema.Literal("google", "openai", "anthropic"),
+  api_key: Schema.String,
+});
+
+const ModelForm = Schema.Struct({ model: Schema.String });
 
 const settingsNotices = new Map<string, SettingsNotice>([
   ["saved", "saved"],
   ["removed", "removed"],
+  ["model_saved", "model_saved"],
   ["subscribed", "subscribed"],
 ]);
+
+/** Platform keys configured on this server, for paid-plan reviews. */
+const platformKeysOf = (env: Bindings): PlatformKeys => ({
+  gemini: {
+    apiKey: env.GEMINI_API_KEY,
+    provider:
+      env.GEMINI_API_PROVIDER === "vertex_express"
+        ? "vertex_express"
+        : "gemini_api",
+  },
+  openai: env.OPENAI_API_KEY ?? null,
+  anthropic: env.ANTHROPIC_API_KEY ?? null,
+});
 
 const renderSettings = (
   c: AppContext,
@@ -670,8 +703,18 @@ const renderSettings = (
   status: 200 | 404 | 409 | 422 | 503,
 ) =>
   Effect.runPromise(
-    workspaceSettings(session, workspaceId).pipe(
+    Effect.gen(function* () {
+      const data = yield* workspaceSettings(session, workspaceId);
+
+      const ownKeyModels = yield* ownKeyModelOptions(
+        data.workspace,
+        c.env.TOKEN_ENCRYPTION_KEY,
+      );
+
+      return { ...data, ownKeyModels };
+    }).pipe(
       Effect.provide(makeLiveLayer(c.env.DB)),
+      Effect.provide(ReviewKeyCheckerLive),
       Effect.match({
         onFailure: (cause) =>
           Match.value(cause).pipe(
@@ -685,7 +728,14 @@ const renderSettings = (
             c.html(
               settingsPage(
                 session.login,
-                { ...data, offer },
+                {
+                  ...data,
+                  offer,
+                  creditAllowance: planMonthlyCredits(
+                    c.env.PLAN_MONTHLY_CREDITS,
+                  ),
+                  planVendors: platformVendors(platformKeysOf(c.env)),
+                },
                 notice,
                 new Date(),
               ),
@@ -714,31 +764,52 @@ app.get("/workspaces/:id/settings", (c) =>
   }),
 );
 
-app.post("/workspaces/:id/settings/gemini-key", (c) =>
-  withSessionPage(c, async (session) => {
-    const workspaceId = Number(c.req.param("id"));
+const settingsRedirect = (
+  c: AppContext,
+  workspaceId: number,
+  notice: SettingsNotice,
+) => c.redirect(`/workspaces/${workspaceId}/settings?notice=${notice}`, 303);
 
-    if (!Number.isInteger(workspaceId)) {
+const settingsWorkspaceId = (c: AppContext) => {
+  const workspaceId = Number(c.req.param("id"));
+
+  return Number.isInteger(workspaceId)
+    ? Option.some(workspaceId)
+    : Option.none();
+};
+
+app.post("/workspaces/:id/settings/review-key", (c) =>
+  withSessionPage(c, async (session) => {
+    const workspaceId = settingsWorkspaceId(c);
+
+    if (Option.isNone(workspaceId)) {
       return c.html(notFoundPage(session.login), 404);
     }
 
-    const form = Schema.decodeUnknownOption(GeminiKeyForm)(
+    const form = Schema.decodeUnknownOption(ReviewKeyForm)(
       await c.req.parseBody(),
     );
 
     if (Option.isNone(form)) {
-      return renderSettings(c, session, workspaceId, "invalid_format", 422);
+      return renderSettings(
+        c,
+        session,
+        workspaceId.value,
+        "invalid_format",
+        422,
+      );
     }
 
     return Effect.runPromise(
-      saveGeminiKey(
+      saveReviewKey(
         session,
-        workspaceId,
+        workspaceId.value,
+        form.value.vendor,
         form.value.api_key,
         c.env.TOKEN_ENCRYPTION_KEY,
       ).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
-        Effect.provide(GeminiKeyCheckerLive),
+        Effect.provide(ReviewKeyCheckerLive),
         Effect.match({
           onFailure: (cause) =>
             Match.value(cause).pipe(
@@ -750,43 +821,55 @@ app.post("/workspaces/:id/settings/gemini-key", (c) =>
                   c.html(forbiddenPage(session.login, error.requiredRole), 403),
                 ),
               ),
-              Match.tag("InvalidGeminiKeyError", (error) =>
+              Match.tag("InvalidReviewKeyError", (error) =>
                 renderSettings(
                   c,
                   session,
-                  workspaceId,
-                  error.reason === "format" ? "invalid_format" : "rejected",
+                  workspaceId.value,
+                  Match.value(error.reason).pipe(
+                    Match.when(
+                      "format",
+                      (): SettingsNotice => "invalid_format",
+                    ),
+                    Match.when(
+                      "wrong_provider",
+                      (): SettingsNotice => "wrong_provider",
+                    ),
+                    Match.when("rejected", (): SettingsNotice => "rejected"),
+                    Match.exhaustive,
+                  ),
                   422,
                 ),
               ),
-              Match.tag("GeminiUnavailableError", () =>
-                renderSettings(c, session, workspaceId, "unavailable", 503),
+              Match.tag("ReviewKeyCheckUnavailableError", () =>
+                renderSettings(
+                  c,
+                  session,
+                  workspaceId.value,
+                  "unavailable",
+                  503,
+                ),
               ),
               Match.orElse((error) => Promise.resolve(internalError(c, error))),
             ),
           onSuccess: () =>
-            Promise.resolve(
-              c.redirect(
-                `/workspaces/${workspaceId}/settings?notice=saved`,
-                303,
-              ),
-            ),
+            Promise.resolve(settingsRedirect(c, workspaceId.value, "saved")),
         }),
       ),
     );
   }),
 );
 
-app.post("/workspaces/:id/settings/gemini-key/remove", (c) =>
+app.post("/workspaces/:id/settings/review-key/remove", (c) =>
   withSessionPage(c, (session) => {
-    const workspaceId = Number(c.req.param("id"));
+    const workspaceId = settingsWorkspaceId(c);
 
-    if (!Number.isInteger(workspaceId)) {
+    if (Option.isNone(workspaceId)) {
       return Promise.resolve(c.html(notFoundPage(session.login), 404));
     }
 
     return Effect.runPromise(
-      removeGeminiKey(session, workspaceId).pipe(
+      removeReviewKey(session, workspaceId.value).pipe(
         Effect.provide(makeLiveLayer(c.env.DB)),
         Effect.match({
           onFailure: (cause) =>
@@ -799,10 +882,139 @@ app.post("/workspaces/:id/settings/gemini-key/remove", (c) =>
               ),
               Match.orElse((error) => internalError(c, error)),
             ),
+          onSuccess: () => settingsRedirect(c, workspaceId.value, "removed"),
+        }),
+      ),
+    );
+  }),
+);
+
+app.post("/workspaces/:id/settings/review-model", (c) =>
+  withSessionPage(c, async (session) => {
+    const workspaceId = settingsWorkspaceId(c);
+
+    if (Option.isNone(workspaceId)) {
+      return c.html(notFoundPage(session.login), 404);
+    }
+
+    const form = Schema.decodeUnknownOption(ModelForm)(await c.req.parseBody());
+
+    if (Option.isNone(form)) {
+      return renderSettings(
+        c,
+        session,
+        workspaceId.value,
+        "model_not_allowed",
+        422,
+      );
+    }
+
+    return Effect.runPromise(
+      saveReviewModel(
+        session,
+        workspaceId.value,
+        form.value.model,
+        c.env.TOKEN_ENCRYPTION_KEY,
+      ).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.provide(ReviewKeyCheckerLive),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                Promise.resolve(c.html(notFoundPage(session.login), 404)),
+              ),
+              Match.tag("ForbiddenError", (error) =>
+                Promise.resolve(
+                  c.html(forbiddenPage(session.login, error.requiredRole), 403),
+                ),
+              ),
+              Match.tag("ModelNotAllowedError", () =>
+                renderSettings(
+                  c,
+                  session,
+                  workspaceId.value,
+                  "model_not_allowed",
+                  422,
+                ),
+              ),
+              Match.tag("NoReviewKeyError", () =>
+                renderSettings(c, session, workspaceId.value, "no_key", 422),
+              ),
+              Match.tag("ReviewKeyCheckUnavailableError", () =>
+                renderSettings(
+                  c,
+                  session,
+                  workspaceId.value,
+                  "unavailable",
+                  503,
+                ),
+              ),
+              Match.orElse((error) => Promise.resolve(internalError(c, error))),
+            ),
           onSuccess: () =>
-            c.redirect(
-              `/workspaces/${workspaceId}/settings?notice=removed`,
-              303,
+            Promise.resolve(
+              settingsRedirect(c, workspaceId.value, "model_saved"),
+            ),
+        }),
+      ),
+    );
+  }),
+);
+
+app.post("/workspaces/:id/settings/plan-model", (c) =>
+  withSessionPage(c, async (session) => {
+    const workspaceId = settingsWorkspaceId(c);
+
+    if (Option.isNone(workspaceId)) {
+      return c.html(notFoundPage(session.login), 404);
+    }
+
+    const form = Schema.decodeUnknownOption(ModelForm)(await c.req.parseBody());
+
+    if (Option.isNone(form)) {
+      return renderSettings(
+        c,
+        session,
+        workspaceId.value,
+        "model_not_allowed",
+        422,
+      );
+    }
+
+    return Effect.runPromise(
+      savePlanModel(
+        session,
+        workspaceId.value,
+        form.value.model,
+        platformVendors(platformKeysOf(c.env)),
+      ).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                Promise.resolve(c.html(notFoundPage(session.login), 404)),
+              ),
+              Match.tag("ForbiddenError", (error) =>
+                Promise.resolve(
+                  c.html(forbiddenPage(session.login, error.requiredRole), 403),
+                ),
+              ),
+              Match.tag("ModelNotAllowedError", () =>
+                renderSettings(
+                  c,
+                  session,
+                  workspaceId.value,
+                  "model_not_allowed",
+                  422,
+                ),
+              ),
+              Match.orElse((error) => Promise.resolve(internalError(c, error))),
+            ),
+          onSuccess: () =>
+            Promise.resolve(
+              settingsRedirect(c, workspaceId.value, "model_saved"),
             ),
         }),
       ),

@@ -433,12 +433,16 @@ section.band { padding: clamp(3rem, 7vw, 5rem) 0; border-top: 1px solid var(--st
 .key-status { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; margin: 0; max-width: none; }
 .key-form { display: grid; gap: 0.5rem; max-width: 34rem; margin: 1.5rem 0 0; }
 .key-form label { font-weight: 700; font-size: 0.93rem; }
-.key-form input {
+.key-form input:not([type="radio"]), .key-form select {
   font: inherit; font-family: var(--code); color: var(--ink);
   background: var(--well); border: 1px solid var(--staff-strong);
   border-radius: var(--radius-sm); padding: 0.65rem 0.8rem;
 }
-.key-form input:focus { border-color: var(--brass); outline: none; box-shadow: 0 0 0 3px var(--staff); }
+.key-form input:focus, .key-form select:focus { border-color: var(--brass); outline: none; box-shadow: 0 0 0 3px var(--staff); }
+.provider-choice { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; border: 0; padding: 0; margin: 0; }
+.provider-choice legend { font-weight: 700; font-size: 0.93rem; padding: 0; margin-bottom: 0.4rem; }
+.provider-choice label { display: inline-flex; gap: 0.4rem; align-items: center; font-weight: 400; }
+.provider-choice input { accent-color: var(--brass); }
 .key-form .btn { justify-self: start; margin-top: 0.5rem; }
 .key-form p { margin: 0; }
 .key-chip {

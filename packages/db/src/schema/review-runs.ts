@@ -19,7 +19,7 @@ export const reviewRunStatuses = [
   "cancelled",
 ] as const;
 
-// Mirrors ReviewVerdict in @not-quite-my-tempo/gemini (kept dependency-free).
+// Mirrors ReviewVerdict in @not-quite-my-tempo/reviewer (kept dependency-free).
 export const reviewVerdicts = ["not_my_tempo", "almost", "good_job"] as const;
 
 // Which Gemini key a run used; null when it never reached Gemini.
@@ -55,6 +55,25 @@ export const reviewRuns = sqliteTable(
     verdict: text("verdict", { enum: reviewVerdicts }),
     summary: text("summary"),
     keySource: text("key_source", { enum: reviewKeySources }),
+    // Which API ran the review (ReviewProvider); null when none did.
+    provider: text("provider"),
+    // On a paid-plan run: the model the workspace had picked, when the run
+    // switched to a smaller one because credits ran low.
+    requestedModel: text("requested_model"),
+    // Paid-plan credits this run claimed, × 100 so sums stay exact
+    // (docs/MULTI_PROVIDER_BYOK_DESIGN.md, "Paid plan credits").
+    creditsX100: integer("credits_x100"),
+    // The workspace and billing period charged, fixed at claim time like
+    // trialWorkspaceId.
+    creditsWorkspaceId: integer("credits_workspace_id").references(
+      () => workspaces.id,
+      { onDelete: "set null" },
+    ),
+    creditsPeriodStart: integer("credits_period_start", {
+      mode: "timestamp_ms",
+    }),
+    // What the model call cost us, from tokens × catalog price.
+    costUsdMicros: integer("cost_usd_micros"),
     // The workspace whose free trial this run used, fixed when it claims
     // one, so repository transfers can't move trial history between
     // workspaces.
@@ -87,6 +106,10 @@ export const reviewRuns = sqliteTable(
       table.headSha,
     ),
     index("review_runs_repository_id_idx").on(table.repositoryId),
+    index("review_runs_credits_period_idx").on(
+      table.creditsWorkspaceId,
+      table.creditsPeriodStart,
+    ),
     check(
       "review_runs_status_check",
       sql`${table.status} in ('queued', 'running', 'completed', 'failed', 'cancelled')`,

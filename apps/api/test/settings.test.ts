@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import app from "../src/index";
-import { geminiKeyContext } from "../src/application/workspace-settings";
+import { reviewKeyContext } from "../src/application/workspace-settings";
 import { decryptToken } from "../src/auth/token-cipher";
 import {
   sessionCookie,
@@ -34,11 +34,11 @@ const post = (path: string, cookie: string, body = "") =>
     body,
   });
 
-const saveKey = (cookie: string, apiKey = API_KEY) =>
+const saveKey = (cookie: string, apiKey = API_KEY, vendor = "google") =>
   post(
-    "/workspaces/1/settings/gemini-key",
+    "/workspaces/1/settings/review-key",
     cookie,
-    new URLSearchParams({ api_key: apiKey }).toString(),
+    new URLSearchParams({ vendor, api_key: apiKey }).toString(),
   );
 
 // Answers Gemini's model-list check; everything else is unexpected.
@@ -64,7 +64,7 @@ const workspaceKey = () =>
 
 const keyAudits = () =>
   env.DB.prepare(
-    "SELECT action, before, after FROM audit_events WHERE action LIKE 'gemini_key.%' ORDER BY id",
+    "SELECT action, before, after FROM audit_events WHERE action LIKE 'review_key.%' ORDER BY id",
   )
     .all()
     .then((result) => result.results);
@@ -83,7 +83,9 @@ describe("workspace settings: Gemini key", () => {
     ).text();
 
     expect(body).toContain("5 of 5 free reviews are left");
-    expect(body).toContain("Only admins and owners can change the key.");
+    expect(body).toContain(
+      "Only admins and owners can change the key or model.",
+    );
     expect(body).not.toContain('name="api_key"');
   });
 
@@ -110,13 +112,13 @@ describe("workspace settings: Gemini key", () => {
         decryptToken(
           TEST_TOKEN_ENCRYPTION_KEY,
           stored?.gemini_key_ciphertext ?? "",
-          geminiKeyContext(1),
+          reviewKeyContext(1, "gemini_api"),
         ),
       ),
     ).toBe(API_KEY);
     expect(await keyAudits()).toEqual([
       {
-        action: "gemini_key.saved",
+        action: "review_key.saved",
         before: '{"last4":null}',
         after: '{"last4":"7890","provider":"gemini_api"}',
       },
@@ -205,7 +207,7 @@ describe("workspace settings: Gemini key", () => {
     const response = await saveKey(await sessionCookie([3001], "admin"));
 
     expect(response.status).toBe(422);
-    expect(await response.text()).toContain("Google rejected that key");
+    expect(await response.text()).toContain("The provider rejected that key");
     expect((await workspaceKey())?.gemini_key_last4).toBeNull();
   });
 
@@ -215,7 +217,7 @@ describe("workspace settings: Gemini key", () => {
     const response = await saveKey(await sessionCookie([3001], "admin"));
 
     expect(response.status).toBe(503);
-    expect(await response.text()).toContain("Google didn&#39;t answer");
+    expect(await response.text()).toContain("The provider didn&#39;t answer");
     expect((await workspaceKey())?.gemini_key_last4).toBeNull();
   });
 
@@ -235,11 +237,11 @@ describe("workspace settings: Gemini key", () => {
     await saveKey(cookie);
 
     const removed = await post(
-      "/workspaces/1/settings/gemini-key/remove",
+      "/workspaces/1/settings/review-key/remove",
       cookie,
     );
 
-    await post("/workspaces/1/settings/gemini-key/remove", cookie);
+    await post("/workspaces/1/settings/review-key/remove", cookie);
 
     expect(removed.headers.get("location")).toBe(
       "/workspaces/1/settings?notice=removed",
@@ -249,8 +251,8 @@ describe("workspace settings: Gemini key", () => {
       gemini_key_last4: null,
     });
     expect((await keyAudits()).map((row) => row["action"])).toEqual([
-      "gemini_key.saved",
-      "gemini_key.removed",
+      "review_key.saved",
+      "review_key.removed",
     ]);
   });
 });
@@ -288,7 +290,160 @@ describe("dashboard key status", () => {
 
     const body = await dashboard();
 
-    expect(body).toContain("Reviews use this workspace's Gemini key.");
+    expect(body).toContain("Reviews use this workspace&#39;s Gemini API key.");
     expect(body).not.toContain("v1.x.y");
+  });
+});
+
+describe("workspace settings: OpenAI and Anthropic keys, and models", () => {
+  beforeEach(resetAndSeedRepository);
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const OPENAI_KEY = "sk-proj-test-only-fake-openai-key-1234";
+
+  // Answers model lists: OpenAI and Anthropic list current and old models.
+  const providerAnswers = (status = 200) => {
+    const calls: string[] = [];
+
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      calls.push(String(input));
+
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            data: [
+              { id: "gpt-6.1-sol" },
+              { id: "gpt-5.4-mini" },
+              { id: "text-embedding-3-small" },
+              { id: "claude-sonnet-5-5" },
+              { id: "claude-haiku-4-5" },
+            ],
+          }),
+          { status },
+        ),
+      );
+    });
+
+    return calls;
+  };
+
+  const storedProvider = () =>
+    env.DB.prepare(
+      "SELECT gemini_key_provider, gemini_key_last4, review_model, plan_model FROM workspaces WHERE id = 1",
+    ).first();
+
+  it("checks an OpenAI key against its model list and stores it", async () => {
+    const calls = providerAnswers();
+    const cookie = await sessionCookie([3001], "admin");
+
+    const response = await saveKey(cookie, OPENAI_KEY, "openai");
+
+    expect(response.status).toBe(303);
+    expect(calls).toEqual(["https://api.openai.com/v1/models"]);
+    expect(await storedProvider()).toMatchObject({
+      gemini_key_provider: "openai",
+      gemini_key_last4: "1234",
+      review_model: null,
+    });
+
+    const page = await (
+      await request("/workspaces/1/settings", { headers: { cookie } })
+    ).text();
+
+    expect(page).toContain("OpenAI");
+    expect(page).toContain('<option value="gpt-6.1-sol"');
+    // Older generations and non-chat models aren't offered.
+    expect(page).not.toContain('value="gpt-5.4-mini"');
+    expect(page).not.toContain('value="text-embedding-3-small"');
+    expect(page).not.toContain(OPENAI_KEY);
+  });
+
+  it("points out an Anthropic key saved as OpenAI, without calling anyone", async () => {
+    const calls = providerAnswers();
+
+    const response = await saveKey(
+      await sessionCookie([3001], "admin"),
+      "sk-ant-api03-test-only-fake-anthropic-key",
+      "openai",
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.text()).toContain("That&#39;s an Anthropic key");
+    expect(calls).toEqual([]);
+  });
+
+  it("stores an Anthropic key with its own encryption context", async () => {
+    providerAnswers();
+
+    const response = await saveKey(
+      await sessionCookie([3001], "admin"),
+      "sk-ant-api03-test-only-fake-anthropic-key",
+      "anthropic",
+    );
+
+    expect(response.status).toBe(303);
+
+    const stored = await workspaceKey();
+
+    expect(
+      await Effect.runPromise(
+        decryptToken(
+          TEST_TOKEN_ENCRYPTION_KEY,
+          stored?.gemini_key_ciphertext ?? "",
+          reviewKeyContext(1, "anthropic"),
+        ),
+      ),
+    ).toBe("sk-ant-api03-test-only-fake-anthropic-key");
+  });
+
+  it("lets admins pick a model their key can use, and nothing else", async () => {
+    providerAnswers();
+    const cookie = await sessionCookie([3001], "admin");
+
+    await saveKey(cookie, OPENAI_KEY, "openai");
+
+    const saved = await post(
+      "/workspaces/1/settings/review-model",
+      cookie,
+      new URLSearchParams({ model: "gpt-6.1-sol" }).toString(),
+    );
+
+    expect(saved.headers.get("location")).toBe(
+      "/workspaces/1/settings?notice=model_saved",
+    );
+    expect((await storedProvider())?.["review_model"]).toBe("gpt-6.1-sol");
+
+    const refused = await post(
+      "/workspaces/1/settings/review-model",
+      cookie,
+      new URLSearchParams({ model: "gpt-5.4-mini" }).toString(),
+    );
+
+    expect(refused.status).toBe(422);
+    expect((await storedProvider())?.["review_model"]).toBe("gpt-6.1-sol");
+  });
+
+  it("only offers plan models from the catalog's allowed tiers", async () => {
+    const cookie = await sessionCookie([3001], "admin");
+
+    const saved = await post(
+      "/workspaces/1/settings/plan-model",
+      cookie,
+      new URLSearchParams({ model: "gemini-3.5-flash" }).toString(),
+    );
+
+    expect(saved.status).toBe(303);
+    expect((await storedProvider())?.["plan_model"]).toBe("gemini-3.5-flash");
+
+    const expensive = await post(
+      "/workspaces/1/settings/plan-model",
+      cookie,
+      new URLSearchParams({ model: "claude-opus-5-5" }).toString(),
+    );
+
+    expect(expensive.status).toBe(422);
+    expect((await storedProvider())?.["plan_model"]).toBe("gemini-3.5-flash");
   });
 });

@@ -1,4 +1,4 @@
-import { Option } from "effect";
+import { Match, Option } from "effect";
 import { html } from "hono/html";
 import type {
   Finding,
@@ -18,6 +18,19 @@ import { hasOpenSubscription, hasPaidPlan } from "../application/billing.js";
 import { trialStatus } from "../application/workspace-settings.js";
 import type { TrialStatus } from "../application/workspace-settings.js";
 import type { PlanPrice } from "../billing/polar-client.js";
+import {
+  DEFAULT_MODELS,
+  DEFAULT_PLAN_MODEL,
+  isPlanModel,
+  LARGE_REVIEW_MULTIPLIER,
+  MODEL_CATALOG,
+  vendorOf,
+} from "@not-quite-my-tempo/reviewer";
+import type {
+  ModelTier,
+  ModelVendor,
+  ReviewProvider,
+} from "@not-quite-my-tempo/reviewer";
 
 import type { HtmlContent } from "./components.js";
 import type {
@@ -134,10 +147,14 @@ const hostedPlanCard = (offer: PaidPlanOffer) => {
       ${offer.billingEnabled ? "" : html`<span class="badge">Coming soon</span>`}
     </div>
     ${priceLine}
-    <p>Reviews on Fletcher's key, so there's no Google account to set up.</p>
+    <p>
+      200 review credits a month on Fletcher's keys: up to 200 reviews on
+      standard models, or 66 on pro models.
+    </p>
     <ul class="checks">
       ${check("Everything in Bring your own key")}
-      ${check("No Gemini key to manage, no trial limit")}
+      ${check("Pick GPT, Claude, or Gemini models")}
+      ${check("Reviews on your own key never use credits")}
       ${check("One bill for the whole workspace")}
       ${offer.billingEnabled ? check("Cancel any time from the billing portal") : ""}
     </ul>
@@ -149,8 +166,8 @@ const hostedPlanCard = (offer: PaidPlanOffer) => {
 
 const pricingLede = (offer: PaidPlanOffer) => {
   const trial =
-    "Every workspace gets 5 reviews on Fletcher's key. After that, add a " +
-    "Gemini API key and Google bills its usage to you";
+    "Every workspace gets 5 reviews on Fletcher's key. After that, add an " +
+    "OpenAI, Anthropic, or Gemini key and your provider bills its usage to you";
 
   if (!offer.billingEnabled) {
     return `${trial}.`;
@@ -196,7 +213,7 @@ export const landingPage = (offer: PaidPlanOffer) =>
           ${signInConsent}
           <ul class="checks">
             ${check("Your first 5 reviews are on us")}
-            ${check("Free with your own Gemini API key")}
+            ${check("Free with your own OpenAI, Anthropic, or Gemini key")}
           </ul>
         </div>
         ${sampleReview}
@@ -273,7 +290,10 @@ export const landingPage = (offer: PaidPlanOffer) =>
               <span class="badge badge-brass">Free</span>
             </div>
             <p class="price">$0 <small>per workspace</small></p>
-            <p>Unlimited reviews on your own Gemini or Vertex AI key.</p>
+            <p>
+              Unlimited reviews on your own OpenAI, Anthropic, or Gemini key,
+              with any current model it can use.
+            </p>
             <ul class="checks">
               ${check("5 free reviews on Fletcher's key to start")}
               ${check("Every pull request and every push")}
@@ -296,14 +316,15 @@ export const landingPage = (offer: PaidPlanOffer) =>
           ${feature(
             icon("lock"),
             "Your code",
-            html`To review a pull request, Fletcher sends its changes to
-            Google's Gemini API. He only reads repositories you install him on.`,
+            html`To review a pull request, Fletcher sends its changes to the
+            model provider your workspace uses: OpenAI, Anthropic, or Google. He
+            only reads repositories you install him on.`,
           )}
           ${feature(
             icon("key"),
             "Your key",
-            html`Keys are checked with Google before saving, stored encrypted,
-            and never shown again in full.`,
+            html`Keys are checked with their provider before saving, stored
+            encrypted, and never shown again in full.`,
           )}
           ${feature(
             icon("users"),
@@ -425,28 +446,26 @@ const trialMeter = (remaining: number, total: number) =>
     ></span
   ></span>`;
 
-/** One line on the dashboard: whose Gemini key reviews use. */
+const ownKeyStatus = (workspace: Workspace) =>
+  `Reviews use this workspace's ${providerName(keyProvider(workspace))} key.`;
+
+/** One line on the dashboard: whose key reviews use. */
 const keyStatusLine = (workspace: Workspace, trialReviewsUsed: number) => {
   const trial = trialStatus(trialReviewsUsed);
 
   return workspace.geminiKeyLast4 !== null
-    ? html`${icon("key")}
-        <span class="quiet">Reviews use this workspace's Gemini key.</span>`
+    ? html`${icon("key")} <span class="quiet">${ownKeyStatus(workspace)}</span>`
     : trial.remaining > 0
       ? html`${trialMeter(trial.remaining, trial.total)}
           <span class="quiet"
             >${trial.remaining} of ${trial.total} free reviews left.</span
           >
-          <a href="/workspaces/${workspace.id}/settings"
-            >Add your Gemini key</a
-          >`
+          <a href="/workspaces/${workspace.id}/settings">Add your own key</a>`
       : html`${trialMeter(0, trial.total)}
           <span class="state-failed"
             >Free reviews used up. Reviews are paused.</span
           >
-          <a href="/workspaces/${workspace.id}/settings"
-            >Add your Gemini key</a
-          >`;
+          <a href="/workspaces/${workspace.id}/settings">Add your own key</a>`;
 };
 
 const workspaceSection = (
@@ -541,10 +560,7 @@ export const dashboardPage = (
                 `${formatNumber(reviewing)} of ${formatNumber(repositories.length)}`,
               )}
               ${stat("Workspaces", formatNumber(overview.workspaces.length))}
-              ${stat(
-                "Gemini tokens",
-                formatNumber(overview.totals.totalTokens),
-              )}
+              ${stat("Model tokens", formatNumber(overview.totals.totalTokens))}
             </div>
             ${overview.workspaces.map((workspace) =>
               workspaceSection(workspace, now),
@@ -552,7 +568,7 @@ export const dashboardPage = (
             <p class="fine">
               ${formatNumber(overview.totals.reviewCount)}
               ${overview.totals.reviewCount === 1 ? "review" : "reviews"} so
-              far, using ${formatNumber(overview.totals.totalTokens)} Gemini
+              far, using ${formatNumber(overview.totals.totalTokens)} model
               tokens.
             </p>`
     }`,
@@ -671,10 +687,14 @@ export const membersPage = (
 export type SettingsNotice =
   | "saved"
   | "removed"
+  | "model_saved"
   | "subscribed"
   | "invalid_format"
+  | "wrong_provider"
   | "rejected"
   | "unavailable"
+  | "model_not_allowed"
+  | "no_key"
   | "already_subscribed"
   | "no_billing_account"
   | "billing_unavailable"
@@ -683,12 +703,17 @@ export type SettingsNotice =
 const noticeMessages = {
   saved: "Key saved. Reviews now use it.",
   removed: "Key removed.",
+  model_saved: "Model saved. The next review uses it.",
   invalid_format:
-    "That doesn't look like a Gemini API key. Paste only the key, with no spaces or quotes.",
+    "That doesn't look like a key for the provider you chose. Paste only the key, with no spaces or quotes.",
+  wrong_provider:
+    "That's an Anthropic key. Choose Anthropic as the provider, then save it again.",
   rejected:
-    "Google rejected that key for both the Gemini API and Vertex AI. Check that it's active and allowed to use one of them.",
+    "The provider rejected that key. Check that it's active and allowed to use its API.",
   unavailable:
-    "Google didn't answer, so the key wasn't saved. Try again in a minute.",
+    "The provider didn't answer, so nothing was saved. Try again in a minute.",
+  model_not_allowed: "That model isn't available here. Pick one from the list.",
+  no_key: "Save a key before choosing its model.",
   subscribed:
     "Thanks for subscribing. The plan starts as soon as Polar confirms the payment, usually within a minute.",
   already_subscribed:
@@ -703,7 +728,10 @@ const noticeMessages = {
 const settingsNotice = (notice: SettingsNotice | null) =>
   notice === null
     ? ""
-    : notice === "saved" || notice === "removed" || notice === "subscribed"
+    : notice === "saved" ||
+        notice === "removed" ||
+        notice === "model_saved" ||
+        notice === "subscribed"
       ? html`<p class="notice" role="status">
           ${icon("check")}<span>${noticeMessages[notice]}</span>
         </p>`
@@ -711,18 +739,46 @@ const settingsNotice = (notice: SettingsNotice | null) =>
           ${icon("info")}<span>${noticeMessages[notice]}</span>
         </p>`;
 
+const providerName = (provider: ReviewProvider): string =>
+  Match.value(provider).pipe(
+    Match.when("gemini_api", () => "Gemini API"),
+    Match.when("vertex_express", () => "Vertex AI"),
+    Match.when("openai", () => "OpenAI"),
+    Match.when("anthropic", () => "Anthropic"),
+    Match.exhaustive,
+  );
+
+const vendorName = (vendor: ModelVendor): string =>
+  Match.value(vendor).pipe(
+    Match.when("google", () => "Gemini"),
+    Match.when("openai", () => "OpenAI"),
+    Match.when("anthropic", () => "Anthropic"),
+    Match.exhaustive,
+  );
+
+const keyProvider = (workspace: Workspace): ReviewProvider =>
+  workspace.geminiKeyProvider ?? "gemini_api";
+
+const ownKeyModel = (workspace: Workspace) =>
+  workspace.reviewModel ?? DEFAULT_MODELS[vendorOf(keyProvider(workspace))];
+
 const keySummary = (workspace: Workspace, trial: TrialStatus, now: Date) => {
   if (workspace.geminiKeyLast4 !== null) {
     return html`<div class="key-chip">
       <span class="feature-icon">${icon("key")}</span>
       <p>
-        Reviews use this workspace's
-        ${workspace.geminiKeyProvider === "vertex_express" ? "Vertex AI" : "Gemini API"}
-        key, ending in <span class="code">…${workspace.geminiKeyLast4}</span>.
+        Reviews use this workspace's ${providerName(keyProvider(workspace))}
+        key, ending in <span class="code">…${workspace.geminiKeyLast4}</span>,
+        with <span class="code">${ownKeyModel(workspace)}</span>.
         ${
           workspace.geminiKeyUpdatedAt === null
             ? ""
             : html`Added ${relativeTime(workspace.geminiKeyUpdatedAt, now)}.`
+        }
+        ${
+          hasPaidPlan(workspace, now)
+            ? "Plan credits are spent first; this key takes over when they run out."
+            : ""
         }
       </p>
     </div>`;
@@ -732,8 +788,8 @@ const keySummary = (workspace: Workspace, trial: TrialStatus, now: Date) => {
     return html`<div class="key-chip">
       <span class="feature-icon">${icon("key")}</span>
       <p>
-        No key needed: the paid plan reviews on Fletcher's key. Add one here to
-        use your own instead.
+        No key needed: the paid plan reviews on Fletcher's keys. Add your own to
+        keep reviewing once the plan's credits run out.
       </p>
     </div>`;
   }
@@ -755,6 +811,98 @@ const keySummary = (workspace: Workspace, trial: TrialStatus, now: Date) => {
       </div>`;
 };
 
+/** Credits shown as people count them: 12.5, not 1250. */
+const formatCredits = (creditsX100: number) =>
+  Number((creditsX100 / 100).toFixed(2)).toString();
+
+const creditsMeter = (
+  workspace: Workspace,
+  usedX100: number,
+  allowance: number,
+) => {
+  const leftX100 = Math.max(0, allowance * 100 - usedX100);
+  const periodEnd = workspace.subscriptionPeriodEnd;
+
+  return html`<div class="key-chip" style="margin-top: 1rem">
+    <span
+      class="meter${leftX100 === 0 ? " meter-empty" : ""}"
+      role="img"
+      aria-label="${formatCredits(leftX100)} of ${allowance} review credits left"
+      ><span
+        style="width: ${leftX100 === 0 ? 100 : Math.round((leftX100 / (allowance * 100)) * 100)}%"
+      ></span
+    ></span>
+    <p class="${leftX100 === 0 ? "state-failed" : ""}">
+      ${formatCredits(usedX100)} of ${allowance} review credits used this
+      period${periodEnd === null ? "" : html`, renewing ${isoDate(periodEnd)}`}.
+    </p>
+  </div>`;
+};
+
+const tierLabel = (tier: ModelTier) =>
+  Match.value(tier).pipe(
+    Match.when("lite", () => "Lite"),
+    Match.when("standard", () => "Standard"),
+    Match.when("pro", () => "Pro"),
+    Match.when("excluded", () => "Own key only"),
+    Match.exhaustive,
+  );
+
+/** Paid-plan models this server offers, grouped by tier. */
+const planModelOptions = (
+  selected: string,
+  vendors: ReadonlySet<ModelVendor>,
+) => {
+  const offered = MODEL_CATALOG.filter(
+    (model) => isPlanModel(model) && vendors.has(model.vendor),
+  );
+
+  return (["lite", "standard", "pro"] as const).map((tier) => {
+    const models = offered.filter((model) => model.tier === tier);
+
+    if (models.length === 0) {
+      return "";
+    }
+
+    const weight = models[0]?.weight ?? 0;
+
+    return html`<optgroup
+      label="${tierLabel(tier)}: ${weight} credit${weight === 1 ? "" : "s"} a review, ${weight * LARGE_REVIEW_MULTIPLIER} for a large pull request"
+    >
+      ${models.map(
+        (model) =>
+          html`<option
+            value="${model.id}"
+            ${model.id === selected ? "selected" : ""}
+          >
+            ${model.id} (${vendorName(model.vendor)})
+          </option>`,
+      )}
+    </optgroup>`;
+  });
+};
+
+const planModelForm = (
+  workspace: Workspace,
+  vendors: ReadonlySet<ModelVendor>,
+) => html`<form
+  class="key-form"
+  method="post"
+  action="/workspaces/${workspace.id}/settings/plan-model"
+>
+  <label for="plan-model">Model for plan reviews</label>
+  <select id="plan-model" name="model">
+    ${planModelOptions(workspace.planModel ?? DEFAULT_PLAN_MODEL, vendors)}
+  </select>
+  <p class="fine">
+    Large pull requests cost ${LARGE_REVIEW_MULTIPLIER} times as many credits.
+    When credits run low, reviews switch to a smaller model from the same
+    provider and say so. Once none fits, reviews use this workspace's own key if
+    it has one, and stop otherwise until the plan renews.
+  </p>
+  <button class="btn btn-secondary" type="submit">Save model</button>
+</form>`;
+
 const planSummary = (workspace: Workspace, offer: PaidPlanOffer, now: Date) => {
   const periodEnd = workspace.subscriptionPeriodEnd;
 
@@ -763,8 +911,8 @@ const planSummary = (workspace: Workspace, offer: PaidPlanOffer, now: Date) => {
       <span class="badge badge-brass">${planName(offer)}</span>
       ${
         workspace.geminiKeyLast4 === null
-          ? "Reviews use Fletcher's key, with no trial limit."
-          : "Reviews use this workspace's own key while one is saved; remove it to use Fletcher's."
+          ? "Reviews spend the plan's credits on Fletcher's keys."
+          : "Reviews spend the plan's credits first, then this workspace's own key."
       }
       ${
         periodEnd === null
@@ -786,18 +934,20 @@ const planSummary = (workspace: Workspace, offer: PaidPlanOffer, now: Date) => {
 
   if (!offer.billingEnabled) {
     return html`<p>
-      Free: reviews use this workspace's own Gemini key after the free trial.
+      Free: after the free trial, reviews use this workspace's own OpenAI,
+      Anthropic, or Gemini key.
     </p>`;
   }
 
   return html`<p>
-    Free: reviews use this workspace's own Gemini key after the free trial.
+    Free: after the free trial, reviews use this workspace's own OpenAI,
+    Anthropic, or Gemini key.
     ${planName(offer)}${Option.match(offer.price, {
       onNone: () => "",
       onSome: (price) => ` (${formatPrice(price)} per workspace)`,
     })}
-    reviews on Fletcher's key instead, with no trial limit. Polar handles
-    payment, tax, and invoices.
+    includes review credits each month on Fletcher's keys, with GPT, Claude, and
+    Gemini models to choose from. Polar handles payment, tax, and invoices.
   </p>`;
 };
 
@@ -805,6 +955,11 @@ const planCard = (
   workspace: Workspace,
   canManage: boolean,
   offer: PaidPlanOffer,
+  credits: {
+    readonly usedX100: number;
+    readonly allowance: number;
+    readonly vendors: ReadonlySet<ModelVendor>;
+  },
   now: Date,
 ) => {
   const subscribed = hasOpenSubscription(workspace);
@@ -831,6 +986,12 @@ const planCard = (
     <div class="card-body">
       ${planSummary(workspace, offer, now)}
       ${
+        hasPaidPlan(workspace, now)
+          ? html`${creditsMeter(workspace, credits.usedX100, credits.allowance)}
+            ${canManage ? planModelForm(workspace, credits.vendors) : ""}`
+          : ""
+      }
+      ${
         !offer.billingEnabled
           ? ""
           : !canManage
@@ -856,6 +1017,77 @@ const planCard = (
   </section>`;
 };
 
+const ownKeyModelForm = (
+  workspace: Workspace,
+  models: Option.Option<readonly string[]>,
+) => {
+  const current = workspace.reviewModel ?? "";
+  const fallback = DEFAULT_MODELS[vendorOf(keyProvider(workspace))];
+
+  return html`<form
+    class="key-form"
+    method="post"
+    action="/workspaces/${workspace.id}/settings/review-model"
+  >
+    <label for="review-model">Model for reviews on this key</label>
+    ${Option.match(models, {
+      onNone: () =>
+        html`<input
+            id="review-model"
+            name="model"
+            value="${current}"
+            placeholder="${fallback}"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <p class="fine">
+            The model list couldn't be loaded, so type a model ID, or leave it
+            empty for ${fallback}.
+          </p>`,
+      onSome: (ids) =>
+        html`<select id="review-model" name="model">
+          <option value="" ${current === "" ? "selected" : ""}>
+            Recommended: ${fallback}
+          </option>
+          ${ids.map(
+            (id) =>
+              html`<option value="${id}" ${id === current ? "selected" : ""}>
+                ${id}
+              </option>`,
+          )}
+        </select>`,
+    })}
+    <p class="fine">
+      Any current model your key can use. Your provider bills these reviews to
+      your account.
+    </p>
+    <button class="btn btn-secondary" type="submit">Save model</button>
+  </form>`;
+};
+
+const providerChoice = (workspace: Workspace) => {
+  const current =
+    workspace.geminiKeyLast4 === null
+      ? "google"
+      : vendorOf(keyProvider(workspace));
+
+  return html`<fieldset class="provider-choice">
+    <legend>Provider</legend>
+    ${(["openai", "anthropic", "google"] as const).map(
+      (vendor) =>
+        html`<label
+          ><input
+            type="radio"
+            name="vendor"
+            value="${vendor}"
+            ${vendor === current ? "checked" : ""}
+          />
+          ${vendorName(vendor)}</label
+        >`,
+    )}
+  </fieldset>`;
+};
+
 export const settingsPage = (
   login: string,
   data: {
@@ -863,6 +1095,10 @@ export const settingsPage = (
     readonly viewerRole: WorkspaceRole;
     readonly trial: TrialStatus;
     readonly offer: PaidPlanOffer;
+    readonly creditsUsedX100: number;
+    readonly creditAllowance: number;
+    readonly planVendors: ReadonlySet<ModelVendor>;
+    readonly ownKeyModels: Option.Option<readonly string[]>;
   },
   notice: SettingsNotice | null,
   now: Date,
@@ -880,47 +1116,59 @@ export const settingsPage = (
       )}
       ${pageHead(
         `Settings for ${workspace.githubAccountLogin}`,
-        "Choose which Gemini key Fletcher's reviews use.",
+        "Choose the plan, key, and model Fletcher's reviews use.",
       )}
       ${settingsNotice(notice)}
       <div class="stack">
-        ${planCard(workspace, canManage, offer, now)}
+        ${planCard(
+          workspace,
+          canManage,
+          offer,
+          {
+            usedX100: data.creditsUsedX100,
+            allowance: data.creditAllowance,
+            vendors: data.planVendors,
+          },
+          now,
+        )}
         <section class="card">
-          <div class="card-head"><h2>Gemini API key</h2></div>
+          <div class="card-head"><h2>Your own key</h2></div>
           <div class="card-body">
             ${keySummary(workspace, trial, now)}
             ${
               canManage
                 ? html`<form
-                    class="key-form"
-                    method="post"
-                    action="/workspaces/${workspace.id}/settings/gemini-key"
-                  >
-                    <label for="api-key"
-                      >${hasKey ? "New Gemini API key" : "Gemini API key"}</label
+                      class="key-form"
+                      method="post"
+                      action="/workspaces/${workspace.id}/settings/review-key"
                     >
-                    <input
-                      id="api-key"
-                      name="api_key"
-                      type="password"
-                      autocomplete="off"
-                      spellcheck="false"
-                      required
-                      aria-describedby="api-key-help"
-                    />
-                    <p id="api-key-help" class="fine">
-                      Paste a Gemini API key from Google AI Studio or a Vertex
-                      AI API key. Fletcher checks it with Google before saving,
-                      stores it encrypted, and only ever shows its last 4
-                      characters. Google bills reviews that use it to your
-                      account.
-                    </p>
-                    <button class="btn" type="submit">
-                      ${hasKey ? "Replace key" : "Save key"}
-                    </button>
-                  </form>`
+                      ${providerChoice(workspace)}
+                      <label for="api-key"
+                        >${hasKey ? "New API key" : "API key"}</label
+                      >
+                      <input
+                        id="api-key"
+                        name="api_key"
+                        type="password"
+                        autocomplete="off"
+                        spellcheck="false"
+                        required
+                        aria-describedby="api-key-help"
+                      />
+                      <p id="api-key-help" class="fine">
+                        An OpenAI or Anthropic API key, a Gemini API key from
+                        Google AI Studio, or a Vertex AI API key. Fletcher
+                        checks it with the provider before saving, stores it
+                        encrypted, and only ever shows its last 4 characters.
+                        The provider bills reviews that use it to your account.
+                      </p>
+                      <button class="btn" type="submit">
+                        ${hasKey ? "Replace key" : "Save key"}
+                      </button>
+                    </form>
+                    ${hasKey ? ownKeyModelForm(workspace, data.ownKeyModels) : ""}`
                 : html`<p class="quiet" style="margin: 1rem 0 0">
-                    Only admins and owners can change the key.
+                    Only admins and owners can change the key or model.
                   </p>`
             }
           </div>
@@ -938,7 +1186,7 @@ export const settingsPage = (
                   </div>
                   <form
                     method="post"
-                    action="/workspaces/${workspace.id}/settings/gemini-key/remove"
+                    action="/workspaces/${workspace.id}/settings/review-key/remove"
                   >
                     <button class="btn btn-danger btn-sm" type="submit">
                       Remove key
@@ -1211,7 +1459,21 @@ export const runFindingsPage = (
                   ? ""
                   : html`<div>
                       <dt>Model</dt>
-                      <dd>${run.model}</dd>
+                      <dd>
+                        ${run.model}${
+                          run.requestedModel === null
+                            ? ""
+                            : ` (switched from ${run.requestedModel})`
+                        }
+                      </dd>
+                    </div>`
+              }
+              ${
+                run.creditsX100 === null || run.keySource !== "subscription"
+                  ? ""
+                  : html`<div>
+                      <dt>Plan credits</dt>
+                      <dd>${formatCredits(run.creditsX100)}</dd>
                     </div>`
               }
               ${

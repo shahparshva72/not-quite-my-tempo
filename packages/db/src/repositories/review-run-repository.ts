@@ -3,6 +3,7 @@ import {
   count,
   desc,
   eq,
+  gte,
   inArray,
   isNull,
   lt,
@@ -73,6 +74,31 @@ const trialRunsSince = (since: Date) =>
       where recent.key_source = 'platform'
         and coalesce(recent.started_at, recent.created_at) >= ${since.getTime()}`;
 
+/**
+ * Paid-plan credits (× 100) a workspace has used in a billing period, as a
+ * subquery. Like the trial, a claim counts while its run is queued,
+ * running, or completed, so a failed review refunds itself
+ * (docs/MULTI_PROVIDER_BYOK_DESIGN.md, "Counting and claiming").
+ */
+const creditsUsedSql = (workspaceId: number, periodStart: Date) =>
+  sql`select coalesce(sum(charged.credits_x100), 0) from review_runs as charged
+      where charged.credits_workspace_id = ${workspaceId}
+        and charged.credits_period_start = ${periodStart.getTime()}
+        and charged.key_source = 'subscription'
+        and charged.status in ('queued', 'running', 'completed')`;
+
+/** A paid-plan run's charge, claimed before the model call. */
+export interface PlanCreditClaim {
+  readonly workspaceId: number;
+  readonly periodStart: Date;
+  readonly creditsX100: number;
+  readonly allowanceX100: number;
+  readonly model: string;
+  readonly provider: string;
+  /** The workspace's chosen model when this run switched to a smaller one. */
+  readonly requestedModel: string | null;
+}
+
 /** At most `limit` free trial reviews, platform-wide, since `since`. */
 export interface TrialDailyCap {
   readonly limit: number;
@@ -85,7 +111,11 @@ export type ReviewRunVerdict = (typeof reviewVerdicts)[number];
 
 export interface ReviewRunResult {
   readonly model: string;
+  /** Which API ran the review (ReviewProvider in @not-quite-my-tempo/reviewer). */
+  readonly provider: string;
   readonly usage: ReviewRunUsage;
+  /** What the call cost us; null when the model isn't in the price catalog. */
+  readonly costUsdMicros: number | null;
   readonly verdict: ReviewRunVerdict;
   readonly summary: string;
 }
@@ -239,6 +269,8 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
               .update(reviewRuns)
               .set({
                 model: result.model,
+                provider: result.provider,
+                costUsdMicros: result.costUsdMicros,
                 verdict: result.verdict,
                 summary: result.summary,
                 inputTokens: result.usage.inputTokens,
@@ -308,6 +340,42 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
                   })),
                 ),
               ),
+        /**
+         * Claims paid-plan credits for this run in one statement: it's
+         * marked 'subscription' only if it has no key source yet and the
+         * workspace's period total stays within the allowance. Retrying is
+         * harmless. Returns whether the claim succeeded.
+         */
+        claimPlanCredits: (id: number, claim: PlanCreditClaim) =>
+          databaseEffect("review_runs.claim_plan_credits", () =>
+            client
+              .update(reviewRuns)
+              .set({
+                keySource: "subscription",
+                creditsX100: claim.creditsX100,
+                creditsWorkspaceId: claim.workspaceId,
+                creditsPeriodStart: claim.periodStart,
+                model: claim.model,
+                provider: claim.provider,
+                requestedModel: claim.requestedModel,
+              })
+              .where(
+                and(
+                  eq(reviewRuns.id, id),
+                  isNull(reviewRuns.keySource),
+                  sql`(${creditsUsedSql(claim.workspaceId, claim.periodStart)}) + ${claim.creditsX100} <= ${claim.allowanceX100}`,
+                ),
+              )
+              .returning({ id: reviewRuns.id })
+              .get(),
+          ).pipe(Effect.map((row) => row !== undefined)),
+        /** Paid-plan credits (× 100) a workspace has used in a period. */
+        creditsUsedX100: (workspaceId: number, periodStart: Date) =>
+          databaseEffect("review_runs.credits_used", () =>
+            client.get<{ readonly used: number }>(
+              sql`select (${creditsUsedSql(workspaceId, periodStart)}) as used`,
+            ),
+          ).pipe(Effect.map((row) => Number(row?.used ?? 0))),
         setKeySource: (id: number, keySource: ReviewKeySource) =>
           databaseEffect("review_runs.set_key_source", () =>
             client
@@ -325,6 +393,8 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
           pullRequestNumber: number,
           excludeRunId: number,
           errorCode: string,
+          // Only runs created since then count (e.g. this credit period).
+          since: Date | null = null,
         ) =>
           databaseEffect("review_runs.has_earlier_blocked_run", () =>
             client
@@ -336,6 +406,7 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
                   eq(reviewRuns.pullRequestNumber, pullRequestNumber),
                   eq(reviewRuns.errorCode, errorCode),
                   ne(reviewRuns.id, excludeRunId),
+                  since === null ? undefined : gte(reviewRuns.createdAt, since),
                 ),
               )
               .get(),
@@ -436,6 +507,12 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
                   attempt: sql`${reviewRuns.attempt} + 1`,
                   keySource: null,
                   trialWorkspaceId: null,
+                  creditsX100: null,
+                  creditsWorkspaceId: null,
+                  creditsPeriodStart: null,
+                  requestedModel: null,
+                  provider: null,
+                  costUsdMicros: null,
                   model: null,
                   verdict: null,
                   summary: null,

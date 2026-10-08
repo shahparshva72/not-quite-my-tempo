@@ -33,6 +33,8 @@ const Subscription = Schema.Struct({
   status: Schema.NonEmptyString,
   customer_id: Schema.NonEmptyString,
   product_id: Schema.NonEmptyString,
+  // Starts each period's paid-plan credits (docs/MULTI_PROVIDER_BYOK_DESIGN.md).
+  current_period_start: Schema.optional(Schema.NullOr(Schema.DateFromString)),
   current_period_end: Schema.NullOr(Schema.DateFromString),
   cancel_at_period_end: Schema.Boolean,
   metadata: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
