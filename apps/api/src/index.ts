@@ -102,6 +102,8 @@ type Bindings = Env & {
   readonly GITHUB_OAUTH_CLIENT_SECRET: string;
   readonly SESSION_SECRET: string;
   readonly TOKEN_ENCRYPTION_KEY: string;
+  readonly GEMINI_API_KEY: string;
+  readonly GEMINI_API_PROVIDER?: string;
   // Optional platform keys: paid-plan GPT and Claude models need them.
   readonly OPENAI_API_KEY?: string;
   readonly ANTHROPIC_API_KEY?: string;
