@@ -30,7 +30,7 @@ The Cloudflare Vitest plugin currently peers on Vitest `4.1.x`, so this workspac
 
 ## Development
 
-Requirements: Node.js 22 or newer and pnpm 11.
+Requirements: Node.js 22 or newer and pnpm 12.
 
 Use `nvm install` and `nvm use` to select the pinned Node.js version in `.nvmrc`.
 GitHub CI uses this version and runs lint, formatting, the dry-run build, and tests
@@ -72,14 +72,16 @@ For self-service onboarding, also set in the App's settings:
   organization owners from members and to remove access when someone leaves
   the organization.
 
-Keys can be Gemini Developer API keys (Google AI Studio) or Vertex AI API
-keys (express mode). Workspace keys are detected when saved; for a Vertex AI
-platform key, set `GEMINI_API_PROVIDER=vertex_express`.
+Workspaces can bring an OpenAI, Anthropic, or Gemini key (a Gemini
+Developer API key from Google AI Studio, or a Vertex AI API key in express
+mode) and pick any current model it can use: GPT-5.6+, Claude 5.5+, or
+Gemini 3.5+. Keys are checked against the provider's model list when saved.
+For a Vertex AI platform key, set `GEMINI_API_PROVIDER=vertex_express`.
 
 Each workspace gets 5 free reviews on the platform `GEMINI_API_KEY`; after
 that, reviews use the key an admin saves at `/workspaces/:id/settings`
 (stored encrypted with `TOKEN_ENCRYPTION_KEY`). See
-`docs/BYOK_TRIAL_DESIGN.md`.
+`docs/BYOK_TRIAL_DESIGN.md` and `docs/MULTI_PROVIDER_BYOK_DESIGN.md`.
 
 Workspaces and roles are described in `docs/WORKSPACES_DESIGN.md`. Sessions
 store the user's GitHub token encrypted with `TOKEN_ENCRYPTION_KEY` so
@@ -130,11 +132,12 @@ The service mints a short-lived RS256 App JWT with WebCrypto and exchanges it
 for an installation token per review run inside the `review-pull-request`
 Workflow.
 
-## Gemini credentials
+## Model credentials
 
-The review itself is performed by the Gemini API through the
-`@not-quite-my-tempo/gemini` package (`packages/gemini`), which calls
-`generateContent` with structured JSON output and a fixed review persona.
+The review itself is performed by the `@not-quite-my-tempo/reviewer` package
+(`packages/reviewer`), which calls Gemini's `generateContent`, OpenAI's
+Responses API, or Anthropic's Messages API with structured JSON output and a
+fixed review persona.
 
 - `GEMINI_API_KEY` (required): add to `apps/api/.dev.vars` locally; in
   production store it as a Worker secret:
@@ -143,8 +146,14 @@ The review itself is performed by the Gemini API through the
   pnpm --filter @not-quite-my-tempo/api exec wrangler secret put GEMINI_API_KEY
   ```
 
-- `GEMINI_MODEL` (optional): overrides the default `gemini-3.8-flash`. Not a
-  secret; set it under `vars` in `apps/api/wrangler.jsonc` if needed.
+- `GEMINI_MODEL` (optional): the trial's model, overriding the default
+  `gemini-3.8-flash`. Not a secret; set it under `vars` in
+  `apps/api/wrangler.jsonc` if needed.
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` (optional secrets): platform keys
+  that let the paid plan offer GPT and Claude models. Without one, that
+  provider's models aren't offered on the plan.
+- `PLAN_MONTHLY_CREDITS` (optional): review credits per billing period on the
+  paid plan (default 200).
 - `TRIAL_DAILY_REVIEW_CAP` (optional): free trial reviews allowed per rolling
   24 hours across all workspaces (default 100; `0` pauses the trial). Past
   it, trial reviews fail with `trial_paused`, Fletcher comments once on the
@@ -154,7 +163,10 @@ The review itself is performed by the Gemini API through the
 
 ## Billing (Polar)
 
-The paid plan reviews on Fletcher's Gemini key, with no trial limit. Polar
+The paid plan includes 200 review credits per billing period on Fletcher's
+platform keys, with Lite, Standard, and Pro models from Gemini, OpenAI, and
+Anthropic to choose from (see `docs/MULTI_PROVIDER_BYOK_DESIGN.md`, "Paid
+plan credits"). Reviews on a workspace's own key never use credits. Polar
 (polar.sh) is the merchant of record: it runs checkout, the customer portal,
 and sales tax. Billing is optional and turns on only when the token, product,
 and webhook secret are all set; otherwise settings pages show no Subscribe
@@ -221,15 +233,20 @@ cap); a member can review those with `/fletcher again`. Supported deliveries ups
 create one queued review run per repository, pull request number, and head SHA,
 and start `review-pull-request`. The Workflow marks the run running, fetches the pull request metadata and unified
 diff (filtering generated files and enforcing a size cap), reviews the diff
-with Gemini using structured JSON output, persists the findings and model to
+with the workspace's chosen model using structured JSON output, persists the
+findings and model to
 D1, posts the review to the pull request (a summary comment plus inline
 comments anchored to changed lines, with posted comment IDs written back to
 the findings), and marks the run completed. Each step that calls GitHub mints
 its own installation token, so tokens never appear in persisted step
 outputs. Failures record a stable
 `error_code` (`github_auth_error`, `diff_fetch_error`, `diff_too_large`,
-`gemini_error`, `post_review_error`, `db_error`, `review_run_not_found`,
-`no_gemini_key`, `trial_paused`, or `workflow_error`) on the run.
+`review_error`, `review_output_invalid`, `review_key_rejected`,
+`review_quota_exceeded`, `review_model_unavailable`, `review_key_unreadable`,
+`post_review_error`, `db_error`, `review_run_not_found`, `no_gemini_key`,
+`trial_paused`, `credits_exhausted`, or `workflow_error`) on the run. Runs
+from before multi-provider support may carry `gemini_error`,
+`gemini_key_rejected`, or `gemini_key_unreadable`.
 
 Commenting `/fletcher again` on a pull request (via the `issue_comment`
 event) triggers a `manual` review of the PR's current head SHA through the
@@ -274,8 +291,9 @@ falls back to defaults and never fails a review:
 
 Each installation is capped at 50 review runs per rolling 24 hours; deliveries
 beyond the cap are acknowledged with `rate_limited` and no review is started.
-Completed runs record the Gemini model and token usage (`input_tokens`,
-`output_tokens`, `total_tokens`) for cost tracking.
+Completed runs record the provider, model, token usage (`input_tokens`,
+`output_tokens`, `total_tokens`), and their cost from the price catalog
+(`cost_usd_micros`) for cost tracking.
 
 ## Dashboard API and sign-in
 
@@ -324,10 +342,34 @@ counts and token usage, each repository's recent review runs (status,
 trigger, error code, model, tokens), and each run's findings. Inaccessible
 resources render a 404 page.
 
-Deploy after the remote D1 database is configured:
+## CI/CD
+
+`.github/workflows/ci.yml` runs lint, format check, build (Wrangler dry-run),
+typecheck, and tests on every pull request and push to `master`. A push to
+`master` that passes then applies remote D1 migrations, deploys the Worker,
+and checks `https://notmytempo.dev/health`. Migrations run before the new
+code ships, so each must stay compatible with the deployed Worker.
+
+One-time setup in GitHub (Settings → Environments → New environment
+`production`):
+
+- Secret `CLOUDFLARE_API_TOKEN`: a Cloudflare API token with Workers Scripts:
+  Edit, D1: Edit, Workers Routes: Edit, and Zone: Read for `notmytempo.dev`.
+- Secret `CLOUDFLARE_ACCOUNT_ID`: the Cloudflare account ID.
+- Optional: required reviewers, to approve each deploy by hand.
+
+Worker secrets (`wrangler secret put …`) stay in Cloudflare; CI never sees
+them. Dependabot (`.github/dependabot.yml`) opens weekly update PRs for
+GitHub Actions and npm packages.
+
+To deploy by hand after the remote D1 database is configured:
 
 ```sh
-pnpm deploy
+pnpm db:migrate:remote
+```
+
+```sh
+pnpm run deploy
 ```
 
 ## Test the GitHub webhook flow locally

@@ -105,6 +105,7 @@ interface SubscriptionFixture {
   readonly status: string;
   readonly customer_id: string;
   readonly product_id: string;
+  readonly current_period_start: string;
   readonly current_period_end: string;
   readonly cancel_at_period_end: boolean;
   readonly started_at: string;
@@ -120,6 +121,7 @@ const polarSubscription = (
   status,
   customer_id: "cus_1",
   product_id: productId,
+  current_period_start: new Date(Date.now() - DAY_MS).toISOString(),
   current_period_end: new Date(Date.now() + 30 * DAY_MS).toISOString(),
   cancel_at_period_end: false,
   started_at: "2026-09-30T09:00:00Z",
@@ -360,6 +362,7 @@ describe("Polar webhook", () => {
             customerId: "cus_1",
             subscriptionId: "sub_1",
             status,
+            periodStart: null,
             periodEnd: null,
             cancelAtPeriodEnd: false,
             syncedAt,
@@ -392,11 +395,15 @@ describe("paid plan reviews", () => {
     );
 
     return Effect.runPromise(
-      chooseReviewKey(run.id).pipe(Effect.provide(makeLiveLayer(env.DB))),
+      chooseReviewKey(run.id, 1_000, {
+        allowanceX100: 20_000,
+        vendors: new Set(["google"] as const),
+        geminiProvider: "gemini_api",
+      }).pipe(Effect.provide(makeLiveLayer(env.DB))),
     );
   };
 
-  it("uses the platform key without spending the trial", async () => {
+  it("spends plan credits on the platform key, not the trial", async () => {
     const choice = await choose("active", Date.now() + DAY_MS);
 
     const [usage] = await Effect.runPromise(

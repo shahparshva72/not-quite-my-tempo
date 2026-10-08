@@ -1,6 +1,6 @@
 # AGENTS.md
 
-## Commands (repo root; pnpm 11, Node per `.nvmrc`)
+## Commands (repo root; pnpm 12, Node per `.nvmrc`)
 
 - Setup: `nvm use` (or `nvm install`), `pnpm install`.
 - Verify, mirroring CI order (`.github/workflows/ci.yml`): `pnpm lint` → `pnpm format:check` → `pnpm build` (Wrangler dry-run deploy) → `pnpm test`. Also run `pnpm typecheck` (`pnpm typecheck:test` covers `apps/api/test/`); CI does not run `tsc`.
@@ -12,7 +12,8 @@
 ## Architecture
 
 - `apps/api/src/index.ts` is the only entrypoint (Hono app, default export; also exports `ReviewPullRequestWorkflow`). Routes delegate to Effect via `Effect.runPromise` + `makeLiveLayer(c.env.DB)`.
-- `packages/core`: platform-neutral Effect primitives. `packages/db`: D1/Drizzle layer — schema in `src/schema/**/*.ts`, Effect services in `src/services/`, `src/layers/`, `src/repositories/`. Both are consumed as source via `workspace:*` + `exports` → `src/*.ts` (no build step).
+- `packages/core`: platform-neutral Effect primitives. `packages/db`: D1/Drizzle layer — schema in `src/schema/**/*.ts`, Effect services in `src/services/`, `src/layers/`, `src/repositories/`. `packages/reviewer`: provider adapters (Gemini/Vertex, OpenAI Responses, Anthropic Messages) behind one `Reviewer` service, plus the model catalog and credit maths (`src/catalog.ts`). All are consumed as source via `workspace:*` + `exports` → `src/*.ts` (no build step).
+- Model calls are hand-written `fetch` adapters, not `@effect/ai`: its v3 providers import tokenizers that don't load in workerd (see `docs/MULTI_PROVIDER_BYOK_DESIGN.md`). Model prices and tiers live in `packages/reviewer/src/catalog.ts`; update them from models.dev, never at runtime.
 - Bindings live in `apps/api/wrangler.jsonc`: D1 `DB` (migrations dir `../../packages/db/drizzle`) and Workflow `REVIEW_PULL_REQUEST_WORKFLOW` / `review-pull-request`. `compatibility_date` 2026-09-10.
 
 ## Gotchas

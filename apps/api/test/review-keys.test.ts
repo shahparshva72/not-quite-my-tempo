@@ -2,18 +2,18 @@ import { env } from "cloudflare:workers";
 import { Effect, Either, Layer, Option } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeLiveLayer, ReviewRunRepository } from "@not-quite-my-tempo/db";
-import { checkGeminiKey } from "@not-quite-my-tempo/gemini";
+import { checkGeminiKey } from "@not-quite-my-tempo/reviewer";
 
 import {
   chooseReviewKey,
   DEFAULT_TRIAL_DAILY_REVIEW_CAP,
   explainBlockedReview,
   GeminiKeyUnreadableError,
-  resolveGeminiKey,
+  resolveReviewKey,
   trialDailyReviewCap,
 } from "../src/application/review-keys";
 import type { BlockedReviewCode } from "../src/application/review-keys";
-import { geminiKeyContext } from "../src/application/workspace-settings";
+import { reviewKeyContext } from "../src/application/workspace-settings";
 import { encryptToken } from "../src/auth/token-cipher";
 import { GitHubPullRequestClient } from "../src/github/pull-request-client";
 import type { ReviewRequest } from "../src/github/review-request";
@@ -59,7 +59,11 @@ const keySourceOf = (runId: number) =>
 
 const storeWorkspaceKey = async (apiKey: string) => {
   const ciphertext = await Effect.runPromise(
-    encryptToken(TEST_TOKEN_ENCRYPTION_KEY, apiKey, geminiKeyContext(1)),
+    encryptToken(
+      TEST_TOKEN_ENCRYPTION_KEY,
+      apiKey,
+      reviewKeyContext(1, "gemini_api"),
+    ),
   );
 
   await env.DB.prepare(
@@ -69,10 +73,28 @@ const storeWorkspaceKey = async (apiKey: string) => {
     .run();
 };
 
+const plan = {
+  allowanceX100: 20_000,
+  vendors: new Set(["google"] as const),
+  geminiProvider: "gemini_api",
+} as const;
+
 const choose = (runId: number, trialDailyCap?: number) =>
   Effect.runPromise(
-    chooseReviewKey(runId, trialDailyCap).pipe(Effect.provide(db())),
+    chooseReviewKey(runId, 1_000, plan, trialDailyCap).pipe(
+      Effect.provide(db()),
+    ),
   );
+
+// What chooseReviewKey returns for a source that claims no plan credits.
+const choiceOf = (source: string) => ({
+  source,
+  repositoryId: 1,
+  workspaceId: 1,
+  model: null,
+  requestedModel: null,
+  creditsX100: null,
+});
 
 // Trial runs other workspaces started `hoursAgo`, which count only against
 // the platform-wide daily cap.
@@ -90,18 +112,14 @@ const seedOtherTrialRuns = async (count: number, hoursAgo = 1) => {
   }
 };
 
-describe("choosing a review's Gemini key", () => {
+describe("choosing a review's key", () => {
   beforeEach(resetAndSeedRepository);
 
   it("uses the workspace's own key without using a free review", async () => {
     await storeWorkspaceKey("AIzaWorkspaceKey1234567890");
     const run = await createRun("own-key");
 
-    expect(await choose(run.id)).toEqual({
-      source: "workspace",
-      repositoryId: 1,
-      workspaceId: 1,
-    });
+    expect(await choose(run.id)).toEqual(choiceOf("workspace"));
     expect(await keySourceOf(run.id)).toBe("workspace");
     expect(await trialUsed()).toBe(0);
   });
@@ -118,11 +136,7 @@ describe("choosing a review's Gemini key", () => {
     await seedTrialRuns(5, "completed");
     const run = await createRun("spent");
 
-    expect(await choose(run.id)).toEqual({
-      source: "none",
-      repositoryId: 1,
-      workspaceId: 1,
-    });
+    expect(await choose(run.id)).toEqual(choiceOf("none"));
     expect(await keySourceOf(run.id)).toBeNull();
     expect(await trialUsed()).toBe(5);
   });
@@ -152,11 +166,7 @@ describe("the platform-wide daily trial cap", () => {
     await seedOtherTrialRuns(3);
     const run = await createRun("capped");
 
-    expect(await choose(run.id, 3)).toEqual({
-      source: "trial_paused",
-      repositoryId: 1,
-      workspaceId: 1,
-    });
+    expect(await choose(run.id, 3)).toEqual(choiceOf("trial_paused"));
     expect(await keySourceOf(run.id)).toBeNull();
     expect(await trialUsed()).toBe(0);
   });
@@ -304,28 +314,59 @@ describe("counting free reviews fairly", () => {
   });
 });
 
-describe("resolving the key inside the Gemini step", () => {
+describe("resolving the key inside the review step", () => {
   beforeEach(resetAndSeedRepository);
 
+  const platformKeys = {
+    gemini: { apiKey: "platform-key", provider: "gemini_api" },
+    openai: "sk-platform-openai",
+    anthropic: null,
+  } as const;
+
   const resolve = (
-    source: "workspace" | "platform",
+    source: "workspace" | "platform" | "subscription",
     encryptionKey = TEST_TOKEN_ENCRYPTION_KEY,
+    model: string | null = null,
   ) =>
     Effect.runPromise(
       Effect.either(
-        resolveGeminiKey(
-          1,
-          source,
-          { apiKey: "platform-key", provider: "gemini_api" },
+        resolveReviewKey(
+          { ...choiceOf(source), source, model },
+          platformKeys,
+          undefined,
           encryptionKey,
         ).pipe(Effect.provide(db())),
       ),
     );
 
-  it("returns the platform key for trial reviews", async () => {
+  it("returns the platform Gemini key and model for trial reviews", async () => {
     expect(await resolve("platform")).toEqual(
-      Either.right({ apiKey: "platform-key", provider: "gemini_api" }),
+      Either.right({
+        apiKey: "platform-key",
+        provider: "gemini_api",
+        model: "gemini-3.8-flash",
+      }),
     );
+  });
+
+  it("uses the platform key of the claimed model's provider on the paid plan", async () => {
+    expect(
+      await resolve("subscription", TEST_TOKEN_ENCRYPTION_KEY, "gpt-6.1-sol"),
+    ).toEqual(
+      Either.right({
+        apiKey: "sk-platform-openai",
+        provider: "openai",
+        model: "gpt-6.1-sol",
+      }),
+    );
+
+    const missing = await resolve(
+      "subscription",
+      TEST_TOKEN_ENCRYPTION_KEY,
+      "claude-sonnet-5-5",
+    );
+
+    expect(Either.isLeft(missing)).toBe(true);
   });
 
   it("decrypts the workspace key, and only with the right encryption key", async () => {
@@ -335,6 +376,7 @@ describe("resolving the key inside the Gemini step", () => {
       Either.right({
         apiKey: "AIzaWorkspaceKey1234567890",
         provider: "gemini_api",
+        model: "gemini-3.8-flash",
       }),
     );
 
@@ -367,16 +409,11 @@ describe("explaining a blocked review", () => {
     reason: BlockedReviewCode = "no_gemini_key",
   ) =>
     Effect.runPromise(
-      explainBlockedReview(
-        "ghs_token",
-        request,
-        runId,
-        1,
-        1,
-        reason,
+      explainBlockedReview("ghs_token", request, runId, 1, 1, reason, {
         billingEnabled,
-        "https://notmytempo.dev",
-      ).pipe(
+        creditAllowance: 200,
+        appOrigin: "https://notmytempo.dev",
+      }).pipe(
         Effect.provide(db()),
         Effect.provide(
           Layer.succeed(
@@ -451,8 +488,10 @@ describe("explaining a blocked review", () => {
     await explain((await createRun("blocked-paid", 43)).id, withBilling, true);
 
     expect(withoutBilling[0]).not.toContain("subscribe");
-    expect(withoutBilling[0]).toContain("can add one at");
-    expect(withBilling[0]).toContain("add a key or subscribe at");
+    expect(withoutBilling[0]).toContain(
+      "can add an OpenAI, Anthropic, or Gemini key at",
+    );
+    expect(withBilling[0]).toContain("Gemini key or subscribe at");
   });
 });
 

@@ -10,7 +10,7 @@ import {
   usageSummary,
 } from "../src/application/read-api";
 import { persistReviewFindings } from "../src/application/review-workflow";
-import type { GeminiReviewResult } from "@not-quite-my-tempo/gemini";
+import type { ReviewResult } from "@not-quite-my-tempo/reviewer";
 import { testAccess } from "./authentication";
 import { resetAndSeedRepository } from "./database";
 
@@ -19,7 +19,8 @@ const dbLayer = () => makeLiveLayer(env.DB);
 const asAccess = (repositoryIds: readonly number[]) =>
   Effect.promise(() => testAccess(repositoryIds));
 
-const reviewResult: GeminiReviewResult = {
+const reviewResult: ReviewResult = {
+  provider: "gemini_api",
   review: {
     verdict: "almost",
     summary: "Not quite my tempo.",

@@ -1,12 +1,18 @@
-import { Effect, Option } from "effect";
+import { Data, Effect, Option } from "effect";
 
+import type { GeminiProvider } from "./catalog.js";
 import {
   DEFAULT_GEMINI_MODEL,
   GEMINI_API_BASE_URL,
-  GeminiRequestError,
   VERTEX_API_BASE_URL,
 } from "./reviewer.js";
-import type { GeminiProvider } from "./reviewer.js";
+
+/** Neither Google API accepted the key, and at least one couldn't answer. */
+export class GeminiKeyCheckError extends Data.TaggedError(
+  "GeminiKeyCheckError",
+)<{
+  readonly cause: string;
+}> {}
 
 export interface GeminiKeyCheckConfig {
   readonly geminiBaseUrl?: string;
@@ -29,7 +35,7 @@ const answerFor = (status: number): Answer =>
 /**
  * Which Google API accepts a key, using only free calls: the Gemini
  * Developer API's model list, then Vertex AI express mode's countTokens.
- * None means both rejected it. Fails with GeminiRequestError when neither
+ * None means both rejected it. Fails with GeminiKeyCheckError when neither
  * accepted it and at least one couldn't answer, so a caller never stores a
  * key it couldn't verify.
  */
@@ -81,7 +87,7 @@ export const checkGeminiKey = (
     }
 
     if (gemini === "unavailable" || vertex === "unavailable") {
-      return yield* new GeminiRequestError({
+      return yield* new GeminiKeyCheckError({
         cause: `Gemini API ${gemini}, Vertex AI ${vertex}`,
       });
     }
