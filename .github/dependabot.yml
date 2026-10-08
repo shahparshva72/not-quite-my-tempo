@@ -1,0 +1,37 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cloudflare:
+        patterns:
+          - wrangler
+          - "@cloudflare/*"
+      tooling:
+        patterns:
+          - oxlint
+          - oxfmt
+          - "@oxlint/*"
+          - typescript
+          - "@types/*"
+          - vite
+          - vitest
+    ignore:
+      # The Cloudflare Vitest plugin's peer range is 4.1.x.
+      - dependency-name: vitest
+        update-types:
+          ["version-update:semver-major", "version-update:semver-minor"]
+      # The codebase targets Effect v3.
+      - dependency-name: effect
+        update-types: ["version-update:semver-major"]
