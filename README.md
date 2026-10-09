@@ -30,11 +30,12 @@ The Cloudflare Vitest plugin currently peers on Vitest `4.1.x`, so this workspac
 
 ## Development
 
-Requirements: Node.js 22 or newer and pnpm 11.
+Requirements: Node.js 22 or newer and pnpm 12.
 
 Use `nvm install` and `nvm use` to select the pinned Node.js version in `.nvmrc`.
-GitHub CI uses this version and runs lint, formatting, the dry-run build, and tests
-on pushes and pull requests.
+GitHub CI uses this version and runs lint, formatting, the dry-run build,
+typecheck, and tests on pull requests and pushes to `master`; a passing push to
+`master` also deploys (see "CI/CD").
 
 ```sh
 pnpm install
@@ -354,10 +355,28 @@ counts and token usage, each repository's recent review runs (status,
 trigger, error code, model, tokens), and each run's findings. Inaccessible
 resources render a 404 page.
 
-Deploy after the remote D1 database is configured:
+## CI/CD
+
+`.github/workflows/ci.yml` runs lint, format check, build (Wrangler dry-run),
+typecheck, and tests on every pull request and push to `master`. When a push
+to `master` passes, the `deploy` job applies remote D1 migrations, deploys
+the Worker, and checks `https://notmytempo.dev/health`. Merging a pull request
+therefore ships it. Migrations run before the new code goes live, so each one
+must stay compatible with the Worker that is already deployed.
+
+One-time setup in GitHub (Settings → Environments → `production`):
+
+- Secret `CLOUDFLARE_API_TOKEN`: a Cloudflare API token with Workers Scripts:
+  Edit, D1: Edit, Workers Routes: Edit, and Zone: Read for `notmytempo.dev`.
+- Secret `CLOUDFLARE_ACCOUNT_ID`: the Cloudflare account ID.
+- Optional: required reviewers, to approve each deploy by hand.
+
+Worker secrets (`wrangler secret put …`) stay in Cloudflare; CI never sees
+them. To deploy by hand instead:
 
 ```sh
-pnpm deploy
+pnpm db:migrate:remote
+pnpm run deploy
 ```
 
 ## Test the GitHub webhook flow locally
@@ -433,7 +452,7 @@ curl -i http://localhost:8787/webhooks/github \
 
    ```sh
    pnpm --filter @not-quite-my-tempo/api exec wrangler secret put GITHUB_WEBHOOK_SECRET
-   pnpm deploy
+   pnpm run deploy
    ```
 
 3. Set the GitHub App webhook URL to the deployed Worker URL followed by
