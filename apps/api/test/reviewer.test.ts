@@ -366,6 +366,22 @@ describe("Reviewer on the Gemini API", () => {
       timeoutMillis: 20,
     });
   });
+
+  it("leaves a timed-out request to the Workflow instead of retrying it at once", async () => {
+    const fetch = fakeFetch(
+      () =>
+        new Promise<Response>(() => {
+          // Never resolves.
+        }),
+    );
+
+    const error = await Effect.runPromise(
+      Effect.flip(runReview({ fetch, timeoutMillis: 20, maxRetries: 3 })),
+    );
+
+    expect(error._tag).toBe("ReviewTimeoutError");
+    expect(fetch.calls()).toBe(1);
+  });
 });
 
 describe("Reviewer on OpenAI", () => {

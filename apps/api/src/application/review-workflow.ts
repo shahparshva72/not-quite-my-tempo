@@ -100,8 +100,10 @@ export const reviewErrorCode = (error: ReviewPipelineError): string =>
 
 /**
  * Transient failures worth re-running a durable Workflow step for. The
- * reviewer already retries 429/5xx internally, so its errors are final
- * here.
+ * reviewer retries quick 429/5xx answers itself; timeouts and overloads
+ * that outlast that are retried by the review step's own policy
+ * (REVIEW_STEP_RETRY in workflows/review-pull-request.ts), so they are
+ * not listed here.
  */
 export const isRetryableReviewError = (error: ReviewPipelineError): boolean =>
   Match.value(error).pipe(
