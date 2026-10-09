@@ -4,7 +4,7 @@ import type {
   GeminiReview,
   ReviewTone,
   ReviewVerdict,
-} from "@not-quite-my-tempo/gemini";
+} from "@not-quite-my-tempo/reviewer";
 
 const standardHeading = (verdict: ReviewVerdict): string =>
   Match.value(verdict).pipe(

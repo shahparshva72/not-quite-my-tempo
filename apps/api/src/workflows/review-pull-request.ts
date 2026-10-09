@@ -5,7 +5,7 @@ import {
 } from "cloudflare:workers";
 import { Data, Effect, Inspectable, Match, Option, Schema } from "effect";
 import { makeLiveLayer } from "@not-quite-my-tempo/db";
-import { GeminiReviewerLive } from "@not-quite-my-tempo/gemini";
+import { ReviewerLive } from "@not-quite-my-tempo/reviewer";
 
 import {
   fetchReviewablePullRequest,
@@ -24,12 +24,18 @@ import {
 import type { ReviewPipelineError } from "../application/review-workflow.js";
 import {
   chooseReviewKey,
+  downgradeNotice,
   explainBlockedReview,
-  resolveGeminiKey,
+  planMonthlyCredits,
+  platformVendors,
+  resolveReviewKey,
   trialDailyReviewCap,
-  WorkspaceGeminiKeyRejectedError,
+  WorkspaceReviewKeyError,
 } from "../application/review-keys.js";
-import type { ResolvedGeminiKey } from "../application/review-keys.js";
+import type {
+  BlockedReviewCode,
+  PlatformKeys,
+} from "../application/review-keys.js";
 import { ReviewWorkflowParams } from "../application/review-requests.js";
 import { polarConfig } from "../billing/polar-client.js";
 import { GitHubAppAuthLive } from "../github/app-auth.js";
@@ -45,6 +51,11 @@ type WorkflowEnv = {
   // "vertex_express" when GEMINI_API_KEY is a Vertex AI key; otherwise the
   // Gemini Developer API (Google AI Studio key).
   readonly GEMINI_API_PROVIDER?: string;
+  // Optional platform keys for paid-plan reviews on GPT and Claude models.
+  readonly OPENAI_API_KEY?: string;
+  readonly ANTHROPIC_API_KEY?: string;
+  // Paid-plan credits per billing period (review-keys.ts).
+  readonly PLAN_MONTHLY_CREDITS?: string;
   readonly TOKEN_ENCRYPTION_KEY: string;
   // Platform-wide free trial reviews per 24 hours (review-keys.ts).
   readonly TRIAL_DAILY_REVIEW_CAP?: string;
@@ -52,6 +63,19 @@ type WorkflowEnv = {
   readonly POLAR_ACCESS_TOKEN?: string;
   readonly POLAR_PRODUCT_ID?: string;
   readonly POLAR_WEBHOOK_SECRET?: string;
+};
+
+const blockedStepNames: Readonly<Record<BlockedReviewCode, string>> = {
+  no_gemini_key: "explain missing gemini key",
+  trial_paused: "explain paused trial",
+  credits_exhausted: "explain used credits",
+};
+
+const blockedMessages: Readonly<Record<BlockedReviewCode, string>> = {
+  no_gemini_key: "No review key and no free trial reviews left",
+  trial_paused: "Free trial reviews are paused: platform daily cap reached",
+  credits_exhausted:
+    "No plan credits left for this period and no review key of its own",
 };
 
 class WorkflowExecutionError extends Data.TaggedError(
@@ -143,22 +167,22 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
       privateKey: env.GITHUB_APP_PRIVATE_KEY,
     });
 
-    // Built per run: the key depends on the workspace (its own key, or the
-    // platform key for trial reviews). See docs/BYOK_TRIAL_DESIGN.md.
-    const geminiLayerFor = ({ apiKey, provider }: ResolvedGeminiKey) =>
-      GeminiReviewerLive(
-        env.GEMINI_MODEL === undefined
-          ? { apiKey, provider }
-          : { apiKey, provider, model: env.GEMINI_MODEL },
-      );
-
-    const platformKey: ResolvedGeminiKey = {
-      apiKey: env.GEMINI_API_KEY,
-      provider:
-        env.GEMINI_API_PROVIDER === "vertex_express"
-          ? "vertex_express"
-          : "gemini_api",
+    // The reviewer is built per run: the key and model depend on the
+    // workspace (its own key, plan credits, or the trial). See
+    // docs/MULTI_PROVIDER_BYOK_DESIGN.md.
+    const platformKeys: PlatformKeys = {
+      gemini: {
+        apiKey: env.GEMINI_API_KEY,
+        provider:
+          env.GEMINI_API_PROVIDER === "vertex_express"
+            ? "vertex_express"
+            : "gemini_api",
+      },
+      openai: env.OPENAI_API_KEY ?? null,
+      anthropic: env.ANTHROPIC_API_KEY ?? null,
     };
+
+    const creditAllowance = planMonthlyCredits(env.PLAN_MONTHLY_CREDITS);
 
     const pullRequestLayer = GitHubPullRequestClientLive({});
 
@@ -229,20 +253,29 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           "choose gemini key",
           chooseReviewKey(
             reviewRunId,
+            new TextEncoder().encode(pullRequest.diff).length,
+            {
+              allowanceX100: creditAllowance * 100,
+              vendors: platformVendors(platformKeys),
+              geminiProvider: platformKeys.gemini.provider,
+            },
             trialDailyReviewCap(env.TRIAL_DAILY_REVIEW_CAP),
           ).pipe(Effect.provide(databaseLayer)),
         );
 
         const keySource = keyChoice.source;
 
-        if (keySource === "none" || keySource === "trial_paused") {
-          const reason = keySource === "none" ? "no_gemini_key" : keySource;
+        if (
+          keySource === "none" ||
+          keySource === "trial_paused" ||
+          keySource === "credits_exhausted"
+        ) {
+          const reason: BlockedReviewCode =
+            keySource === "none" ? "no_gemini_key" : keySource;
 
           yield* runStep(
             step,
-            keySource === "none"
-              ? "explain missing gemini key"
-              : "explain paused trial",
+            blockedStepNames[reason],
             withInstallationToken(request.installationId, (token) =>
               explainBlockedReview(
                 token,
@@ -251,8 +284,11 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
                 keyChoice.repositoryId,
                 keyChoice.workspaceId,
                 reason,
-                Option.isSome(polarConfig(env)),
-                appOrigin,
+                {
+                  billingEnabled: Option.isSome(polarConfig(env)),
+                  creditAllowance,
+                  appOrigin,
+                },
               ),
             ).pipe(
               Effect.provide(pullRequestLayer),
@@ -270,13 +306,9 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           yield* runStep(
             step,
             "mark review run blocked",
-            markReviewFailed(
-              reviewRunId,
-              reason,
-              keySource === "none"
-                ? "No Gemini API key and no free trial reviews left"
-                : "Free trial reviews are paused: platform daily cap reached",
-            ).pipe(Effect.provide(databaseLayer)),
+            markReviewFailed(reviewRunId, reason, blockedMessages[reason]).pipe(
+              Effect.provide(databaseLayer),
+            ),
           );
 
           yield* logInfo(`review_blocked_${reason}`, fields);
@@ -289,25 +321,31 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
         const reviewResult = yield* runStep(
           step,
           "run gemini review",
-          resolveGeminiKey(
-            keyChoice.repositoryId,
-            keySource,
-            platformKey,
+          resolveReviewKey(
+            keyChoice,
+            platformKeys,
+            env.GEMINI_MODEL,
             env.TOKEN_ENCRYPTION_KEY,
           ).pipe(
             Effect.provide(databaseLayer),
             Effect.flatMap((key) =>
               performGeminiReview(request, pullRequest, priorReview).pipe(
-                Effect.provide(geminiLayerFor(key)),
+                Effect.provide(ReviewerLive(key)),
               ),
             ),
-            Effect.catchTag("GeminiResponseError", (error) =>
+            // Problems with a workspace's own key are the workspace's to
+            // fix, so they get their own codes and messages.
+            Effect.catchTag("ReviewProviderError", (error) =>
               Effect.gen(function* () {
                 if (
                   keySource === "workspace" &&
-                  [400, 401, 403].includes(error.status)
+                  (error.reason === "key_rejected" ||
+                    error.reason === "quota_exceeded" ||
+                    error.reason === "model_unavailable")
                 ) {
-                  return yield* new WorkspaceGeminiKeyRejectedError({
+                  return yield* new WorkspaceReviewKeyError({
+                    reason: error.reason,
+                    provider: error.provider,
                     status: error.status,
                   });
                 }
@@ -337,6 +375,7 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
               reviewResult.review,
               pullRequest.diff,
               reviewToneOf(pullRequest.config),
+              downgradeNotice(keyChoice),
             ),
           ).pipe(
             Effect.provide(pullRequestLayer),

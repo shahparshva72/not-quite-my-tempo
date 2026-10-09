@@ -277,18 +277,41 @@ const failureReasons = new Map<string, string>([
   ["diff_fetch_error", "GitHub didn't send the pull request's changes"],
   ["diff_too_large", "the pull request is too large to review"],
   ["post_review_error", "GitHub didn't accept the review comments"],
+  // Codes from before reviews ran on more than one provider.
   ["gemini_error", "the Gemini API didn't return a review"],
+  ["review_error", "the model's provider didn't return a review"],
+  [
+    "review_output_invalid",
+    "the model didn't return a usable review; try again or pick a stronger model",
+  ],
   ["db_error", "a storage error on our side"],
   ["review_run_not_found", "a storage error on our side"],
   [
     "no_gemini_key",
-    "this workspace has no Gemini key and its free reviews are used up",
+    "this workspace has no review key and its free reviews are used up",
   ],
   ["gemini_key_rejected", "Google rejected this workspace's Gemini key"],
+  ["review_key_rejected", "the provider rejected this workspace's key"],
+  [
+    "review_quota_exceeded",
+    "this workspace's provider account is out of credit or quota",
+  ],
+  [
+    "review_model_unavailable",
+    "this workspace's key can't use the chosen model; an admin can pick another",
+  ],
+  [
+    "credits_exhausted",
+    "this period's plan credits are used up and the workspace has no key of its own",
+  ],
   ["stuck", "the review stopped before finishing"],
   [
     "gemini_key_unreadable",
     "the saved Gemini key couldn't be read; an admin needs to save it again",
+  ],
+  [
+    "review_key_unreadable",
+    "the saved key couldn't be read; an admin needs to save it again",
   ],
 ]);
 
