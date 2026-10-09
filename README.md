@@ -291,6 +291,13 @@ falls back to defaults and never fails a review:
   slurs, or threats). With `intensity: "sectional"`, ruthless becomes the
   quiet Fletcher; with `carnegie`, it also raises the bar.
 
+Workspace admins and owners can also set the tone per repository on its
+dashboard page (`/dashboard/repositories/:id`): Standard or Ruthless
+overrides `tone` in `.fletcher.json` for that repository only, and "Follow
+.fletcher.json" (the default) clears the override. Changes apply from the
+next review and are recorded as `repository.review_tone_changed` audit
+events.
+
 Each installation is capped at 50 review runs per rolling 24 hours; deliveries
 beyond the cap are acknowledged with `rate_limited` and no review is started.
 Completed runs record the provider, model, token usage (`input_tokens`,

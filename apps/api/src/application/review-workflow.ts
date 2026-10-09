@@ -8,7 +8,11 @@ import {
   REVIEW_CONFIG_PATH,
   ReviewConfig,
 } from "@not-quite-my-tempo/core";
-import { FindingRepository, ReviewRunRepository } from "@not-quite-my-tempo/db";
+import {
+  FindingRepository,
+  GitHubRepositoryRepository,
+  ReviewRunRepository,
+} from "@not-quite-my-tempo/db";
 import {
   filterReviewBySeverity,
   findCatalogModel,
@@ -175,9 +179,35 @@ const resolveReviewConfig = (content: Option.Option<string>) =>
       ),
   });
 
+/**
+ * The tone an admin picked for the run's repository on the dashboard, or
+ * null to follow its .fletcher.json.
+ */
+export const repositoryReviewTone = (reviewRunId: number) =>
+  Effect.gen(function* () {
+    const run = yield* requireReviewRun(
+      reviewRunId,
+      ReviewRunRepository.findById(reviewRunId),
+    );
+
+    const repository = yield* GitHubRepositoryRepository.findById(
+      run.repositoryId,
+    );
+
+    return repository.pipe(
+      Option.flatMapNullable((found) => found.reviewTone),
+      Option.getOrNull,
+    );
+  });
+
+/**
+ * Fetches the pull request, its .fletcher.json, and its filtered diff. A
+ * dashboard tone (`toneOverride`) wins over the file's.
+ */
 export const fetchReviewablePullRequest = (
   installationToken: string,
   request: ReviewRequest,
+  toneOverride: ReviewTone | null = null,
 ) =>
   Effect.gen(function* () {
     const client = yield* GitHubPullRequestClient;
@@ -199,7 +229,13 @@ export const fetchReviewablePullRequest = (
       request.defaultBranch,
     );
 
-    const config = yield* resolveReviewConfig(configFile);
+    const fileConfig = yield* resolveReviewConfig(configFile);
+
+    const config =
+      toneOverride === null
+        ? fileConfig
+        : { ...fileConfig, tone: toneOverride };
+
     const diff = yield* client.fetchDiff(installationToken, ref);
 
     const result: ReviewablePullRequest = {

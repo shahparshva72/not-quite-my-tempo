@@ -31,13 +31,14 @@ export class ForbiddenError extends Data.TaggedError("ForbiddenError")<{
   readonly requiredRole: WorkspaceRole;
 }> {}
 
-export type RepositoryAction = "view" | "toggle_reviews";
+export type RepositoryAction = "view" | "toggle_reviews" | "set_review_tone";
 
 const roleRank = { member: 0, admin: 1, owner: 2 } as const;
 
 const requiredRoles = {
   view: "member",
   toggle_reviews: "admin",
+  set_review_tone: "admin",
 } as const satisfies Record<RepositoryAction, WorkspaceRole>;
 
 export const roleAllows = (role: WorkspaceRole, required: WorkspaceRole) =>

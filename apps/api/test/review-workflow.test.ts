@@ -371,6 +371,28 @@ describe("fetchReviewablePullRequest", () => {
     expect(result.diff).toContain("src/tempo.ts");
   });
 
+  it("lets the dashboard tone win over .fletcher.json", async () => {
+    const config = (toneOverride: "standard" | "ruthless" | null) =>
+      Effect.runPromise(
+        fetchReviewablePullRequest("ghs_token", request, toneOverride).pipe(
+          Effect.provide(
+            clientWithConfig(
+              Option.some(
+                JSON.stringify({ tone: "ruthless", intensity: "carnegie" }),
+              ),
+            ),
+          ),
+          Effect.map((result) => result.config),
+        ),
+      );
+
+    expect((await config(null)).tone).toBe("ruthless");
+    expect(await config("standard")).toMatchObject({
+      tone: "standard",
+      intensity: "carnegie",
+    });
+  });
+
   it("falls back to defaults when the config file is malformed", async () => {
     const result = await Effect.runPromise(
       fetchReviewablePullRequest("ghs_token", request).pipe(
