@@ -7,10 +7,10 @@ import {
   ReviewRunRepository,
 } from "@not-quite-my-tempo/db";
 import {
-  GeminiResponseError,
-  GeminiTimeoutError,
-} from "@not-quite-my-tempo/gemini";
-import type { GeminiReviewResult } from "@not-quite-my-tempo/gemini";
+  ReviewProviderError,
+  ReviewTimeoutError,
+} from "@not-quite-my-tempo/reviewer";
+import type { ReviewResult } from "@not-quite-my-tempo/reviewer";
 
 import {
   fetchReviewablePullRequest,
@@ -33,7 +33,8 @@ import type { CreateReviewInput } from "../src/github/pull-request-client";
 import { resetAndSeedRepository } from "./database";
 import pullRequestDiff from "./fixtures/pull-request.diff?raw";
 
-const reviewResult: GeminiReviewResult = {
+const reviewResult: ReviewResult = {
+  provider: "gemini_api",
   review: {
     verdict: "almost",
     summary: "Not quite my tempo.",
@@ -524,8 +525,15 @@ describe("review error taxonomy", () => {
       ),
     ).toBe("diff_fetch_error");
     expect(
-      reviewErrorCode(new GeminiResponseError({ status: 500, body: "boom" })),
-    ).toBe("gemini_error");
+      reviewErrorCode(
+        new ReviewProviderError({
+          provider: "gemini_api",
+          reason: "provider_unavailable",
+          status: 500,
+          detail: "boom",
+        }),
+      ),
+    ).toBe("review_error");
   });
 
   it("classifies transient failures as retryable and final ones as not", () => {
@@ -548,7 +556,7 @@ describe("review error taxonomy", () => {
       ),
     ).toBe(false);
     expect(
-      isRetryableReviewError(new GeminiTimeoutError({ timeoutMillis: 1 })),
+      isRetryableReviewError(new ReviewTimeoutError({ timeoutMillis: 1 })),
     ).toBe(false);
   });
 });

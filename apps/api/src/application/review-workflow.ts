@@ -11,18 +11,17 @@ import {
 import { FindingRepository, ReviewRunRepository } from "@not-quite-my-tempo/db";
 import {
   filterReviewBySeverity,
-  GeminiReviewer,
-} from "@not-quite-my-tempo/gemini";
+  findCatalogModel,
+  reviewCostUsdMicros,
+  Reviewer,
+} from "@not-quite-my-tempo/reviewer";
 import type { DatabaseError, Finding, ReviewRun } from "@not-quite-my-tempo/db";
 import type {
   GeminiReview,
   PriorReview,
   ReviewTone,
-} from "@not-quite-my-tempo/gemini";
-import type {
-  GeminiReviewerError,
-  GeminiReviewResult,
-} from "@not-quite-my-tempo/gemini";
+} from "@not-quite-my-tempo/reviewer";
+import type { ReviewerError, ReviewResult } from "@not-quite-my-tempo/reviewer";
 import { Option } from "effect";
 
 import { GitHubAppAuth } from "../github/app-auth.js";
@@ -38,7 +37,8 @@ import type { ReviewRequest } from "../github/review-request.js";
 import { logError } from "../logging.js";
 import type {
   GeminiKeyUnreadableError,
-  WorkspaceGeminiKeyRejectedError,
+  PlatformKeyMissingError,
+  WorkspaceReviewKeyError,
 } from "./review-keys.js";
 import {
   buildFindingCommentBody,
@@ -55,11 +55,12 @@ export type ReviewPipelineError =
   | GitHubAppAuthError
   | PullRequestClientError
   | ReviewSubmitError
-  | GeminiReviewerError
+  | ReviewerError
   | DatabaseError
   | ReviewRunNotFoundError
   | GeminiKeyUnreadableError
-  | WorkspaceGeminiKeyRejectedError;
+  | WorkspaceReviewKeyError
+  | PlatformKeyMissingError;
 
 /**
  * Maps a review pipeline failure to the stable `review_runs.error_code`
@@ -75,20 +76,27 @@ export const reviewErrorCode = (error: ReviewPipelineError): string =>
     Match.tag("PullRequestDiffTooLargeError", () => "diff_too_large"),
     Match.tag("ReviewSubmitRequestError", () => "post_review_error"),
     Match.tag("ReviewSubmitResponseError", () => "post_review_error"),
-    Match.tag("GeminiRequestError", () => "gemini_error"),
-    Match.tag("GeminiResponseError", () => "gemini_error"),
-    Match.tag("GeminiResponseParseError", () => "gemini_error"),
-    Match.tag("GeminiTimeoutError", () => "gemini_error"),
+    Match.tag("ReviewProviderError", () => "review_error"),
+    Match.tag("ReviewOutputInvalidError", () => "review_output_invalid"),
+    Match.tag("ReviewTimeoutError", () => "review_error"),
     Match.tag("DatabaseError", () => "db_error"),
     Match.tag("ReviewRunNotFoundError", () => "review_run_not_found"),
-    Match.tag("GeminiKeyUnreadableError", () => "gemini_key_unreadable"),
-    Match.tag("WorkspaceGeminiKeyRejectedError", () => "gemini_key_rejected"),
+    Match.tag("GeminiKeyUnreadableError", () => "review_key_unreadable"),
+    Match.tag("PlatformKeyMissingError", () => "review_error"),
+    Match.tag("WorkspaceReviewKeyError", (error) =>
+      Match.value(error.reason).pipe(
+        Match.when("key_rejected", () => "review_key_rejected"),
+        Match.when("quota_exceeded", () => "review_quota_exceeded"),
+        Match.when("model_unavailable", () => "review_model_unavailable"),
+        Match.exhaustive,
+      ),
+    ),
     Match.exhaustive,
   );
 
 /**
  * Transient failures worth re-running a durable Workflow step for. The
- * Gemini client already retries 429/5xx internally, so its errors are final
+ * reviewer already retries 429/5xx internally, so its errors are final
  * here.
  */
 export const isRetryableReviewError = (error: ReviewPipelineError): boolean =>
@@ -265,7 +273,7 @@ export const performGeminiReview = (
   priorReview: PriorReview | null,
 ) =>
   Effect.gen(function* () {
-    const reviewer = yield* GeminiReviewer;
+    const reviewer = yield* Reviewer;
 
     const result = yield* reviewer.review({
       repository: `${request.owner}/${request.repo}`,
@@ -289,14 +297,27 @@ export const performGeminiReview = (
 
 export const persistReviewFindings = (
   reviewRunId: number,
-  result: GeminiReviewResult,
+  result: ReviewResult,
 ) =>
   Effect.gen(function* () {
     yield* requireReviewRun(
       reviewRunId,
       ReviewRunRepository.recordReviewResult(reviewRunId, {
         model: result.model,
+        provider: result.provider,
         usage: result.usage,
+        costUsdMicros: Option.match(
+          Option.fromNullable(findCatalogModel(result.model)),
+          {
+            onNone: () => null,
+            onSome: (model) =>
+              reviewCostUsdMicros(
+                model,
+                result.usage.inputTokens,
+                result.usage.outputTokens,
+              ),
+          },
+        ),
         verdict: result.review.verdict,
         summary: result.review.summary,
       }),
@@ -360,6 +381,8 @@ export const postReviewToGitHub = (
   review: GeminiReview,
   diff: string,
   tone: ReviewTone,
+  // A line above the verdict, e.g. that a smaller model wrote the review.
+  notice: string | null = null,
 ) =>
   Effect.gen(function* () {
     const client = yield* GitHubPullRequestClient;
@@ -378,7 +401,10 @@ export const postReviewToGitHub = (
 
     const created = yield* client.createReview(installationToken, ref, {
       commitId: request.headSha,
-      body: buildReviewSummaryBody(review, findings, unanchored, tone),
+      body:
+        notice === null
+          ? buildReviewSummaryBody(review, findings, unanchored, tone)
+          : `${notice}\n\n${buildReviewSummaryBody(review, findings, unanchored, tone)}`,
       comments: anchored.map(({ finding, line }) => ({
         path: finding.filePath,
         line,

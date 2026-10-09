@@ -108,6 +108,7 @@ const recordPlan = (
         customerId: deciding?.customer_id ?? workspace.polarCustomerId,
         subscriptionId: deciding?.id ?? null,
         status: deciding?.status ?? null,
+        periodStart: deciding?.current_period_start ?? null,
         periodEnd: deciding?.current_period_end ?? null,
         cancelAtPeriodEnd: deciding?.cancel_at_period_end ?? false,
         syncedAt,

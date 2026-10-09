@@ -1,5 +1,9 @@
 # Design: workspace Gemini keys and the 5-review trial (Phase 16, part 1)
 
+> Extended by [MULTI_PROVIDER_BYOK_DESIGN.md](./MULTI_PROVIDER_BYOK_DESIGN.md):
+> keys can now be OpenAI, Anthropic, or Gemini, with a chosen model, and the
+> paid plan spends review credits.
+
 Status: **approved 2026-09-29** ("start with #1 and continue"). Billing
 (the paid plan) is part 2 and slots into the key choice below without
 schema changes to this part.

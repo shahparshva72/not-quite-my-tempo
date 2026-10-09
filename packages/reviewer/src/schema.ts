@@ -101,3 +101,39 @@ export const geminiResponseJsonSchema = {
   },
   required: ["verdict", "summary", "findings"],
 } as const;
+
+const findingProperties = {
+  filePath: { type: "string" },
+  line: { type: ["integer", "null"] },
+  severity: { type: "string", enum: ["critical", "warning", "suggestion"] },
+  category: { type: ["string", "null"] },
+  confidence: { type: "number" },
+  title: { type: "string" },
+  message: { type: "string" },
+} as const;
+
+/**
+ * The same review shape as standard JSON Schema, for OpenAI's strict
+ * structured outputs and Anthropic's tool input schema. Strict mode needs
+ * every property required and no extra properties, and rejects keywords
+ * such as minLength, so {@link GeminiReview}'s refinements are applied
+ * after decoding instead.
+ */
+export const reviewJsonSchema = {
+  type: "object",
+  properties: {
+    verdict: { type: "string", enum: ["not_my_tempo", "almost", "good_job"] },
+    summary: { type: "string" },
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: findingProperties,
+        required: Object.keys(findingProperties),
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["verdict", "summary", "findings"],
+  additionalProperties: false,
+} as const;

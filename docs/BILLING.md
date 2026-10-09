@@ -9,14 +9,26 @@ Without Polar configured, workspaces use bring-your-own-key and the trial
 
 ## Which key a review uses
 
-`chooseReviewKey` (`apps/api/src/application/review-keys.ts`), in order:
+`chooseReviewKey` (`apps/api/src/application/review-keys.ts`), in order.
+On a paid plan:
+
+1. Plan credits (`key_source = 'subscription'`): the chosen model, or a
+   smaller one from the same provider that fits what's left. These runs
+   never count against the trial.
+2. The workspace's own key (`key_source = 'workspace'`), once no plan model
+   fits. It never uses credits.
+3. None: `credits_exhausted`, with one comment per pull request per period.
+
+Without a paid plan:
 
 1. The workspace's own key (`key_source = 'workspace'`).
-2. The platform key on a paid plan (`key_source = 'subscription'`). These
-   runs never count against the trial.
-3. One free trial review on the platform key (`key_source = 'platform'`).
-4. None: the run is blocked and the pull request gets an "add a key or
+2. One free trial review on the platform key (`key_source = 'platform'`).
+3. None: the run is blocked and the pull request gets an "add a key or
    subscribe" comment.
+
+Credits, tiers, and the model catalog are described in
+[MULTI_PROVIDER_BYOK_DESIGN.md](./MULTI_PROVIDER_BYOK_DESIGN.md), "Paid plan
+credits".
 
 A plan is paid when Polar's status is `active` or `trialing`, until 3 days
 after `current_period_end` (`hasPaidPlan` in
