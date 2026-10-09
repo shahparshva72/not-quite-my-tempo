@@ -140,6 +140,8 @@ app.use(
   "*",
   secureHeaders({
     xFrameOptions: "DENY",
+    // Set below instead, so routes can choose their own.
+    referrerPolicy: false,
     contentSecurityPolicy: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'none'"],
@@ -187,6 +189,14 @@ app.use("*", async (c, next) => {
     await next();
   } else {
     await logger()(c, next);
+  }
+
+  // Not "no-referrer": under it browsers send `Origin: null` on form posts,
+  // even same-origin ones, so the origin check below would reject every
+  // form. "same-origin" still sends nothing to other sites. Routes that set
+  // their own (the OAuth routes keep "no-referrer") win.
+  if (!c.res.headers.has("Referrer-Policy")) {
+    c.res.headers.set("Referrer-Policy", "same-origin");
   }
 });
 
