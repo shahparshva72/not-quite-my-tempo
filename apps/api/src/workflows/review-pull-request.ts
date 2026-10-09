@@ -2,10 +2,14 @@ import {
   WorkflowEntrypoint,
   type WorkflowEvent,
   type WorkflowStep,
+  type WorkflowStepContext,
 } from "cloudflare:workers";
 import { Data, Effect, Inspectable, Match, Option, Schema } from "effect";
 import { makeLiveLayer } from "@not-quite-my-tempo/db";
-import { ReviewerLive } from "@not-quite-my-tempo/reviewer";
+import {
+  isRetryableReviewerError,
+  ReviewerLive,
+} from "@not-quite-my-tempo/reviewer";
 
 import {
   fetchReviewablePullRequest,
@@ -99,34 +103,83 @@ type StepOutcome<A> =
     };
 
 /**
+ * A step's own retry policy for failures that are worth another attempt
+ * later but should still end with their own error code once retries run
+ * out, rather than a generic workflow error.
+ */
+interface LaterRetry {
+  readonly limit: number;
+  readonly delay: "30 seconds";
+  readonly retryable: (error: ReviewPipelineError) => boolean;
+}
+
+// The model call: a timeout or overload often clears within a minute, so
+// the step runs up to twice more (after 30s, then 60s). Each attempt may
+// take up to the reviewer's timeout, well inside the step's.
+const REVIEW_STEP_RETRY: LaterRetry = {
+  limit: 2,
+  delay: "30 seconds",
+  retryable: Match.type<ReviewPipelineError>().pipe(
+    Match.tag("ReviewTimeoutError", "ReviewProviderError", (error) =>
+      isRetryableReviewerError(error),
+    ),
+    Match.orElse(() => false),
+  ),
+};
+
+/**
  * Runs an Effect inside a durable Workflow step. Retryable failures reject
  * the step promise so Cloudflare's step retry policy re-runs them;
  * non-retryable pipeline failures are persisted as step output and surfaced
  * as a typed `ReviewStepFailure` carrying the `review_runs.error_code`.
+ * With `laterRetry`, matching failures are retried on that policy and
+ * persisted like any other failure on the last attempt.
  */
 const runStep = <A extends Rpc.Serializable<A>, E extends ReviewPipelineError>(
   step: WorkflowStep,
   name: string,
   effect: Effect.Effect<A, E>,
-) =>
-  Effect.tryPromise({
-    try: () =>
-      step.do(name, () =>
-        Effect.runPromise(
-          effect.pipe(
-            Effect.map((value): StepOutcome<A> => ({ status: "ok", value })),
-            Effect.catchAll((error) =>
-              isRetryableReviewError(error)
-                ? Effect.fail(error)
-                : Effect.succeed<StepOutcome<A>>({
-                    status: "error",
-                    code: reviewErrorCode(error),
-                    message: Inspectable.toStringUnknown(error),
-                  }),
-            ),
-          ),
+  laterRetry?: LaterRetry,
+) => {
+  const attempt = (ctx: WorkflowStepContext) =>
+    Effect.runPromise(
+      effect.pipe(
+        Effect.map((value): StepOutcome<A> => ({ status: "ok", value })),
+        Effect.catchAll((error) =>
+          isRetryableReviewError(error) ||
+          (laterRetry !== undefined &&
+            laterRetry.retryable(error) &&
+            ctx.attempt <= laterRetry.limit)
+            ? logInfo("review_step_retrying", {
+                step: name,
+                attempt: ctx.attempt,
+                error: error._tag,
+              }).pipe(Effect.zipRight(Effect.fail(error)))
+            : Effect.succeed<StepOutcome<A>>({
+                status: "error",
+                code: reviewErrorCode(error),
+                message: Inspectable.toStringUnknown(error),
+              }),
         ),
       ),
+    );
+
+  return Effect.tryPromise({
+    try: () =>
+      laterRetry === undefined
+        ? step.do(name, attempt)
+        : step.do(
+            name,
+            {
+              retries: {
+                limit: laterRetry.limit,
+                delay: laterRetry.delay,
+                backoff: "exponential",
+              },
+              timeout: "10 minutes",
+            },
+            attempt,
+          ),
     catch: (cause) => new WorkflowExecutionError({ cause }),
   }).pipe(
     Effect.flatMap((outcome) =>
@@ -138,6 +191,7 @@ const runStep = <A extends Rpc.Serializable<A>, E extends ReviewPipelineError>(
           }),
     ),
   );
+};
 
 const failureDetails = (error: WorkflowExecutionError | ReviewStepFailure) =>
   Match.value(error).pipe(
@@ -361,6 +415,7 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
               }),
             ),
           ),
+          REVIEW_STEP_RETRY,
         );
 
         const persisted = yield* runStep(

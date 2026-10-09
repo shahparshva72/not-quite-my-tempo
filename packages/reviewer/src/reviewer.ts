@@ -4,6 +4,7 @@ import {
   Effect,
   Layer,
   Match,
+  Predicate,
   Schedule,
   Schema,
 } from "effect";
@@ -40,14 +41,18 @@ const ANTHROPIC_VERSION = "2023-06-01";
 /** The platform key's model when GEMINI_MODEL isn't set, and the trial's. */
 export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
 
-const DEFAULT_RETRY_BASE_MILLIS = 500;
+// Overload answers (429/503) come back fast; give the provider a few
+// seconds to recover rather than half a second.
+const DEFAULT_RETRY_BASE_MILLIS = 2_000;
 
 const DEFAULT_MAX_RETRIES = 3;
 
-// Gemini answers fast; reasoning models and long Claude reviews don't.
+// Gemini 3.x models think before answering, and under load even a short
+// prompt can take half a minute; 60s timed out real reviews. Reasoning
+// models and long Claude reviews are slower still.
 const DEFAULT_TIMEOUT_MILLIS: Readonly<Record<ReviewProvider, number>> = {
-  gemini_api: 60_000,
-  vertex_express: 60_000,
+  gemini_api: 180_000,
+  vertex_express: 180_000,
   openai: 180_000,
   anthropic: 180_000,
 };
@@ -448,9 +453,14 @@ export const ReviewerLive = (config: ReviewerConfig) => {
             duration: Duration.millis(timeoutMillis),
             onTimeout: () => new ReviewTimeoutError({ timeoutMillis }),
           }),
+          // A timed-out attempt is not repeated here: the provider may
+          // still bill it, and an immediate retry hits the same load. The
+          // Workflow retries the whole step later instead.
           Effect.retry({
             schedule: retrySchedule,
-            while: isRetryableReviewerError,
+            while: (error) =>
+              !Predicate.isTagged(error, "ReviewTimeoutError") &&
+              isRetryableReviewerError(error),
           }),
         ),
     }),

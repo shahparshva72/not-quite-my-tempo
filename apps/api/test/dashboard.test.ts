@@ -82,9 +82,18 @@ describe("dashboard", () => {
     const terms = await request("/terms");
 
     expect(privacy.status).toBe(200);
-    expect(await privacy.text()).toContain("support@notmytempo.dev");
     expect(terms.status).toBe(200);
-    expect(await terms.text()).toContain("Terms of Service");
+
+    const privacyBody = await privacy.text();
+    const termsBody = await terms.text();
+
+    expect(privacyBody).toContain("support@notmytempo.dev");
+    expect(termsBody).toContain("Terms of Service");
+
+    // Only Gemini is enabled (ENABLED_VENDORS); name no other AI provider.
+    for (const body of [privacyBody, termsBody]) {
+      expect(body).not.toMatch(/OpenAI|Anthropic/);
+    }
   });
 
   it("shows the legal pages as signed in when there is a session", async () => {
