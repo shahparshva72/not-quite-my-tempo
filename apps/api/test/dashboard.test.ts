@@ -77,6 +77,16 @@ describe("dashboard", () => {
     expect(body).toContain('href="/privacy"');
   });
 
+  it("lets pages post forms with their origin, but keeps OAuth URLs private", async () => {
+    // Under "no-referrer" browsers send `Origin: null` on form posts, and
+    // the same-origin check then rejects every form, sign-out included.
+    const page = await request("/");
+    const login = await request("/auth/login");
+
+    expect(page.headers.get("referrer-policy")).toBe("same-origin");
+    expect(login.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+
   it("serves the privacy policy and terms without a session", async () => {
     const privacy = await request("/privacy");
     const terms = await request("/terms");
