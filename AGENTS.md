@@ -1,9 +1,9 @@
 # AGENTS.md
 
-## Commands (repo root; pnpm 11, Node per `.nvmrc`)
+## Commands (repo root; pnpm 12, Node per `.nvmrc`)
 
 - Setup: `nvm use` (or `nvm install`), `pnpm install`.
-- Verify, mirroring CI order (`.github/workflows/ci.yml`): `pnpm lint` → `pnpm format:check` → `pnpm build` (Wrangler dry-run deploy) → `pnpm test`. Also run `pnpm typecheck` (`pnpm typecheck:test` covers `apps/api/test/`); CI does not run `tsc`.
+- Verify, mirroring CI order (`.github/workflows/ci.yml`): `pnpm lint` → `pnpm format:check` → `pnpm build` (Wrangler dry-run deploy) → `pnpm typecheck` → `pnpm typecheck:test` (covers `apps/api/test/`) → `pnpm test`.
 - Fix/format: `pnpm lint:fix`, `pnpm format`.
 - Single test: `pnpm --filter @not-quite-my-tempo/api exec vitest run test/<name>.test.ts`.
 - Dev: `pnpm db:migrate:local`, then `pnpm dev` (Worker at `http://localhost:8787`).
@@ -19,6 +19,7 @@
 ## Gotchas
 
 - `wrangler.jsonc` holds the real production D1 `database_id` (not a secret). Local dev and tests use local copies, but every `--remote` command (e.g. `pnpm db:migrate:remote`) hits production. Use a Wrangler `env` block for staging rather than swapping the ID.
+- Merging to `master` deploys: CI's `deploy` job (environment `production`) runs `pnpm db:migrate:remote` then `pnpm run deploy`. Keep every migration compatible with the Worker already live. Use `pnpm run deploy`, not `pnpm deploy` (a pnpm built-in).
 - Secrets: local-only `apps/api/.dev.vars` (gitignored, never commit), prod via `wrangler secret put GITHUB_WEBHOOK_SECRET`. When adding/changing/removing env vars, update root `.env.example` in the same change (purpose, required/optional, where loaded; empty values only) and keep README setup in sync.
 - Never use `wrangler dev --remote` — Workflow bindings break there. For webhook tunnels, press `t` in the `wrangler dev` terminal.
 - Tests run in workerd via `@cloudflare/vitest-plugin`; keep Vitest on `4.1.x` (the plugin's peer range, not v5). `test/setup.ts` lists every migration explicitly — add each new `packages/db/drizzle/*.sql` file there. Reuse `resetAndSeedRepository` in `test/database.ts` (FK-safe delete order, seeds installation 1 / repo 1).
