@@ -9,6 +9,7 @@ import {
   GitHubRepositoryRepository,
   makeLiveLayer,
 } from "@not-quite-my-tempo/db";
+import type { RepositoryReviewTone } from "@not-quite-my-tempo/db";
 import { makeServiceInfo } from "@not-quite-my-tempo/core";
 import type { Context } from "hono";
 
@@ -442,6 +443,55 @@ app.get("/dashboard/repositories/:id", (c) =>
                 new Date(),
               ),
             ),
+        }),
+      ),
+    );
+  }),
+);
+
+// An empty choice clears the override, so .fletcher.json decides again.
+const ReviewToneForm = Schema.Struct({
+  tone: Schema.Literal("", "standard", "ruthless"),
+});
+
+app.post("/dashboard/repositories/:id/review-tone", (c) =>
+  withSessionPage(c, async (session) => {
+    const repositoryId = Number(c.req.param("id"));
+
+    const form = Schema.decodeUnknownOption(ReviewToneForm)(
+      await c.req.parseBody(),
+    );
+
+    if (!Number.isInteger(repositoryId) || Option.isNone(form)) {
+      return c.html(notFoundPage(session.login), 404);
+    }
+
+    const reviewTone: RepositoryReviewTone =
+      form.value.tone === "" ? null : form.value.tone;
+
+    return Effect.runPromise(
+      authorizeRepository(session, repositoryId, "set_review_tone").pipe(
+        Effect.flatMap((visible) =>
+          GitHubRepositoryRepository.setReviewToneWithAudit(
+            visible.repository,
+            reviewTone,
+            { workspaceId: visible.workspaceId, actorUserId: session.userId },
+          ),
+        ),
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                c.html(notFoundPage(session.login), 404),
+              ),
+              Match.tag("ForbiddenError", (error) =>
+                c.html(forbiddenPage(session.login, error.requiredRole), 403),
+              ),
+              Match.orElse((error) => internalError(c, error)),
+            ),
+          onSuccess: () =>
+            c.redirect(`/dashboard/repositories/${repositoryId}`, 303),
         }),
       ),
     );

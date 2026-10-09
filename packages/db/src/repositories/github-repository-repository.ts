@@ -12,6 +12,9 @@ import type { WorkspaceRole } from "./membership-repository.js";
 
 export type GitHubRepository = typeof repositories.$inferSelect;
 
+/** A dashboard tone override; null follows the repository's .fletcher.json. */
+export type RepositoryReviewTone = GitHubRepository["reviewTone"];
+
 export type UpsertGitHubRepositoryInput = Pick<
   GitHubRepository,
   "installationId" | "githubRepositoryId" | "owner" | "name" | "defaultBranch"
@@ -199,6 +202,28 @@ export class GitHubRepositoryRepository extends Effect.Service<GitHubRepositoryR
                 target: `repository:${repository.id}`,
                 before: JSON.stringify({ enabled: repository.enabled }),
                 after: JSON.stringify({ enabled }),
+              }),
+            ]),
+          ).pipe(Effect.asVoid),
+        /** Sets the review tone override and records who did it, in one batch. */
+        setReviewToneWithAudit: (
+          repository: GitHubRepository,
+          reviewTone: RepositoryReviewTone,
+          actor: RepositoryAuditActor,
+        ) =>
+          databaseEffect("repositories.set_review_tone_with_audit", () =>
+            client.batch([
+              client
+                .update(repositories)
+                .set({ reviewTone, updatedAt: new Date() })
+                .where(eq(repositories.id, repository.id)),
+              client.insert(auditEvents).values({
+                workspaceId: actor.workspaceId,
+                actorUserId: actor.actorUserId,
+                action: "repository.review_tone_changed",
+                target: `repository:${repository.id}`,
+                before: JSON.stringify({ reviewTone: repository.reviewTone }),
+                after: JSON.stringify({ reviewTone }),
               }),
             ]),
           ).pipe(Effect.asVoid),

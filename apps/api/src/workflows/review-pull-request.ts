@@ -18,6 +18,7 @@ import {
   performGeminiReview,
   persistReviewFindings,
   postReviewToGitHub,
+  repositoryReviewTone,
   reviewToneOf,
   reviewErrorCode,
 } from "../application/review-workflow.js";
@@ -223,9 +224,15 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
         const pullRequest = yield* runStep(
           step,
           "fetch pull request",
-          withInstallationToken(request.installationId, (token) =>
-            fetchReviewablePullRequest(token, request),
-          ).pipe(Effect.provide(pullRequestLayer)),
+          repositoryReviewTone(reviewRunId).pipe(
+            Effect.provide(databaseLayer),
+            Effect.flatMap((toneOverride) =>
+              withInstallationToken(request.installationId, (token) =>
+                fetchReviewablePullRequest(token, request, toneOverride),
+              ),
+            ),
+            Effect.provide(pullRequestLayer),
+          ),
         );
 
         if (!pullRequest.config.enabled) {
