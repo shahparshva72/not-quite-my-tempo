@@ -57,7 +57,10 @@ Create a GitHub App and configure its repository permissions:
 
 - **Pull requests: Read & write** to read PR metadata and post reviews.
 - **Contents: Read-only** to fetch unified diffs from private repositories.
-- Under **Subscribe to events**, enable **Pull request**.
+- **Issues: Read-only** to receive pull request comments.
+- Under **Subscribe to events**, enable **Pull request** and **Issue
+  comment**. Without Issue comment, `/fletcher again` never reaches the
+  Worker.
 
 For self-service onboarding, also set in the App's settings:
 
