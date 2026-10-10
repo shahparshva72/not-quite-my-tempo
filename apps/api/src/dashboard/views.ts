@@ -149,8 +149,8 @@ const hostedPlanCard = (offer: PaidPlanOffer) => {
     </div>
     ${priceLine}
     <p>
-      200 review credits a month on Fletcher's keys: up to 200 reviews on
-      standard models, or 66 on pro models.
+      200 review credits a month on Fletcher's keys: up to 133 reviews on
+      standard models, or 44 on pro models.
     </p>
     <ul class="checks">
       ${check("Everything in Bring your own key")}

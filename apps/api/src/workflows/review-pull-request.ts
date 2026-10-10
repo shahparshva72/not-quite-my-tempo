@@ -41,6 +41,7 @@ import type {
   BlockedReviewCode,
   PlatformKeys,
 } from "../application/review-keys.js";
+import { fetchRepositoryContext } from "../application/repository-context.js";
 import { ReviewWorkflowParams } from "../application/review-requests.js";
 import { polarConfig } from "../billing/polar-client.js";
 import { GitHubAppAuthLive } from "../github/app-auth.js";
@@ -377,6 +378,25 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           return { blocked: true } as const;
         }
 
+        // Fetched inside the review step, not a step of its own, so the
+        // repository's files never become persisted step output.
+        const repositoryContext = withInstallationToken(
+          request.installationId,
+          (token) =>
+            fetchRepositoryContext({
+              installationToken: token,
+              ref: {
+                owner: request.owner,
+                repo: request.repo,
+                pullRequestNumber: request.pullRequestNumber,
+              },
+              defaultBranch: request.defaultBranch,
+              headSha: pullRequest.details.headSha,
+              diff: pullRequest.diff,
+              guidelines: pullRequest.config.guidelines ?? null,
+            }),
+        ).pipe(Effect.provide(pullRequestLayer));
+
         // The key is looked up and decrypted inside this step so it never
         // appears in a persisted step output.
         const reviewResult = yield* runStep(
@@ -390,7 +410,15 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           ).pipe(
             Effect.provide(databaseLayer),
             Effect.flatMap((key) =>
-              performGeminiReview(request, pullRequest, priorReview).pipe(
+              repositoryContext.pipe(
+                Effect.flatMap((context) =>
+                  performGeminiReview(
+                    request,
+                    pullRequest,
+                    priorReview,
+                    context,
+                  ),
+                ),
                 Effect.provide(ReviewerLive(key)),
               ),
             ),
@@ -456,6 +484,8 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           verdict: reviewResult.review.verdict,
           findingCount: persisted.findingCount,
           model: reviewResult.model,
+          inputTokens: reviewResult.usage.inputTokens ?? undefined,
+          cachedInputTokens: reviewResult.usage.cachedInputTokens ?? undefined,
           githubReviewId: posted.reviewId,
           inlineCommentCount: posted.inlineCommentCount,
         });

@@ -22,6 +22,7 @@ const input: GeminiReviewInput = {
   body: "Double time swing.",
   diff: "diff --git a/src/tempo.ts b/src/tempo.ts",
   priorReview: null,
+  context: null,
   intensity: "studio_band",
   tone: "standard",
 };
@@ -53,7 +54,9 @@ const geminiUsage = {
 
 const geminiResponse = (
   review: ReviewPayload = reviewJson,
-  usageMetadata: typeof geminiUsage | null = geminiUsage,
+  usageMetadata:
+    | (typeof geminiUsage & { readonly cachedContentTokenCount?: number })
+    | null = geminiUsage,
 ) =>
   new Response(
     JSON.stringify({
@@ -199,7 +202,8 @@ describe("Reviewer on the Gemini API", () => {
       generationConfig: {
         responseMimeType: string;
         responseSchema: { required: string[] };
-        temperature: number;
+        temperature?: number;
+        thinkingConfig: { thinkingLevel: string };
       };
     };
 
@@ -211,7 +215,29 @@ describe("Reviewer on the Gemini API", () => {
       "summary",
       "findings",
     ]);
-    expect(body.generationConfig.temperature).toBe(0.2);
+    expect(body.generationConfig.temperature).toBeUndefined();
+    expect(body.generationConfig.thinkingConfig).toEqual({
+      thinkingLevel: "medium",
+    });
+  });
+
+  it("gives Flash-Lite models a low thinking level", async () => {
+    const requests: RecordedRequest[] = [];
+
+    await Effect.runPromise(
+      runReview({
+        model: "gemini-3.5-flash-lite",
+        fetch: fakeFetch(() => geminiResponse(), requests),
+      }),
+    );
+
+    // SAFETY: fakeFetch recorded the JSON body Fletcher sent.
+
+    const body = requests[0]?.body as {
+      generationConfig: { thinkingConfig: { thinkingLevel: string } };
+    };
+
+    expect(body.generationConfig.thinkingConfig.thinkingLevel).toBe("low");
   });
 
   it("sends Vertex AI keys to Vertex AI's express endpoint", async () => {
@@ -240,7 +266,23 @@ describe("Reviewer on the Gemini API", () => {
       inputTokens: 1200,
       outputTokens: 300,
       totalTokens: 1500,
+      cachedInputTokens: null,
     });
+  });
+
+  it("reports tokens served from Gemini's implicit cache", async () => {
+    const result = await Effect.runPromise(
+      runReview({
+        fetch: fakeFetch(() =>
+          geminiResponse(reviewJson, {
+            ...geminiUsage,
+            cachedContentTokenCount: 800,
+          }),
+        ),
+      }),
+    );
+
+    expect(result.usage.cachedInputTokens).toBe(800);
   });
 
   it("returns null usage when the response omits it", async () => {
@@ -252,6 +294,7 @@ describe("Reviewer on the Gemini API", () => {
       inputTokens: null,
       outputTokens: null,
       totalTokens: null,
+      cachedInputTokens: null,
     });
   });
 
@@ -425,6 +468,7 @@ describe("Reviewer on OpenAI", () => {
       inputTokens: 2000,
       outputTokens: 500,
       totalTokens: 2500,
+      cachedInputTokens: 0,
     });
   });
 
@@ -582,6 +626,8 @@ describe("golden review schema", () => {
     expect(FLETCHER_SYSTEM_PROMPT).toContain("concrete, technically correct");
     expect(FLETCHER_SYSTEM_PROMPT).toContain("good_job");
     expect(FLETCHER_SYSTEM_PROMPT).toContain("MEMORY");
+    expect(FLETCHER_SYSTEM_PROMPT).toContain("REPOSITORY CONTEXT");
+    expect(FLETCHER_SYSTEM_PROMPT).toContain("UNTRUSTED INPUT");
   });
 });
 
@@ -721,5 +767,64 @@ describe("buildReviewUserPrompt", () => {
     });
 
     expect(prompt).toContain("Previous review (commit old456): no findings");
+  });
+
+  it("omits repository context sections without context", () => {
+    const prompt = buildReviewUserPrompt(input);
+
+    expect(prompt).not.toContain("Repository guidelines");
+    expect(prompt).not.toContain("<file");
+  });
+
+  it("orders repository material, then the pull request, then the diff", () => {
+    const prompt = buildReviewUserPrompt({
+      ...input,
+      context: {
+        guidelinesRef: "main",
+        guidelines: [
+          {
+            path: "AGENTS.md",
+            content: "Use import type for types.",
+            truncated: false,
+          },
+        ],
+        manifests: [
+          {
+            path: "package.json",
+            content: '{"dependencies":{"effect":"3.22.2"}}',
+            truncated: false,
+          },
+        ],
+        files: [
+          {
+            path: "src/tempo.ts",
+            content: "export const tempo = 240;",
+            truncated: true,
+          },
+        ],
+        omittedFiles: ["src/huge.ts"],
+      },
+    });
+
+    expect(prompt).toContain(
+      'Repository guidelines (from main):\n<guideline path="AGENTS.md">\n' +
+        "Use import type for types.\n</guideline>",
+    );
+    expect(prompt).toContain('<manifest path="package.json">');
+    expect(prompt).toContain('<file path="src/tempo.ts" truncated="true">');
+    expect(prompt).toContain("- src/huge.ts");
+    // Repository-wide material leads so reviews share a cacheable prefix.
+    expect(prompt.indexOf("<guideline")).toBeLessThan(
+      prompt.indexOf("Pull request: #42"),
+    );
+    expect(prompt.indexOf("<manifest")).toBeLessThan(
+      prompt.indexOf("Pull request: #42"),
+    );
+    expect(prompt.indexOf("Pull request: #42")).toBeLessThan(
+      prompt.indexOf("<file"),
+    );
+    expect(prompt.indexOf("<file")).toBeLessThan(
+      prompt.indexOf("Unified diff:"),
+    );
   });
 });

@@ -68,6 +68,22 @@ const PullRequestDetailsResponse = Schema.Struct({
   head: Schema.Struct({ sha: Schema.NonEmptyString }),
 });
 
+const RepositoryTreeResponse = Schema.Struct({
+  tree: Schema.Array(
+    Schema.Struct({
+      path: Schema.String,
+      type: Schema.String,
+      size: Schema.optional(Schema.Number),
+    }),
+  ),
+});
+
+/** A file in a repository tree. */
+export interface RepositoryTreeEntry {
+  readonly path: string;
+  readonly sizeBytes: number;
+}
+
 /** The reactions Fletcher uses on comments. */
 export type CommentReaction = "eyes" | "+1";
 
@@ -155,6 +171,18 @@ export interface GitHubPullRequestClientService {
     Option.Option<string>,
     PullRequestRequestError | PullRequestResponseError
   >;
+  /**
+   * Lists every file at `gitRef`. GitHub truncates very large trees; the
+   * entries it did return are still listed.
+   */
+  readonly fetchTree: (
+    installationToken: string,
+    ref: PullRequestRef,
+    gitRef: string,
+  ) => Effect.Effect<
+    readonly RepositoryTreeEntry[],
+    PullRequestRequestError | PullRequestResponseError
+  >;
 }
 
 export class GitHubPullRequestClient extends Context.Tag(
@@ -211,6 +239,47 @@ const fetchPullRequestBody = (
     }
 
     return body;
+  });
+
+/** Encodes each segment of a repository path for a URL. */
+const encodePath = (filePath: string) =>
+  filePath.split("/").map(encodeURIComponent).join("/");
+
+/** A GET against the repository API that leaves status handling to the caller. */
+const fetchRepositoryResource = (
+  config: GitHubPullRequestClientConfig,
+  installationToken: string,
+  path: string,
+  accept: string,
+) =>
+  Effect.gen(function* () {
+    const baseUrl = config.baseUrl ?? GITHUB_API_BASE_URL;
+
+    const fetchImpl =
+      config.fetchImpl ??
+      ((input: RequestInfo | URL, init?: RequestInit) =>
+        globalThis.fetch(input, init));
+
+    const response = yield* Effect.tryPromise({
+      try: () =>
+        fetchImpl(`${baseUrl}${path}`, {
+          method: "GET",
+          headers: {
+            accept,
+            authorization: `Bearer ${installationToken}`,
+            "user-agent": USER_AGENT,
+            "x-github-api-version": GITHUB_API_VERSION,
+          },
+        }),
+      catch: (cause) => new PullRequestRequestError({ cause }),
+    });
+
+    const body = yield* Effect.tryPromise({
+      try: () => response.text(),
+      catch: (cause) => new PullRequestRequestError({ cause }),
+    });
+
+    return { status: response.status, ok: response.ok, body };
   });
 
 const submitRequest = (
@@ -356,34 +425,12 @@ export const GitHubPullRequestClientLive = (
         ).pipe(Effect.asVoid),
       fetchRepositoryFile: (installationToken, ref, filePath, gitRef) =>
         Effect.gen(function* () {
-          const baseUrl = config.baseUrl ?? GITHUB_API_BASE_URL;
-
-          const fetchImpl =
-            config.fetchImpl ??
-            ((input: RequestInfo | URL, init?: RequestInit) =>
-              globalThis.fetch(input, init));
-
-          const response = yield* Effect.tryPromise({
-            try: () =>
-              fetchImpl(
-                `${baseUrl}/repos/${ref.owner}/${ref.repo}/contents/${filePath}?ref=${encodeURIComponent(gitRef)}`,
-                {
-                  method: "GET",
-                  headers: {
-                    accept: "application/vnd.github.raw+json",
-                    authorization: `Bearer ${installationToken}`,
-                    "user-agent": USER_AGENT,
-                    "x-github-api-version": GITHUB_API_VERSION,
-                  },
-                },
-              ),
-            catch: (cause) => new PullRequestRequestError({ cause }),
-          });
-
-          const body = yield* Effect.tryPromise({
-            try: () => response.text(),
-            catch: (cause) => new PullRequestRequestError({ cause }),
-          });
+          const response = yield* fetchRepositoryResource(
+            config,
+            installationToken,
+            `/repos/${ref.owner}/${ref.repo}/contents/${encodePath(filePath)}?ref=${encodeURIComponent(gitRef)}`,
+            "application/vnd.github.raw+json",
+          );
 
           if (response.status === 404) {
             return Option.none<string>();
@@ -392,11 +439,39 @@ export const GitHubPullRequestClientLive = (
           if (!response.ok) {
             return yield* new PullRequestResponseError({
               status: response.status,
-              body,
+              body: response.body,
             });
           }
 
-          return Option.some(body);
+          return Option.some(response.body);
+        }),
+      fetchTree: (installationToken, ref, gitRef) =>
+        Effect.gen(function* () {
+          const response = yield* fetchRepositoryResource(
+            config,
+            installationToken,
+            `/repos/${ref.owner}/${ref.repo}/git/trees/${encodeURIComponent(gitRef)}?recursive=1`,
+            "application/vnd.github+json",
+          );
+
+          if (!response.ok) {
+            return yield* new PullRequestResponseError({
+              status: response.status,
+              body: response.body,
+            });
+          }
+
+          const decoded = yield* Schema.decodeUnknown(
+            Schema.parseJson(RepositoryTreeResponse),
+          )(response.body).pipe(
+            Effect.mapError((cause) => new PullRequestRequestError({ cause })),
+          );
+
+          return decoded.tree.flatMap((entry): RepositoryTreeEntry[] =>
+            entry.type === "blob"
+              ? [{ path: entry.path, sizeBytes: entry.size ?? 0 }]
+              : [],
+          );
         }),
       listReviewComments: (installationToken, ref, reviewId) =>
         Effect.gen(function* () {

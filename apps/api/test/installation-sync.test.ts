@@ -263,6 +263,7 @@ describe("installation webhooks", () => {
               createIssueComment: () => Effect.void,
               createCommentReaction: () => Effect.void,
               fetchRepositoryFile: () => Effect.succeed(Option.none()),
+              fetchTree: () => Effect.succeed([]),
             }),
           ),
         ),

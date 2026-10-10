@@ -215,6 +215,26 @@ describe("GitHubPullRequestClient.fetchRepositoryFile", () => {
     expect(headers.get("accept")).toBe("application/vnd.github.raw+json");
   });
 
+  it("encodes each path segment", async () => {
+    const requests: string[] = [];
+
+    const fetchImpl: typeof fetch = (input) => {
+      requests.push(String(input));
+
+      return Promise.resolve(new Response("x"));
+    };
+
+    await Effect.runPromise(
+      withClient({ baseUrl: "https://github.test", fetchImpl }, (client) =>
+        client.fetchRepositoryFile("ghs_token", ref, "docs/a b#1.md", "main"),
+      ),
+    );
+
+    expect(requests[0]).toBe(
+      "https://github.test/repos/shaffer/studio-band/contents/docs/a%20b%231.md?ref=main",
+    );
+  });
+
   it("returns none when the file does not exist", async () => {
     const fetchImpl: typeof fetch = () =>
       Promise.resolve(new Response("Not Found", { status: 404 }));
@@ -246,6 +266,54 @@ describe("GitHubPullRequestClient.fetchRepositoryFile", () => {
             ".fletcher.json",
             "head789",
           ),
+        ),
+      ),
+    );
+
+    expect(error._tag).toBe("PullRequestResponseError");
+  });
+});
+
+describe("GitHubPullRequestClient.fetchTree", () => {
+  it("lists the files at a ref and skips directories", async () => {
+    const requests: string[] = [];
+
+    const fetchImpl: typeof fetch = (input) => {
+      requests.push(String(input));
+
+      return Promise.resolve(
+        Response.json({
+          sha: "head789",
+          truncated: false,
+          tree: [
+            { path: "src", type: "tree" },
+            { path: "src/tempo.ts", type: "blob", size: 120 },
+            { path: "vendor/lib", type: "commit" },
+          ],
+        }),
+      );
+    };
+
+    const result = await Effect.runPromise(
+      withClient({ baseUrl: "https://github.test", fetchImpl }, (client) =>
+        client.fetchTree("ghs_token", ref, "head789"),
+      ),
+    );
+
+    expect(result).toEqual([{ path: "src/tempo.ts", sizeBytes: 120 }]);
+    expect(requests[0]).toBe(
+      "https://github.test/repos/shaffer/studio-band/git/trees/head789?recursive=1",
+    );
+  });
+
+  it("fails on non-2xx responses", async () => {
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(new Response("nope", { status: 409 }));
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        withClient({ fetchImpl }, (client) =>
+          client.fetchTree("ghs_token", ref, "head789"),
         ),
       ),
     );

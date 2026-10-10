@@ -128,9 +128,9 @@ describe("the model catalog", () => {
     const sonnet = findCatalogModel("claude-sonnet-5-5");
     const opus = findCatalogModel("claude-opus-5-5");
 
-    expect(flash && reviewCreditsX100(flash, 20_000)).toBe(100);
-    expect(flash && reviewCreditsX100(flash, 90_000)).toBe(300);
-    expect(sonnet && reviewCreditsX100(sonnet, 20_000)).toBe(300);
+    expect(flash && reviewCreditsX100(flash, 20_000)).toBe(150);
+    expect(flash && reviewCreditsX100(flash, 90_000)).toBe(450);
+    expect(sonnet && reviewCreditsX100(sonnet, 20_000)).toBe(450);
     expect(opus && reviewCreditsX100(opus, 20_000)).toBeNull();
     expect(estimateInputTokens(LARGE_DIFF)).toBeGreaterThan(40_000);
   });
@@ -160,6 +160,15 @@ describe("the model catalog", () => {
     expect(flash && reviewCostUsdMicros(flash, 20_000, 4_000)).toBe(30_000);
   });
 
+  it("bills cached input tokens at the cached price", () => {
+    const flash = findCatalogModel("gemini-3.8-flash");
+
+    // 10k uncached × $0.75/M + 10k cached × $0.075/M + 4k out × $3.75/M.
+    expect(flash && reviewCostUsdMicros(flash, 20_000, 4_000, 10_000)).toBe(
+      23_250,
+    );
+  });
+
   it("reads the allowance from the environment", () => {
     expect(planMonthlyCredits("300")).toBe(300);
     expect(planMonthlyCredits(undefined)).toBe(200);
@@ -180,9 +189,9 @@ describe("paid plan credits", () => {
       source: "subscription",
       model: "claude-sonnet-5-5",
       requestedModel: null,
-      creditsX100: 300,
+      creditsX100: 450,
     });
-    expect(await creditsUsed()).toBe(3);
+    expect(await creditsUsed()).toBe(4.5);
     expect(downgradeNotice(choice)).toBeNull();
   });
 
@@ -192,7 +201,7 @@ describe("paid plan credits", () => {
 
     expect(await choose(run.id, LARGE_DIFF)).toMatchObject({
       model: "gemini-3.8-flash",
-      creditsX100: 300,
+      creditsX100: 450,
     });
   });
 
@@ -203,7 +212,7 @@ describe("paid plan credits", () => {
     await choose(run.id);
     await choose(run.id);
 
-    expect(await creditsUsed()).toBe(1);
+    expect(await creditsUsed()).toBe(1.5);
   });
 
   it("switches to a smaller model from the same vendor when credits run low", async () => {
@@ -217,10 +226,10 @@ describe("paid plan credits", () => {
       source: "subscription",
       model: "gemini-3.8-flash",
       requestedModel: "gemini-3.5-flash",
-      creditsX100: 100,
+      creditsX100: 150,
     });
     expect(downgradeNotice(choice)).toContain("Switched to a smaller model");
-    expect(await creditsUsed()).toBe(199);
+    expect(await creditsUsed()).toBe(199.5);
   });
 
   it("never switches vendors: Claude with too few credits is blocked", async () => {
@@ -268,18 +277,18 @@ describe("paid plan credits", () => {
     );
 
     expect((await choose(run.id)).source).toBe("subscription");
-    expect(await creditsUsed()).toBe(1);
+    expect(await creditsUsed()).toBe(1.5);
   });
 
   it("lets only one of two concurrent runs take the last credit", async () => {
     await setPaidPlan("gemini-3.8-flash");
-    await seedCharged(19_900);
+    await seedCharged(19_850);
 
     const [first, second] = await Promise.all([createRun(), createRun(43)]);
 
     const choices = await Promise.all([choose(first.id), choose(second.id)]);
 
-    // The loser switches to the Lite model (0.5) and can't fit that either.
+    // The loser switches to the Lite model (0.75) and can't fit that either.
     expect(choices.map((choice) => choice.source).sort()).toEqual([
       "credits_exhausted",
       "subscription",

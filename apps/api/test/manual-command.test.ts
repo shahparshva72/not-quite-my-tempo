@@ -168,6 +168,7 @@ describe("handleManualReviewCommand", () => {
             reactions.push({ token, ref, commentId, content });
           }).pipe(Effect.zipRight(reactionResult)),
         fetchRepositoryFile: () => Effect.succeed(Option.none()),
+        fetchTree: () => Effect.succeed([]),
       }),
     );
 
