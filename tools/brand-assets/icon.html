@@ -1,0 +1,51 @@
+<!doctype html>
+<!-- The square logo tile, rendered by render.sh; #square drops the rounded corners. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        overflow: hidden;
+      }
+      .logo {
+        width: 100vw;
+        height: 100vh;
+        border-radius: 22%;
+        background: #edb94e;
+        color: #0e1c1c;
+        display: grid;
+        place-items: center;
+      }
+      .logo svg {
+        width: 64%;
+        height: 64%;
+      }
+      /* The Apple touch icon is masked by iOS, so it fills the square. */
+      .square .logo {
+        border-radius: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="logo">
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.4"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M8.5 3h7l4 18h-15z" />
+        <path d="M12 16l5-10" />
+        <path d="M6.5 16h11" />
+      </svg>
+    </div>
+    <script>
+      if (location.hash === "#square") document.body.classList.add("square");
+    </script>
+  </body>
+</html>

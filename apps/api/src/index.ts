@@ -90,6 +90,7 @@ import {
   runFindingsPage,
 } from "./dashboard/views.js";
 import type { PaidPlanOffer, SettingsNotice } from "./dashboard/views.js";
+import { SITE_URL } from "./dashboard/components.js";
 import { docsPage } from "./dashboard/docs.js";
 import { accountDeletedPage, accountPage } from "./dashboard/account.js";
 import type { AccountNotice } from "./dashboard/account.js";
@@ -572,6 +573,39 @@ app.get("/privacy", (c) =>
 
 app.get("/terms", (c) =>
   signedInLogin(c).then((login) => c.html(termsPage(login))),
+);
+
+// Public pages for search engines. Pages behind sign-in stay crawlable so
+// their noindex tag is seen, and so link-preview bots can fetch /og.png.
+const PUBLIC_PATHS = ["/", "/docs", "/privacy", "/terms"];
+
+app.get("/robots.txt", (c) =>
+  c.text(
+    [
+      "User-agent: *",
+      "Disallow: /auth/",
+      "Disallow: /webhooks/",
+      "",
+      `Sitemap: ${SITE_URL}/sitemap.xml`,
+      "",
+    ].join("\n"),
+  ),
+);
+
+app.get("/sitemap.xml", (c) =>
+  c.body(
+    [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+      ...PUBLIC_PATHS.map(
+        (path) => `  <url><loc>${SITE_URL}${path}</loc></url>`,
+      ),
+      "</urlset>",
+      "",
+    ].join("\n"),
+    200,
+    { "content-type": "application/xml; charset=utf-8" },
+  ),
 );
 
 app.get("/docs", (c) =>

@@ -167,7 +167,7 @@ const hostedPlanCard = (offer: PaidPlanOffer) => {
 
 const pricingLede = (offer: PaidPlanOffer) => {
   const trial =
-    "Every workspace gets 5 reviews on Fletcher's key. After that, add an " +
+    "Every workspace gets 5 reviews on Fletcher's key. After that, add a " +
     "Gemini key and your provider bills its usage to you";
 
   if (!offer.billingEnabled) {
@@ -349,6 +349,8 @@ export const landingPage = (offer: PaidPlanOffer) =>
           >${withGitHub("Sign in with GitHub")}</a
         >
       </section>`,
+    null,
+    { path: "/" },
   );
 
 export const notFoundPage = (login: string | null) =>

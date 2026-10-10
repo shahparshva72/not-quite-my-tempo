@@ -12,6 +12,7 @@ const contact = html`<a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>`;
 
 const legalPage = (
   title: string,
+  path: string,
   login: string | null,
   lede: HtmlContent,
   body: HtmlContent,
@@ -29,11 +30,14 @@ const legalPage = (
       </header>
       ${body}
     </article>`,
+    null,
+    { path },
   );
 
 export const privacyPage = (login: string | null) =>
   legalPage(
     "Privacy Policy",
+    "/privacy",
     login,
     html`What Fletcher reads, what we keep, who else sees it, and how to get it
     deleted.`,
@@ -225,6 +229,7 @@ export const privacyPage = (login: string | null) =>
 export const termsPage = (login: string | null) =>
   legalPage(
     "Terms of Service",
+    "/terms",
     login,
     html`The agreement between you and Not Quite My Tempo for using Fletcher.`,
     html`<h2>1. The agreement</h2>
