@@ -89,32 +89,62 @@ const DAY_MILLIS = 24 * 60 * 60 * 1000;
 /**
  * Handles a `/fletcher again` comment: resolves the pull request's current
  * head SHA as the GitHub App installation and enqueues a `manual` review
- * through the normal path (idempotency and the daily cap both apply).
+ * through the normal path (idempotency and the daily cap both apply). When
+ * a review is queued, Fletcher reacts to the comment with 👀 so the
+ * commenter knows it's under way.
  */
-export const handleManualReviewCommand = (command: ManualReviewCommand) =>
+export const handleManualReviewCommand = ({
+  commentId,
+  ...command
+}: ManualReviewCommand) =>
   Effect.gen(function* () {
     const auth = yield* GitHubAppAuth;
     const client = yield* GitHubPullRequestClient;
 
     const token = yield* auth.mintInstallationToken(command.installationId);
 
-    const details = yield* client.fetchDetails(token.token, {
+    const ref = {
       owner: command.owner,
       repo: command.repo,
       pullRequestNumber: command.pullRequestNumber,
-    });
+    };
 
-    yield* logInfo("manual_review_requested", {
+    const details = yield* client.fetchDetails(token.token, ref);
+
+    const fields = {
       repository: `${command.owner}/${command.repo}`,
       pullRequestNumber: command.pullRequestNumber,
       headSha: details.headSha,
-    });
+    };
 
-    return yield* handleReviewRequest({
+    yield* logInfo("manual_review_requested", fields);
+
+    const outcome = yield* handleReviewRequest({
       ...command,
       headSha: details.headSha,
       trigger: "manual",
     });
+
+    // Only a queued review gets the reaction: a duplicate, rate-limited, or
+    // disabled request isn't being worked on. The reaction is a courtesy,
+    // so failing to add it never fails the review, and it may not hold up
+    // the webhook response.
+    if (outcome.status === "queued") {
+      yield* client
+        .createCommentReaction(token.token, ref, commentId, "eyes")
+        .pipe(
+          Effect.timeout("5 seconds"),
+          Effect.catchAll((error) =>
+            logError("manual_review_reaction_failed", {
+              ...fields,
+              commentId,
+              error: Inspectable.toStringUnknown(error),
+            }),
+          ),
+        );
+    }
+
+    return outcome;
   });
 
 export const handleReviewRequest = (
