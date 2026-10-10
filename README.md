@@ -288,7 +288,8 @@ falls back to defaults and never fails a review:
   "severityThreshold": "suggestion",
   "ignore": ["docs/**", "**/*.gen.ts"],
   "intensity": "studio_band",
-  "tone": "standard"
+  "tone": "standard",
+  "guidelines": null
 }
 ```
 
@@ -309,6 +310,20 @@ falls back to defaults and never fails a review:
   rubric, and criticism stays on the code, never the person (no profanity,
   slurs, or threats). With `intensity: "sectional"`, ruthless becomes the
   quiet Fletcher; with `carnegie`, it also raises the bar.
+
+- `guidelines`: paths or globs of the files holding the repository's review
+  rules, read from the default branch. `null` (default) reads `AGENTS.md`,
+  `CLAUDE.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`,
+  `docs/CONTRIBUTING.md`, `.github/copilot-instructions.md`, and any
+  `AGENTS.md` / `CLAUDE.md` in a directory the pull request touches.
+
+Besides the diff, each review also gets the repository's guidelines (up to 8
+files, 40 KB), the root dependency manifest plus the nearest one to each
+changed file, and the full post-change content of changed files (up to 25
+files, 150 KB, most-changed first; new files and files over 60 KB are left to
+the diff). This context is best effort — a GitHub error leaves it out rather
+than failing the review — and isn't counted toward credits
+(`apps/api/src/application/repository-context.ts`).
 
 Workspace admins and owners can also set the tone per repository on its
 dashboard page (`/dashboard/repositories/:id`): Standard or Ruthless

@@ -45,6 +45,14 @@ export const ReviewConfig = Schema.Struct({
   tone: Schema.optionalWith(ReviewTone, {
     default: () => "standard" as const,
   }),
+  /**
+   * Paths or globs of the files that hold the repository's review
+   * guidelines, read from the default branch. Null means the usual
+   * locations (AGENTS.md, CLAUDE.md, CONTRIBUTING.md, …).
+   */
+  guidelines: Schema.optionalWith(Schema.NullOr(Schema.Array(Schema.String)), {
+    default: () => null,
+  }),
 });
 
 export type ReviewConfig = typeof ReviewConfig.Type;
@@ -55,6 +63,7 @@ export const defaultReviewConfig: ReviewConfig = {
   ignore: [],
   intensity: "studio_band",
   tone: "standard",
+  guidelines: null,
 };
 
 export const REVIEW_CONFIG_PATH = ".fletcher.json";

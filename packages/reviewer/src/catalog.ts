@@ -50,6 +50,8 @@ export interface CatalogModel {
   readonly weight: number | null;
   readonly inputUsdPerMillion: number;
   readonly outputUsdPerMillion: number;
+  /** Input tokens served from the provider's prompt cache. */
+  readonly cachedInputUsdPerMillion: number;
   /** Reasoning models reject sampling settings such as temperature. */
   readonly reasoning: boolean;
 }
@@ -62,9 +64,10 @@ export const DEFAULT_PLAN_CATALOG_MODEL: CatalogModel = {
   vendor: "google",
   id: "gemini-3.8-flash",
   tier: "standard",
-  weight: 1,
+  weight: 1.5,
   inputUsdPerMillion: 0.75,
   outputUsdPerMillion: 3.75,
+  cachedInputUsdPerMillion: 0.075,
   reasoning: false,
 };
 
@@ -82,6 +85,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     weight: null,
     inputUsdPerMillion: 10,
     outputUsdPerMillion: 50,
+    cachedInputUsdPerMillion: 1,
     reasoning: true,
   },
   {
@@ -91,6 +95,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     weight: null,
     inputUsdPerMillion: 4,
     outputUsdPerMillion: 20,
+    cachedInputUsdPerMillion: 0.4,
     reasoning: true,
   },
   {
@@ -100,51 +105,57 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     weight: null,
     inputUsdPerMillion: 4,
     outputUsdPerMillion: 20,
+    cachedInputUsdPerMillion: 0.4,
     reasoning: true,
   },
   {
     vendor: "openai",
     id: "gpt-5.6-terra",
     tier: "pro",
-    weight: 3,
+    weight: 4.5,
     inputUsdPerMillion: 2,
     outputUsdPerMillion: 12,
+    cachedInputUsdPerMillion: 0.2,
     reasoning: true,
   },
   {
     vendor: "openai",
     id: "gpt-6.1-sol",
     tier: "pro",
-    weight: 3,
+    weight: 4.5,
     inputUsdPerMillion: 2,
     outputUsdPerMillion: 10,
+    cachedInputUsdPerMillion: 0.1,
     reasoning: true,
   },
   {
     vendor: "openai",
     id: "gpt-6-sol",
     tier: "pro",
-    weight: 3,
+    weight: 4.5,
     inputUsdPerMillion: 2,
     outputUsdPerMillion: 10,
+    cachedInputUsdPerMillion: 0.2,
     reasoning: true,
   },
   {
     vendor: "openai",
     id: "gpt-5.6-luna",
     tier: "lite",
-    weight: 0.5,
+    weight: 0.75,
     inputUsdPerMillion: 0.2,
     outputUsdPerMillion: 1.2,
+    cachedInputUsdPerMillion: 0.02,
     reasoning: true,
   },
   {
     vendor: "openai",
     id: "gpt-6-luna",
     tier: "lite",
-    weight: 0.5,
+    weight: 0.75,
     inputUsdPerMillion: 0.1,
     outputUsdPerMillion: 0.5,
+    cachedInputUsdPerMillion: 0.01,
     reasoning: true,
   },
   // Anthropic. Claude Haiku 5.5 joins once its price is published.
@@ -155,15 +166,17 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     weight: null,
     inputUsdPerMillion: 4,
     outputUsdPerMillion: 20,
+    cachedInputUsdPerMillion: 0.2,
     reasoning: false,
   },
   {
     vendor: "anthropic",
     id: "claude-sonnet-5-5",
     tier: "pro",
-    weight: 3,
+    weight: 4.5,
     inputUsdPerMillion: 2,
     outputUsdPerMillion: 10,
+    cachedInputUsdPerMillion: 0.1,
     reasoning: false,
   },
   // Google
@@ -171,9 +184,10 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     vendor: "google",
     id: "gemini-3.5-flash",
     tier: "pro",
-    weight: 3,
+    weight: 4.5,
     inputUsdPerMillion: 1.5,
     outputUsdPerMillion: 9,
+    cachedInputUsdPerMillion: 0.15,
     reasoning: false,
   },
   DEFAULT_PLAN_CATALOG_MODEL,
@@ -181,27 +195,30 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     vendor: "google",
     id: "gemini-3.7-flash",
     tier: "standard",
-    weight: 1,
+    weight: 1.5,
     inputUsdPerMillion: 0.75,
     outputUsdPerMillion: 3.75,
+    cachedInputUsdPerMillion: 0.075,
     reasoning: false,
   },
   {
     vendor: "google",
     id: "gemini-3.6-flash",
     tier: "standard",
-    weight: 1,
+    weight: 1.5,
     inputUsdPerMillion: 0.75,
     outputUsdPerMillion: 3.75,
+    cachedInputUsdPerMillion: 0.075,
     reasoning: false,
   },
   {
     vendor: "google",
     id: "gemini-3.5-flash-lite",
     tier: "lite",
-    weight: 0.5,
+    weight: 0.75,
     inputUsdPerMillion: 0.3,
     outputUsdPerMillion: 2.5,
+    cachedInputUsdPerMillion: 0.03,
     reasoning: false,
   },
 ];
@@ -288,13 +305,21 @@ export const downgradeOrder = (model: CatalogModel): readonly CatalogModel[] =>
           candidate.weight < model.weight,
       );
 
-/** What a review actually cost us, in millionths of a dollar. */
+/**
+ * What a review actually cost us, in millionths of a dollar. Providers
+ * count cached tokens inside the input total, billed at the cached price.
+ */
 export const reviewCostUsdMicros = (
   model: CatalogModel,
   inputTokens: number | null,
   outputTokens: number | null,
-) =>
-  Math.round(
-    (inputTokens ?? 0) * model.inputUsdPerMillion +
+  cachedInputTokens: number | null = null,
+) => {
+  const cached = Math.min(cachedInputTokens ?? 0, inputTokens ?? 0);
+
+  return Math.round(
+    ((inputTokens ?? 0) - cached) * model.inputUsdPerMillion +
+      cached * model.cachedInputUsdPerMillion +
       (outputTokens ?? 0) * model.outputUsdPerMillion,
   );
+};

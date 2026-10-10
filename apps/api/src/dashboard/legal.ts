@@ -69,14 +69,18 @@ export const privacyPage = (login: string | null) =>
       <h3>Pull requests and code</h3>
       <p>
         To review a pull request, Fletcher fetches its title, description, diff,
-        and the repository's <code>.fletcher.json</code> file, if there is one,
-        and sends them to the AI model provider your workspace uses (see below).
-        We don't store the diff or your source files. We do keep what the review
-        produced: the verdict, summary, and each finding (file path, line,
-        severity, and message, which can quote short pieces of your code). We
-        also keep the commit SHA, the pull request number, timing, errors, and
-        token counts. Reviews are also posted as comments on the pull request in
-        GitHub.
+        and the repository's <code>.fletcher.json</code> file, if there is one.
+        For context it also fetches the full content of the changed files, the
+        repository's contribution guidelines (such as <code>AGENTS.md</code> or
+        <code>CONTRIBUTING.md</code>), its dependency manifests (such as
+        <code>package.json</code>), and the list of file paths in the
+        repository. It sends all of this except the file list to the AI model
+        provider your workspace uses (see below). We don't store the diff or
+        your source files. We do keep what the review produced: the verdict,
+        summary, and each finding (file path, line, severity, and message, which
+        can quote short pieces of your code). We also keep the commit SHA, the
+        pull request number, timing, errors, and token counts. Reviews are also
+        posted as comments on the pull request in GitHub.
       </p>
       <h3>Your own API keys</h3>
       <p>

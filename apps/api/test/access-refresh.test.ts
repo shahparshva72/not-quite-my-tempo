@@ -263,6 +263,7 @@ const deliver = async (githubEvent: string, payload: RevocationPayload) => {
             createIssueComment: () => Effect.void,
             createCommentReaction: () => Effect.void,
             fetchRepositoryFile: () => Effect.succeed(Option.none()),
+            fetchTree: () => Effect.succeed([]),
           }),
         ),
       ),

@@ -6,9 +6,11 @@ export {
 } from "./prompt.js";
 
 export type {
+  ContextFile,
   GeminiReviewInput,
   PriorFinding,
   PriorReview,
+  RepositoryContext,
   ReviewIntensity,
   ReviewTone,
 } from "./prompt.js";

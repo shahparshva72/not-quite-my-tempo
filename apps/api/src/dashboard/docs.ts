@@ -5,7 +5,9 @@ import { layout } from "./components.js";
 
 // Every claim here mirrors code: the schema in
 // packages/core/src/review-config.ts, the glob rules and built-in ignores in
-// packages/core/src/diff.ts, triggers in apps/api/src/github/. Update this
+// packages/core/src/diff.ts, repository context in
+// apps/api/src/application/repository-context.ts, triggers in
+// apps/api/src/github/. Update this
 // page in the same change as any of them.
 
 const EXAMPLE_CONFIG = `{
@@ -24,7 +26,8 @@ const DEFAULT_CONFIG = `{
   "severityThreshold": "suggestion",
   "intensity": "studio_band",
   "tone": "standard",
-  "ignore": []
+  "ignore": [],
+  "guidelines": null
 }`;
 
 const OFF_CONFIG = `{ "enabled": false }`;
@@ -67,6 +70,7 @@ export const docsPage = (login: string | null) =>
           <li><a href="#triggers">When Fletcher reviews</a></li>
           <li><a href="#config">.fletcher.json</a></li>
           <li><a href="#ignore">Ignoring files</a></li>
+          <li><a href="#context">What Fletcher reads</a></li>
           <li><a href="#gotchas">Things that catch people out</a></li>
         </ul>
       </nav>
@@ -224,6 +228,14 @@ export const docsPage = (login: string | null) =>
               html`Files left out of the review. See
                 <a href="#ignore">Ignoring files</a>.`,
             )}
+            ${field(
+              "guidelines",
+              "array of paths or globs, null",
+              "null",
+              html`The files that hold your review rules, read from the default
+                branch. <code>null</code> uses the usual places. See
+                <a href="#context">What Fletcher reads</a>.`,
+            )}
           </tbody>
         </table>
       </div>
@@ -285,6 +297,41 @@ export const docsPage = (login: string | null) =>
         lockfiles (<code>Cargo.lock</code>, <code>go.sum</code>,
         <code>poetry.lock</code>) and SVGs. Add those to <code>ignore</code>
         if you don't want them reviewed.
+      </p>
+
+      <h2 id="context">What Fletcher reads</h2>
+      <p>Besides the diff, each review gets:</p>
+      <ul>
+        <li>
+          <strong>Your rules.</strong> <code>AGENTS.md</code>,
+          <code>CLAUDE.md</code>, <code>CONTRIBUTING.md</code>,
+          <code>.github/CONTRIBUTING.md</code>,
+          <code>docs/CONTRIBUTING.md</code>, and
+          <code>.github/copilot-instructions.md</code>, plus any
+          <code>AGENTS.md</code> or <code>CLAUDE.md</code> in a folder the pull
+          request changes. They're read from the default branch, so a pull
+          request can't rewrite the rules it's reviewed against. Up to 8 files
+          and 40 KB in total. Set <code>guidelines</code> to pick the files
+          yourself, for example <code>["docs/style/**"]</code>.
+        </li>
+        <li>
+          <strong>Your dependencies.</strong> The root manifest
+          (<code>package.json</code>, <code>go.mod</code>,
+          <code>pyproject.toml</code>, <code>Cargo.toml</code>, and the like)
+          and the nearest one to each changed file, so library versions newer
+          than the model's training aren't flagged as mistakes.
+        </li>
+        <li>
+          <strong>The changed files in full</strong>, as they are in the pull
+          request, so code just outside the diff counts. Up to 25 files and 150
+          KB, most-changed first; files over 60 KB are reviewed from the diff
+          only.
+        </li>
+      </ul>
+      <p>
+        Findings that cite a rule quote it and name its file. Fletcher still
+        comments only on lines the pull request adds, and these files don't
+        count toward the 300 KB diff limit or your credits.
       </p>
 
       <h2 id="gotchas">Things that catch people out</h2>

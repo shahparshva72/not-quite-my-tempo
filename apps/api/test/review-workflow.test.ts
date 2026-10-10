@@ -300,6 +300,7 @@ describe("fetchReviewablePullRequest", () => {
         createIssueComment: () => Effect.void,
         createCommentReaction: () => Effect.void,
         fetchRepositoryFile: () => Effect.succeed(configFile),
+        fetchTree: () => Effect.succeed([]),
       }),
     );
 
@@ -316,6 +317,7 @@ describe("fetchReviewablePullRequest", () => {
       ignore: [],
       intensity: "studio_band",
       tone: "standard",
+      guidelines: null,
     });
     expect(result.diff).toContain("src/tempo.ts");
   });
@@ -340,6 +342,7 @@ describe("fetchReviewablePullRequest", () => {
 
                 return Effect.succeed(Option.none());
               },
+              fetchTree: () => Effect.succeed([]),
             }),
           ),
         ),
@@ -470,6 +473,7 @@ describe("postReviewToGitHub", () => {
         createIssueComment: () => Effect.void,
         createCommentReaction: () => Effect.void,
         fetchRepositoryFile: () => Effect.succeed(Option.none()),
+        fetchTree: () => Effect.succeed([]),
       }),
     );
 

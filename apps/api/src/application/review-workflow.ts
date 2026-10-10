@@ -23,6 +23,7 @@ import type { DatabaseError, Finding, ReviewRun } from "@not-quite-my-tempo/db";
 import type {
   GeminiReview,
   PriorReview,
+  RepositoryContext,
   ReviewTone,
 } from "@not-quite-my-tempo/reviewer";
 import type { ReviewerError, ReviewResult } from "@not-quite-my-tempo/reviewer";
@@ -161,10 +162,23 @@ export const mintInstallationToken = (installationId: number) =>
     return token.token;
   });
 
+/**
+ * A review config as a Workflow step output may hold it. The fetched pull
+ * request is persisted, so a run that fetched it before `tone` or
+ * `guidelines` existed resumes without them.
+ */
+export type PersistedReviewConfig = Omit<
+  ReviewConfig,
+  "tone" | "guidelines"
+> & {
+  readonly tone?: ReviewTone | undefined;
+  readonly guidelines?: readonly string[] | null | undefined;
+};
+
 export interface ReviewablePullRequest {
   readonly details: PullRequestDetails;
   readonly diff: string;
-  readonly config: ReviewConfig;
+  readonly config: PersistedReviewConfig;
 }
 
 const resolveReviewConfig = (content: Option.Option<string>) =>
@@ -292,15 +306,6 @@ export const loadPriorReview = (
     });
   });
 
-/**
- * A review config as a Workflow step output may hold it. The fetched pull
- * request is persisted, so a run that fetched it before `tone` existed
- * resumes without one.
- */
-export type PersistedReviewConfig = Omit<ReviewConfig, "tone"> & {
-  readonly tone?: ReviewTone | undefined;
-};
-
 /** The pull request's review tone; the standard one when none was saved. */
 export const reviewToneOf = (config: PersistedReviewConfig): ReviewTone =>
   config.tone ?? "standard";
@@ -309,6 +314,7 @@ export const performGeminiReview = (
   request: ReviewRequest,
   pullRequest: ReviewablePullRequest,
   priorReview: PriorReview | null,
+  context: RepositoryContext | null,
 ) =>
   Effect.gen(function* () {
     const reviewer = yield* Reviewer;
@@ -320,6 +326,7 @@ export const performGeminiReview = (
       body: pullRequest.details.body,
       diff: pullRequest.diff,
       priorReview,
+      context,
       intensity: pullRequest.config.intensity,
       tone: reviewToneOf(pullRequest.config),
     });
@@ -353,6 +360,7 @@ export const persistReviewFindings = (
                 model,
                 result.usage.inputTokens,
                 result.usage.outputTokens,
+                result.usage.cachedInputTokens ?? null,
               ),
           },
         ),

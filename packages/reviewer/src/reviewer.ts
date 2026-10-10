@@ -71,6 +71,11 @@ export interface ReviewUsage {
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
   readonly totalTokens: number | null;
+  /**
+   * Input tokens served from the provider's prompt cache, counted inside
+   * `inputTokens`. Absent on results persisted before it was recorded.
+   */
+  readonly cachedInputTokens?: number | null;
 }
 
 export interface ReviewResult {
@@ -131,6 +136,7 @@ const GeminiEnvelope = Schema.Struct({
   usageMetadata: Schema.optional(
     Schema.Struct({
       promptTokenCount: OptionalCount,
+      cachedContentTokenCount: OptionalCount,
       candidatesTokenCount: OptionalCount,
       totalTokenCount: OptionalCount,
     }),
@@ -155,6 +161,9 @@ const OpenAiEnvelope = Schema.Struct({
   usage: Schema.optional(
     Schema.Struct({
       input_tokens: OptionalCount,
+      input_tokens_details: Schema.optional(
+        Schema.Struct({ cached_tokens: OptionalCount }),
+      ),
       output_tokens: OptionalCount,
       total_tokens: OptionalCount,
     }),
@@ -227,6 +236,8 @@ const geminiRequest = (
           inputTokens: envelope.usageMetadata?.promptTokenCount ?? null,
           outputTokens: envelope.usageMetadata?.candidatesTokenCount ?? null,
           totalTokens: envelope.usageMetadata?.totalTokenCount ?? null,
+          cachedInputTokens:
+            envelope.usageMetadata?.cachedContentTokenCount ?? null,
         },
       })),
     ),
@@ -292,6 +303,8 @@ const openAiRequest = (
                   inputTokens: envelope.usage?.input_tokens ?? null,
                   outputTokens: envelope.usage?.output_tokens ?? null,
                   totalTokens: envelope.usage?.total_tokens ?? null,
+                  cachedInputTokens:
+                    envelope.usage?.input_tokens_details?.cached_tokens ?? null,
                 },
               }),
         ),

@@ -429,6 +429,7 @@ describe("explaining a blocked review", () => {
                 }),
               createCommentReaction: () => Effect.void,
               fetchRepositoryFile: () => Effect.succeed(Option.none()),
+              fetchTree: () => Effect.succeed([]),
             }),
           ),
         ),
