@@ -85,6 +85,7 @@ import {
   runFindingsPage,
 } from "./dashboard/views.js";
 import type { PaidPlanOffer, SettingsNotice } from "./dashboard/views.js";
+import { docsPage } from "./dashboard/docs.js";
 import { privacyPage, termsPage } from "./dashboard/legal.js";
 import { GitHubAppAuthLive } from "./github/app-auth.js";
 import { GitHubInstallationClientLive } from "./github/installation-client.js";
@@ -561,6 +562,10 @@ app.get("/privacy", (c) =>
 
 app.get("/terms", (c) =>
   signedInLogin(c).then((login) => c.html(termsPage(login))),
+);
+
+app.get("/docs", (c) =>
+  signedInLogin(c).then((login) => c.html(docsPage(login))),
 );
 
 app.get("/onboarding", (c) =>

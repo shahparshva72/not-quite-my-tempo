@@ -298,6 +298,15 @@ p { margin: 0 0 1rem; max-width: var(--measure); }
 .legal h3 { margin: 1.5rem 0 0.5rem; }
 .legal ul { padding-left: 1.25rem; margin: 0 0 1rem; }
 .legal li { margin-bottom: 0.4rem; }
+.legal ol { padding-left: 1.25rem; margin: 0 0 1rem; }
+.docs-code {
+  margin: 0 0 1rem; font-size: 0.85rem; line-height: 1.6; overflow-x: auto;
+  background: var(--well); border: 1px solid var(--staff);
+  border-radius: var(--radius-sm); padding: 0.75rem 1rem;
+}
+.docs-code code { background: none; border: 0; padding: 0; font-size: inherit; }
+.docs table.data td code { white-space: nowrap; }
+.docs table.data td:not(:last-child) { overflow-wrap: normal; }
 .consent { margin: 1rem 0 0; }
 .features + .fine { margin: 1.5rem 0 0; }
 
