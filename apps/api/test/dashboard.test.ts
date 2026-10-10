@@ -116,6 +116,7 @@ describe("dashboard", () => {
     expect(body).toContain(".fletcher.json");
     expect(body).toContain("severityThreshold");
     expect(body).toContain("/fletcher again");
+    expect(body).toContain("limit of 50 reviews in");
   });
 
   it("shows the legal pages as signed in when there is a session", async () => {

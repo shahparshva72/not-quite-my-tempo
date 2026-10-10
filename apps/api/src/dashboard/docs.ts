@@ -1,5 +1,6 @@
 import { html } from "hono/html";
 
+import { DAILY_REVIEW_RUN_CAP } from "../application/review-requests.js";
 import { layout } from "./components.js";
 
 // Every claim here mirrors code: the schema in
@@ -114,9 +115,50 @@ export const docsPage = (login: string | null) =>
       </ul>
       <p>
         Fletcher reviews each commit once. <code>/fletcher again</code> on a
-        commit that already has a review does nothing; push a new commit to get
-        a new review.
+        commit that already has a review doesn't start another one; push a new
+        commit to get a new review.
       </p>
+
+      <h3 id="fletcher-again">How Fletcher answers /fletcher again</h3>
+      <p>
+        Fletcher answers every <code>/fletcher again</code> from an owner,
+        member, or collaborator, so you can tell it was heard:
+      </p>
+      <div class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th scope="col">What's happening</th>
+              <th scope="col">Fletcher's answer</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                A review starts now, or the commit's review is already queued or
+                running
+              </td>
+              <td>👀 reaction on your comment</td>
+            </tr>
+            <tr>
+              <td>The latest commit already has a finished review</td>
+              <td>👍 reaction; nothing new to review</td>
+            </tr>
+            <tr>
+              <td>
+                The account hit its limit of ${DAILY_REVIEW_RUN_CAP} reviews in
+                24 hours
+              </td>
+              <td>A reply asking you to try again later</td>
+            </tr>
+            <tr>
+              <td>Reviews are off for this repository</td>
+              <td>No answer</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Comments from anyone else are ignored without an answer.</p>
       <p>
         Reviews are posted as comments. Fletcher never approves or blocks a pull
         request, so branch protection rules don't change.
