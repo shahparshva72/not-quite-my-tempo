@@ -137,6 +137,7 @@ export const layout = (
           <nav aria-label="Footer">
             <a href="/#how">How it works</a>
             <a href="/#pricing">Pricing</a>
+            <a href="/docs">Docs</a>
             <a href="/privacy">Privacy</a>
             <a href="/terms">Terms</a>
           </nav>

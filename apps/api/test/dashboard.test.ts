@@ -106,6 +106,18 @@ describe("dashboard", () => {
     }
   });
 
+  it("serves the .fletcher.json docs without a session", async () => {
+    const response = await request("/docs");
+
+    expect(response.status).toBe(200);
+
+    const body = await response.text();
+
+    expect(body).toContain(".fletcher.json");
+    expect(body).toContain("severityThreshold");
+    expect(body).toContain("/fletcher again");
+  });
+
   it("shows the legal pages as signed in when there is a session", async () => {
     const response = await request("/privacy", await sessionCookie([3001]));
 

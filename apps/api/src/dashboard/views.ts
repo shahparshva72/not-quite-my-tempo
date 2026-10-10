@@ -244,9 +244,10 @@ export const landingPage = (offer: PaidPlanOffer) =>
           ${feature(
             icon("refresh"),
             "Ask again",
-            html`Comment <code>/fletcher again</code> on a pull request for a
-              fresh review. Add <code>.fletcher.json</code> to tune what he
-              looks at.`,
+            html`Comment <code>/fletcher again</code> on a pull request to retry
+              a failed review. Add
+              <a href="/docs#config"><code>.fletcher.json</code></a> to tune
+              what he looks at.`,
           )}
         </div>
       </section>
