@@ -119,6 +119,50 @@ describe("dashboard", () => {
     expect(body).toContain("limit of 50 reviews in");
   });
 
+  it("gives public pages a canonical URL and a link preview", async () => {
+    for (const path of ["/", "/docs", "/privacy", "/terms"]) {
+      const body = await (await request(path)).text();
+
+      expect(body).toContain(
+        `<link rel="canonical" href="https://notmytempo.dev${path}" />`,
+      );
+      expect(body).toContain(
+        '<meta property="og:image" content="https://notmytempo.dev/og.png" />',
+      );
+      expect(body).toContain(
+        '<meta name="twitter:card" content="summary_large_image" />',
+      );
+      expect(body).toMatch(/<meta name="description" content="[^"]+" \/>/);
+      expect(body).not.toContain("noindex");
+    }
+  });
+
+  it("keeps pages behind sign-in out of search, pointing them at the landing page", async () => {
+    const signedIn = await (
+      await request("/dashboard", await sessionCookie([3001]))
+    ).text();
+
+    const signedOut = await (await request("/dashboard")).text();
+
+    expect(signedIn).toContain('<meta name="robots" content="noindex" />');
+    expect(signedIn).not.toContain('rel="canonical"');
+    expect(signedOut).toContain(
+      '<link rel="canonical" href="https://notmytempo.dev/" />',
+    );
+  });
+
+  it("lists the public pages for crawlers", async () => {
+    const robots = await (await request("/robots.txt")).text();
+    const sitemap = await request("/sitemap.xml");
+
+    expect(robots).toContain("Disallow: /auth/");
+    expect(robots).toContain("Sitemap: https://notmytempo.dev/sitemap.xml");
+    expect(sitemap.headers.get("content-type")).toContain("application/xml");
+    expect(await sitemap.text()).toContain(
+      "<loc>https://notmytempo.dev/docs</loc>",
+    );
+  });
+
   it("shows the legal pages as signed in when there is a session", async () => {
     const response = await request("/privacy", await sessionCookie([3001]));
 

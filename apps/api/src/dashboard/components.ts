@@ -60,7 +60,7 @@ export const avatar = (login: string, large = false) =>
       referrerpolicy="no-referrer"
   /></span>`;
 
-export type NavItem = "repositories" | "setup";
+export type NavItem = "repositories" | "setup" | "account";
 
 const navLink = (href: string, label: string, current: boolean) =>
   html`<a href="${href}" ${current ? raw('aria-current="page"') : ""}
@@ -94,7 +94,24 @@ const navigation = (login: string | null, active: NavItem | null) =>
     : html`<nav class="nav" aria-label="Main">
         ${navLink("/dashboard", "Repositories", active === "repositories")}
         ${navLink("/onboarding", "Setup", active === "setup")}
+        ${navLink("/account", "Account", active === "account")}
       </nav>`;
+
+export const SITE_URL = "https://notmytempo.dev";
+
+const SITE_DESCRIPTION =
+  "Fletcher is a GitHub App that reviews every pull request in about a " +
+  "minute, with comments on the exact line. Free with your own Gemini key.";
+
+/**
+ * What search engines and link previews see. A page with a `path` is
+ * public: it gets a canonical URL and is indexed. Without one, the page is
+ * behind sign-in and asks not to be indexed.
+ */
+export interface PageMeta {
+  readonly description?: string;
+  readonly path?: string;
+}
 
 /**
  * Page shell. `login` is the signed-in GitHub login, or null on public
@@ -106,45 +123,73 @@ export const layout = (
   login: string | null,
   content: HtmlContent,
   active: NavItem | null = null,
-) => html`<!doctype html>
-  <html lang="en">
-    <head>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <meta name="color-scheme" content="dark" />
-      <meta name="theme-color" content="#0e1c1c" />
-      <title>${title} | Not Quite My Tempo</title>
-      <link rel="preconnect" href="https://fonts.googleapis.com" />
-      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-      <link rel="stylesheet" href="${FONTS_HREF}" />
-      <style>
-        ${raw(styles)}
-      </style>
-    </head>
-    <body>
-      <header class="bar">
-        <div class="shell bar-inner">
-          <a class="wordmark" href="${login === null ? "/" : "/dashboard"}">
-            ${logo}<span class="wordmark-text">Not Quite My Tempo</span>
-          </a>
-          ${navigation(login, active)} ${accountArea(login)}
-        </div>
-      </header>
-      <main><div class="shell">${content}</div></main>
-      <footer class="footer">
-        <div class="shell footer-inner">
-          <p>Not Quite My Tempo. Code review from Fletcher.</p>
-          <nav aria-label="Footer">
-            <a href="/#how">How it works</a>
-            <a href="/#pricing">Pricing</a>
-            <a href="/docs">Docs</a>
-            <a href="/privacy">Privacy</a>
-            <a href="/terms">Terms</a>
-          </nav>
-        </div>
-      </footer>
-    </body>
-  </html>`;
+  meta: PageMeta = {},
+) => {
+  const fullTitle = `${title} | Not Quite My Tempo`;
+  const description = meta.description ?? SITE_DESCRIPTION;
+
+  return html`<!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="color-scheme" content="dark" />
+        <meta name="theme-color" content="#0e1c1c" />
+        <title>${fullTitle}</title>
+        <meta name="description" content="${description}" />
+        ${
+          meta.path === undefined
+            ? raw('<meta name="robots" content="noindex" />')
+            : html`<link rel="canonical" href="${SITE_URL}${meta.path}" />
+                <meta property="og:url" content="${SITE_URL}${meta.path}" />`
+        }
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="Not Quite My Tempo" />
+        <meta property="og:title" content="${fullTitle}" />
+        <meta property="og:description" content="${description}" />
+        <meta property="og:image" content="${SITE_URL}/og.png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta
+          property="og:image:alt"
+          content="Not quite my tempo. Fletcher reviews every pull request, line by line."
+        />
+        <meta name="twitter:card" content="summary_large_image" />
+        <link rel="icon" href="/favicon.ico" sizes="32x32" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="stylesheet" href="${FONTS_HREF}" />
+        <style>
+          ${raw(styles)}
+        </style>
+      </head>
+      <body>
+        <header class="bar">
+          <div class="shell bar-inner">
+            <a class="wordmark" href="${login === null ? "/" : "/dashboard"}">
+              ${logo}<span class="wordmark-text">Not Quite My Tempo</span>
+            </a>
+            ${navigation(login, active)} ${accountArea(login)}
+          </div>
+        </header>
+        <main><div class="shell">${content}</div></main>
+        <footer class="footer">
+          <div class="shell footer-inner">
+            <p>Not Quite My Tempo. Code review from Fletcher.</p>
+            <nav aria-label="Footer">
+              <a href="/#how">How it works</a>
+              <a href="/#pricing">Pricing</a>
+              <a href="/docs">Docs</a>
+              <a href="/privacy">Privacy</a>
+              <a href="/terms">Terms</a>
+            </nav>
+          </div>
+        </footer>
+      </body>
+    </html>`;
+};
 
 /** Page heading with an optional line under it and actions on the right. */
 export const pageHead = (

@@ -9,6 +9,10 @@
   // Serve only on the custom domain: links and redirects are built from the
   // request origin, so a second public hostname must not exist.
   "workers_dev": false,
+  // Icons and the link preview image (tools/brand-assets renders them).
+  // Served before the Worker runs, so they skip its security headers.
+  "assets": { "directory": "./public" },
+  "observability": { "enabled": true },
   // Every 15 minutes: fail reviews whose workflow died (stuck-runs.ts).
   "triggers": { "crons": ["*/15 * * * *"] },
   "workflows": [

@@ -319,4 +319,11 @@ export const docsPage = (login: string | null) =>
         </li>
       </ul>
     </article>`,
+    null,
+    {
+      description:
+        "Set up Fletcher, the pull request reviewer from Not Quite My Tempo: " +
+        "install the GitHub App, pick a model, and tune reviews with .fletcher.json.",
+      path: "/docs",
+    },
   );

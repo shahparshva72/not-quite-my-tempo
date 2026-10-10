@@ -194,6 +194,19 @@ pnpm --filter @not-quite-my-tempo/api exec wrangler secret put POLAR_ACCESS_TOKE
 pnpm --filter @not-quite-my-tempo/api exec wrangler secret put POLAR_WEBHOOK_SECRET
 ```
 
+## Deleting accounts and workspace data
+
+Signed-in users can delete their account at `/account`; it removes their
+user, sessions, and roles, and revokes the App's authorization on GitHub.
+Owners can delete a workspace's data from its settings: Fletcher uninstalls
+the GitHub App from the account (`DELETE /app/installations/{id}`), then
+deletes its repositories, reviews, findings, members, audit history, and
+API key. A subscription that still renews must be cancelled first. The
+workspace row stays with the account ID, billing references, used free
+reviews, and this period's used plan credits, so reinstalling resets
+neither. See [docs/ACCOUNT_DELETION.md](docs/ACCOUNT_DELETION.md). It needs
+migration `0017`, which the deploy job applies before deploying.
+
 Lint and format the workspace with Oxlint and Oxfmt:
 
 ```sh

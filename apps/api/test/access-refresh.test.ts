@@ -86,6 +86,7 @@ const oauthLayer = (
         return answer;
       },
       isOrgOwner: () => Effect.succeed(false),
+      revokeGrant: () => Effect.void,
     }),
   );
 

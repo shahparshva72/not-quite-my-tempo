@@ -234,3 +234,63 @@ export const GitHubAppAuthLive = (config: GitHubAppAuthConfig) =>
         mintInstallationToken(config, installationId),
     }),
   );
+
+export class GitHubAppUninstallError extends Data.TaggedError(
+  "GitHubAppUninstallError",
+)<{
+  readonly status: number;
+}> {}
+
+export interface GitHubAppInstallationsService {
+  /**
+   * Uninstalls the App from a GitHub account, so GitHub stops sending its
+   * webhooks. An installation that's already gone (404) counts as removed.
+   */
+  readonly uninstall: (
+    installationId: number,
+  ) => Effect.Effect<
+    void,
+    GitHubAppJwtError | GitHubApiRequestError | GitHubAppUninstallError
+  >;
+}
+
+export class GitHubAppInstallations extends Context.Tag(
+  "@not-quite-my-tempo/api/GitHubAppInstallations",
+)<GitHubAppInstallations, GitHubAppInstallationsService>() {}
+
+const uninstall = (config: GitHubAppAuthConfig, installationId: number) =>
+  Effect.gen(function* () {
+    const jwt = yield* createAppJwt(config.appId, config.privateKey);
+    const baseUrl = config.baseUrl ?? GITHUB_API_BASE_URL;
+
+    const fetchImpl =
+      config.fetchImpl ??
+      ((input: RequestInfo | URL, init?: RequestInit) =>
+        globalThis.fetch(input, init));
+
+    const response = yield* Effect.tryPromise({
+      try: () =>
+        fetchImpl(`${baseUrl}/app/installations/${installationId}`, {
+          method: "DELETE",
+          headers: {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${jwt}`,
+            "user-agent": USER_AGENT,
+            "x-github-api-version": GITHUB_API_VERSION,
+          },
+        }),
+      catch: (cause) => new GitHubApiRequestError({ cause }),
+    });
+
+    if (!response.ok && response.status !== 404) {
+      return yield* new GitHubAppUninstallError({ status: response.status });
+    }
+  });
+
+export const GitHubAppInstallationsLive = (config: GitHubAppAuthConfig) =>
+  Layer.succeed(
+    GitHubAppInstallations,
+    GitHubAppInstallations.of({
+      uninstall: (installationId) => uninstall(config, installationId),
+    }),
+  );

@@ -10,6 +10,7 @@ import {
   ne,
   sql,
 } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { Array, Data, Effect, Option } from "effect";
 
 import { databaseEffect, DatabaseError } from "../errors.js";
@@ -23,6 +24,7 @@ import {
 import { findings } from "../schema/findings.js";
 import { reviewRunRetries } from "../schema/review-run-retries.js";
 import { repositories } from "../schema/repositories.js";
+import { workspaces } from "../schema/workspaces.js";
 import { Database } from "../services/database.js";
 
 export type ReviewRun = typeof reviewRuns.$inferSelect;
@@ -47,23 +49,21 @@ export interface TrialUsage {
 }
 
 /**
- * A free trial review counts while its run is queued, running, or
- * completed on the platform key. Failed and cancelled runs never count, so
- * people aren't charged for reviews they didn't get, and nothing has to be
- * refunded. See docs/BYOK_TRIAL_DESIGN.md.
+ * Free trial reviews a workspace has used, as a scalar subquery. A free
+ * trial review counts while its run is queued, running, or completed on
+ * the platform key. Failed and cancelled runs never count, so people aren't
+ * charged for reviews they didn't get, and nothing has to be refunded. See
+ * docs/BYOK_TRIAL_DESIGN.md. Reviews whose runs were deleted with the
+ * workspace's data are carried on the workspace (docs/ACCOUNT_DELETION.md).
+ * Aliased so it can sit inside an UPDATE of review_runs.
  */
-const countedTrialRun = and(
-  eq(reviewRuns.keySource, "platform"),
-  inArray(reviewRuns.status, ["queued", "running", "completed"]),
-);
-
-// Counted trial runs charged to a workspace, as a subquery (aliased so it
-// can sit inside an UPDATE of review_runs).
-const trialRunCount = (workspaceId: number) =>
-  sql`select count(*) from review_runs as counted
-      where counted.trial_workspace_id = ${workspaceId}
-        and counted.key_source = 'platform'
-        and counted.status in ('queued', 'running', 'completed')`;
+const trialReviewsUsedBy = (workspaceId: SQL | number) =>
+  sql`(select count(*) from review_runs as counted
+        where counted.trial_workspace_id = ${workspaceId}
+          and counted.key_source = 'platform'
+          and counted.status in ('queued', 'running', 'completed'))
+      + coalesce((select carried.trial_reviews_carried from workspaces as carried
+          where carried.id = ${workspaceId}), 0)`;
 
 // Free trial reviews started across every workspace since a moment, as a
 // subquery: the platform-wide brake on trial spend. A run counts from when
@@ -78,14 +78,19 @@ const trialRunsSince = (since: Date) =>
  * Paid-plan credits (× 100) a workspace has used in a billing period, as a
  * subquery. Like the trial, a claim counts while its run is queued,
  * running, or completed, so a failed review refunds itself
- * (docs/MULTI_PROVIDER_BYOK_DESIGN.md, "Counting and claiming").
+ * (docs/MULTI_PROVIDER_BYOK_DESIGN.md, "Counting and claiming"). Credits
+ * whose runs were deleted with the workspace's data are carried on the
+ * workspace for their period (docs/ACCOUNT_DELETION.md).
  */
 const creditsUsedSql = (workspaceId: number, periodStart: Date) =>
-  sql`select coalesce(sum(charged.credits_x100), 0) from review_runs as charged
+  sql`select (select coalesce(sum(charged.credits_x100), 0) from review_runs as charged
       where charged.credits_workspace_id = ${workspaceId}
         and charged.credits_period_start = ${periodStart.getTime()}
         and charged.key_source = 'subscription'
-        and charged.status in ('queued', 'running', 'completed')`;
+        and charged.status in ('queued', 'running', 'completed'))
+      + coalesce((select carried.credits_carried_x100 from workspaces as carried
+          where carried.id = ${workspaceId}
+            and carried.credits_carried_period_start = ${periodStart.getTime()}), 0)`;
 
 /** A paid-plan run's charge, claimed before the model call. */
 export interface PlanCreditClaim {
@@ -304,31 +309,27 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
                 and(
                   eq(reviewRuns.id, id),
                   isNull(reviewRuns.keySource),
-                  sql`(${trialRunCount(workspaceId)}) < ${limit}`,
+                  sql`(${trialReviewsUsedBy(workspaceId)}) < ${limit}`,
                   sql`(${trialRunsSince(dailyCap.since)}) < ${dailyCap.limit}`,
                 ),
               )
               .returning({ id: reviewRuns.id })
               .get(),
           ).pipe(Effect.map((row) => row !== undefined)),
-        /** Free trial reviews each workspace has used (see trialRunCount). */
+        /** Free trial reviews each workspace has used (see trialReviewsUsedBy). */
         trialReviewsUsed: (workspaceIds: readonly number[]) =>
           workspaceIds.length === 0
             ? Effect.succeed<readonly TrialUsage[]>([])
             : databaseEffect("review_runs.trial_reviews_used", () =>
                 client
                   .select({
-                    workspaceId: reviewRuns.trialWorkspaceId,
-                    used: count(),
+                    workspaceId: workspaces.id,
+                    used: sql<number>`${trialReviewsUsedBy(sql`${workspaces.id}`)}`,
                   })
-                  .from(reviewRuns)
+                  .from(workspaces)
                   .where(
-                    and(
-                      countedTrialRun,
-                      sql`${reviewRuns.trialWorkspaceId} in (select value from json_each(${JSON.stringify(workspaceIds)}))`,
-                    ),
+                    sql`${workspaces.id} in (select value from json_each(${JSON.stringify(workspaceIds)}))`,
                   )
-                  .groupBy(reviewRuns.trialWorkspaceId)
                   .all(),
               ).pipe(
                 Effect.map((rows) =>
