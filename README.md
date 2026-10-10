@@ -201,11 +201,11 @@ user, sessions, and roles, and revokes the App's authorization on GitHub.
 Owners can delete a workspace's data from its settings: Fletcher uninstalls
 the GitHub App from the account (`DELETE /app/installations/{id}`), then
 deletes its repositories, reviews, findings, members, audit history, and
-Gemini key. A subscription that still renews must be cancelled first. The
-workspace row stays with the account ID, billing references, and used free
-reviews, so reinstalling doesn't restart the trial. See
-[docs/ACCOUNT_DELETION.md](docs/ACCOUNT_DELETION.md). Apply migration
-`0015` (`pnpm db:migrate:remote`) before deploying this.
+API key. A subscription that still renews must be cancelled first. The
+workspace row stays with the account ID, billing references, used free
+reviews, and this period's used plan credits, so reinstalling resets
+neither. See [docs/ACCOUNT_DELETION.md](docs/ACCOUNT_DELETION.md). It needs
+migration `0017`, which the deploy job applies before deploying.
 
 Lint and format the workspace with Oxlint and Oxfmt:
 

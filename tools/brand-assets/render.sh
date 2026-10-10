@@ -17,7 +17,8 @@ shot() {
 
 shot og.html 1200,630 "$out/og.png"
 # Chrome won't make a window smaller than about 500px, so icons are
-# rendered at 512 and scaled down with sips (macOS).
+# rendered at 512 and scaled down with sips (macOS). icon-512.png is kept
+# as the square logo to upload to Product Hunt and the GitHub App.
 shot icon.html 512,512 "$out/icon-512.png"
 shot "icon.html#square" 512,512 "$out/apple-touch-icon.png"
 sips -z 180 180 "$out/apple-touch-icon.png" >/dev/null
