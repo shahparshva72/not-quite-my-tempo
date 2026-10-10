@@ -46,7 +46,9 @@ const baseInput: RepositoryContextInput = {
 };
 
 interface FakeRepository {
+  /** Files at the pull request head, and on main unless `defaultTree` is set. */
   readonly tree: readonly RepositoryTreeEntry[];
+  readonly defaultTree?: readonly RepositoryTreeEntry[];
   /** Content by `${gitRef}:${path}`. */
   readonly files: Readonly<Record<string, string>>;
   readonly failingPaths?: readonly string[];
@@ -82,7 +84,12 @@ const fakeClient = (repository: FakeRepository, reads: string[] = []) =>
           Option.fromNullable(repository.files[`${gitRef}:${path}`]),
         );
       },
-      fetchTree: () => Effect.succeed(repository.tree),
+      fetchTree: (_token, _ref, gitRef) =>
+        Effect.succeed(
+          gitRef === "main"
+            ? (repository.defaultTree ?? repository.tree)
+            : repository.tree,
+        ),
     }),
   );
 
@@ -143,6 +150,39 @@ describe("fetchRepositoryContext", () => {
       },
     ]);
     expect(reads).not.toContain("head789:AGENTS.md");
+  });
+
+  it("still reads guidelines the pull request deletes", async () => {
+    const context = await run(
+      {
+        tree: [blob("apps/api/src/tempo.ts")],
+        defaultTree: [blob("AGENTS.md"), blob("apps/api/AGENTS.md")],
+        files: {
+          "main:AGENTS.md": "Root rules.",
+          "main:apps/api/AGENTS.md": "API rules.",
+        },
+      },
+      {
+        ...baseInput,
+        diff:
+          baseInput.diff +
+          [
+            "diff --git a/AGENTS.md b/AGENTS.md",
+            "deleted file mode 100644",
+            "index 1111111..0000000",
+            "--- a/AGENTS.md",
+            "+++ /dev/null",
+            "@@ -1,1 +0,0 @@",
+            "-Root rules.",
+            "",
+          ].join("\n"),
+      },
+    );
+
+    expect(context?.guidelines.map((file) => file.path)).toEqual([
+      "AGENTS.md",
+      "apps/api/AGENTS.md",
+    ]);
   });
 
   it("uses only the configured guideline globs when set", async () => {

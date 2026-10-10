@@ -378,10 +378,11 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           return { blocked: true } as const;
         }
 
-        const repositoryContext = yield* runStep(
-          step,
-          "fetch repository context",
-          withInstallationToken(request.installationId, (token) =>
+        // Fetched inside the review step, not a step of its own, so the
+        // repository's files never become persisted step output.
+        const repositoryContext = withInstallationToken(
+          request.installationId,
+          (token) =>
             fetchRepositoryContext({
               installationToken: token,
               ref: {
@@ -394,8 +395,7 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
               diff: pullRequest.diff,
               guidelines: pullRequest.config.guidelines ?? null,
             }),
-          ).pipe(Effect.provide(pullRequestLayer)),
-        );
+        ).pipe(Effect.provide(pullRequestLayer));
 
         // The key is looked up and decrypted inside this step so it never
         // appears in a persisted step output.
@@ -410,12 +410,17 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           ).pipe(
             Effect.provide(databaseLayer),
             Effect.flatMap((key) =>
-              performGeminiReview(
-                request,
-                pullRequest,
-                priorReview,
-                repositoryContext,
-              ).pipe(Effect.provide(ReviewerLive(key))),
+              repositoryContext.pipe(
+                Effect.flatMap((context) =>
+                  performGeminiReview(
+                    request,
+                    pullRequest,
+                    priorReview,
+                    context,
+                  ),
+                ),
+                Effect.provide(ReviewerLive(key)),
+              ),
             ),
             // Problems with a workspace's own key are the workspace's to
             // fix, so they get their own codes and messages.

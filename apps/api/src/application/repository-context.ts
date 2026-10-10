@@ -259,26 +259,40 @@ export const fetchRepositoryContext = (input: RepositoryContextInput) =>
         concurrency: FETCH_CONCURRENCY,
       }).pipe(Effect.map((files) => files.flatMap(Option.toArray)));
 
-    const tree = yield* client
-      .fetchTree(input.installationToken, input.ref, input.headSha)
-      .pipe(
+    const listFiles = (gitRef: string) =>
+      client.fetchTree(input.installationToken, input.ref, gitRef).pipe(
         Effect.map(Option.some),
         Effect.catchAll((error) =>
           logError("repository_context_tree_failed", {
+            gitRef,
             errorCode: error._tag,
           }).pipe(Effect.as(Option.none<readonly RepositoryTreeEntry[]>())),
         ),
       );
 
-    if (Option.isNone(tree)) {
+    // Guidelines are discovered on the default branch too: a pull request
+    // that deletes or renames AGENTS.md must still be held to it.
+    const [headTree, defaultTree] = yield* Effect.all(
+      [listFiles(input.headSha), listFiles(input.defaultBranch)],
+      { concurrency: "unbounded" },
+    );
+
+    if (Option.isNone(headTree) && Option.isNone(defaultTree)) {
       return null;
     }
 
     const sizes = new Map(
-      tree.value.map((entry) => [entry.path, entry.sizeBytes]),
+      Option.getOrElse(headTree, () => []).map((entry) => [
+        entry.path,
+        entry.sizeBytes,
+      ]),
     );
 
     const blobPaths = [...sizes.keys()];
+
+    const defaultBranchPaths = Option.getOrElse(defaultTree, () => []).map(
+      (entry) => entry.path,
+    );
 
     const changedFiles = parseUnifiedDiff(input.diff).filter(
       (file) => file.status !== "removed" && file.hunks.length > 0,
@@ -303,10 +317,11 @@ export const fetchRepositoryContext = (input: RepositoryContextInput) =>
     const [guidelines, manifests, files] = yield* Effect.all(
       [
         readFiles(
-          guidelinePaths(input.guidelines, blobPaths, changedPaths).slice(
-            0,
-            MAX_GUIDELINE_FILES,
-          ),
+          guidelinePaths(
+            input.guidelines,
+            defaultBranchPaths,
+            changedPaths,
+          ).slice(0, MAX_GUIDELINE_FILES),
           input.defaultBranch,
           GUIDELINES_MAX_BYTES,
         ),
