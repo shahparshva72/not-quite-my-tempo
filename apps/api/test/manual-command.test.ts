@@ -11,7 +11,14 @@ import type { ReviewWorkflowParams } from "../src/application/review-requests";
 import { GitHubAppAuth } from "../src/github/app-auth";
 import { decodeIssueCommentBody } from "../src/github/manual-command";
 import type { ManualReviewCommand } from "../src/github/manual-command";
-import { GitHubPullRequestClient } from "../src/github/pull-request-client";
+import {
+  GitHubPullRequestClient,
+  ReviewSubmitResponseError,
+} from "../src/github/pull-request-client";
+import type {
+  PullRequestRef,
+  ReviewSubmitError,
+} from "../src/github/pull-request-client";
 import { resetAndSeedRepository } from "./database";
 
 const issueCommentPayload = (
@@ -27,7 +34,7 @@ const issueCommentPayload = (
 
   return {
     action: "created",
-    comment: { body, author_association: authorAssociation },
+    comment: { id: 5001, body, author_association: authorAssociation },
     issue,
     installation: { id: 1001 },
     repository: {
@@ -65,6 +72,7 @@ describe("decodeIssueCommentBody", () => {
       repo: "app",
       defaultBranch: "main",
       pullRequestNumber: 42,
+      commentId: 5001,
     });
   });
 
@@ -111,10 +119,21 @@ describe("handleManualReviewCommand", () => {
     repo: "app",
     defaultBranch: "main",
     pullRequestNumber: 42,
+    commentId: 5001,
   };
 
-  it("resolves the head SHA and queues a manual review run", async () => {
+  interface Reaction {
+    readonly token: string;
+    readonly ref: PullRequestRef;
+    readonly commentId: number;
+    readonly content: string;
+  }
+
+  const runCommand = (
+    reactionResult: Effect.Effect<void, ReviewSubmitError> = Effect.void,
+  ) => {
     const startedParams: ReviewWorkflowParams[] = [];
+    const reactions: Reaction[] = [];
 
     const stubAuthLayer = Layer.succeed(
       GitHubAppAuth,
@@ -139,6 +158,10 @@ describe("handleManualReviewCommand", () => {
         createReview: () => Effect.succeed({ reviewId: 1 }),
         listReviewComments: () => Effect.succeed([]),
         createIssueComment: () => Effect.void,
+        createCommentReaction: (token, ref, commentId, content) =>
+          Effect.sync(() => {
+            reactions.push({ token, ref, commentId, content });
+          }).pipe(Effect.zipRight(reactionResult)),
         fetchRepositoryFile: () => Effect.succeed(Option.none()),
       }),
     );
@@ -154,7 +177,7 @@ describe("handleManualReviewCommand", () => {
       }),
     );
 
-    const result = await Effect.runPromise(
+    return Effect.runPromise(
       Effect.gen(function* () {
         const outcome = yield* handleManualReviewCommand(command);
 
@@ -166,7 +189,12 @@ describe("handleManualReviewCommand", () => {
           "manual789",
         );
 
-        return { outcome, run: Option.getOrNull(run) };
+        return {
+          outcome,
+          run: Option.getOrNull(run),
+          startedParams,
+          reactions,
+        };
       }).pipe(
         Effect.provide(makeLiveLayer(env.DB)),
         Effect.provide(stubAuthLayer),
@@ -174,6 +202,10 @@ describe("handleManualReviewCommand", () => {
         Effect.provide(stubWorkflowLayer),
       ),
     );
+  };
+
+  it("resolves the head SHA and queues a manual review run", async () => {
+    const result = await runCommand();
 
     expect(result.outcome).toMatchObject({ status: "queued" });
     expect(result.run).toMatchObject({
@@ -181,9 +213,44 @@ describe("handleManualReviewCommand", () => {
       headSha: "manual789",
       status: "queued",
     });
-    expect(startedParams[0]?.request).toMatchObject({
+    expect(result.startedParams[0]?.request).toMatchObject({
       trigger: "manual",
       headSha: "manual789",
     });
+    // The comment ID is for the reaction only, not the persisted request.
+    expect(result.startedParams[0]?.request).not.toHaveProperty("commentId");
+  });
+
+  it("reacts to the comment with eyes once the review is queued", async () => {
+    const result = await runCommand();
+
+    expect(result.reactions).toEqual([
+      {
+        token: "ghs_manual",
+        ref: { owner: "not-my-tempo", repo: "app", pullRequestNumber: 42 },
+        commentId: 5001,
+        content: "eyes",
+      },
+    ]);
+  });
+
+  it("doesn't react when the commit already has a review", async () => {
+    await runCommand();
+
+    const repeat = await runCommand();
+
+    expect(repeat.outcome).toMatchObject({ status: "already_processed" });
+    expect(repeat.reactions).toEqual([]);
+  });
+
+  it("still queues the review when the reaction fails", async () => {
+    const result = await runCommand(
+      Effect.fail(
+        new ReviewSubmitResponseError({ status: 403, body: "forbidden" }),
+      ),
+    );
+
+    expect(result.outcome).toMatchObject({ status: "queued" });
+    expect(result.reactions).toHaveLength(1);
   });
 });
