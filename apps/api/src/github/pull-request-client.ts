@@ -69,7 +69,7 @@ const PullRequestDetailsResponse = Schema.Struct({
 });
 
 /** The reactions Fletcher uses on comments. */
-export type CommentReaction = "eyes";
+export type CommentReaction = "eyes" | "+1";
 
 export interface PullRequestDetails {
   readonly title: string;

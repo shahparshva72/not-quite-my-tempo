@@ -5,6 +5,7 @@ import {
   Effect,
   Inspectable,
   Layer,
+  Match,
   Option,
   Schema,
 } from "effect";
@@ -14,9 +15,11 @@ import {
   ReviewRunCreation,
   ReviewRunRepository,
 } from "@not-quite-my-tempo/db";
+import type { ReviewRunStatus } from "@not-quite-my-tempo/db";
 
 import { GitHubAppAuth } from "../github/app-auth.js";
 import { GitHubPullRequestClient } from "../github/pull-request-client.js";
+import type { CommentReaction } from "../github/pull-request-client.js";
 import { ReviewRequest } from "../github/review-request.js";
 import { logError, logInfo } from "../logging.js";
 import type { ManualReviewCommand } from "../github/manual-command.js";
@@ -78,7 +81,12 @@ export const ReviewWorkflowLive = (
 
 type QueueOutcome =
   | { readonly status: "queued"; readonly reviewRunId: number }
-  | { readonly status: "already_processed"; readonly reviewRunId: number };
+  | {
+      readonly status: "already_processed";
+      readonly reviewRunId: number;
+      /** The existing run's status, so callers can say whether it's busy. */
+      readonly runStatus: ReviewRunStatus;
+    };
 
 // Per-installation cost guardrail: at most this many review runs per
 // rolling 24 hours before deliveries are acknowledged without a review.
@@ -86,12 +94,17 @@ export const DAILY_REVIEW_RUN_CAP = 50;
 
 const DAY_MILLIS = 24 * 60 * 60 * 1000;
 
+const RATE_LIMITED_REPLY = `### 🥁 Not now
+
+Fletcher has hit this account's limit of ${DAILY_REVIEW_RUN_CAP} reviews in 24 hours. Comment \`/fletcher again\` later to try once more.`;
+
 /**
  * Handles a `/fletcher again` comment: resolves the pull request's current
  * head SHA as the GitHub App installation and enqueues a `manual` review
- * through the normal path (idempotency and the daily cap both apply). When
- * a review is queued, Fletcher reacts to the comment with 👀 so the
- * commenter knows it's under way.
+ * through the normal path (idempotency and the daily cap both apply).
+ * Fletcher always answers the comment, so the commenter knows it was heard:
+ * 👀 while a review of the commit is queued or running, 👍 when the commit
+ * already has a finished review, and a reply when the daily cap is hit.
  */
 export const handleManualReviewCommand = ({
   commentId,
@@ -125,24 +138,36 @@ export const handleManualReviewCommand = ({
       trigger: "manual",
     });
 
-    // Only a queued review gets the reaction: a duplicate, rate-limited, or
-    // disabled request isn't being worked on. The reaction is a courtesy,
-    // so failing to add it never fails the review, and it may not hold up
-    // the webhook response.
-    if (outcome.status === "queued") {
-      yield* client
-        .createCommentReaction(token.token, ref, commentId, "eyes")
-        .pipe(
-          Effect.timeout("5 seconds"),
-          Effect.catchAll((error) =>
-            logError("manual_review_reaction_failed", {
-              ...fields,
-              commentId,
-              error: Inspectable.toStringUnknown(error),
-            }),
-          ),
-        );
-    }
+    // The answer is a courtesy: failing to post it never fails the review,
+    // and it may not hold up the webhook response. A disabled repository or
+    // inactive installation gets no answer, as it gets no reviews.
+    const react = (content: CommentReaction) =>
+      client.createCommentReaction(token.token, ref, commentId, content);
+
+    const answer = Match.value(outcome).pipe(
+      Match.discriminatorsExhaustive("status")({
+        queued: () => react("eyes"),
+        already_processed: ({ runStatus }) =>
+          runStatus === "queued" || runStatus === "running"
+            ? react("eyes")
+            : react("+1"),
+        rate_limited: () =>
+          client.createIssueComment(token.token, ref, RATE_LIMITED_REPLY),
+        ignored: () => Effect.void,
+      }),
+    );
+
+    yield* answer.pipe(
+      Effect.timeout("5 seconds"),
+      Effect.catchAll((error) =>
+        logError("manual_review_answer_failed", {
+          ...fields,
+          commentId,
+          outcome: outcome.status,
+          error: Inspectable.toStringUnknown(error),
+        }),
+      ),
+    );
 
     return outcome;
   });
@@ -245,9 +270,10 @@ export const handleReviewRequest = (
 
     const alreadyProcessed = (
       reviewRunId: number,
+      runStatus: ReviewRunStatus,
     ): Effect.Effect<QueueOutcome> =>
       logInfo("github_webhook_duplicate", { ...fields, reviewRunId }).pipe(
-        Effect.as({ status: "already_processed", reviewRunId }),
+        Effect.as({ status: "already_processed", reviewRunId, runStatus }),
       );
 
     return yield* ReviewRunCreation.$match(result, {
@@ -259,13 +285,14 @@ export const handleReviewRequest = (
           ? ReviewRunRepository.requeueFailed(reviewRun.id).pipe(
               Effect.flatMap(
                 Option.match({
-                  onNone: () => alreadyProcessed(reviewRun.id),
+                  // A concurrent "/fletcher again" requeued it first.
+                  onNone: () => alreadyProcessed(reviewRun.id, "queued"),
                   onSome: (requeued) =>
                     startWorkflow(requeued.id, requeued.attempt),
                 }),
               ),
             )
-          : alreadyProcessed(reviewRun.id),
+          : alreadyProcessed(reviewRun.id, reviewRun.status),
       Created: ({ reviewRun }) =>
         startWorkflow(reviewRun.id, reviewRun.attempt),
     });

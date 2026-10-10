@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { makeLiveLayer, ReviewRunRepository } from "@not-quite-my-tempo/db";
 
 import {
+  DAILY_REVIEW_RUN_CAP,
   handleManualReviewCommand,
   ReviewWorkflow,
 } from "../src/application/review-requests";
@@ -134,6 +135,7 @@ describe("handleManualReviewCommand", () => {
   ) => {
     const startedParams: ReviewWorkflowParams[] = [];
     const reactions: Reaction[] = [];
+    const comments: string[] = [];
 
     const stubAuthLayer = Layer.succeed(
       GitHubAppAuth,
@@ -157,7 +159,10 @@ describe("handleManualReviewCommand", () => {
           }),
         createReview: () => Effect.succeed({ reviewId: 1 }),
         listReviewComments: () => Effect.succeed([]),
-        createIssueComment: () => Effect.void,
+        createIssueComment: (_token, _ref, body) =>
+          Effect.sync(() => {
+            comments.push(body);
+          }),
         createCommentReaction: (token, ref, commentId, content) =>
           Effect.sync(() => {
             reactions.push({ token, ref, commentId, content });
@@ -194,6 +199,7 @@ describe("handleManualReviewCommand", () => {
           run: Option.getOrNull(run),
           startedParams,
           reactions,
+          comments,
         };
       }).pipe(
         Effect.provide(makeLiveLayer(env.DB)),
@@ -234,13 +240,70 @@ describe("handleManualReviewCommand", () => {
     ]);
   });
 
-  it("doesn't react when the commit already has a review", async () => {
+  it("reacts with eyes while the commit's review is still in progress", async () => {
     await runCommand();
 
     const repeat = await runCommand();
 
-    expect(repeat.outcome).toMatchObject({ status: "already_processed" });
-    expect(repeat.reactions).toEqual([]);
+    expect(repeat.outcome).toMatchObject({
+      status: "already_processed",
+      runStatus: "queued",
+    });
+    expect(repeat.reactions.map((reaction) => reaction.content)).toEqual([
+      "eyes",
+    ]);
+    expect(repeat.startedParams).toEqual([]);
+  });
+
+  it("reacts with +1 when the commit already has a finished review", async () => {
+    const first = await runCommand();
+
+    await env.DB.prepare(
+      "UPDATE review_runs SET status = 'completed' WHERE id = ?",
+    )
+      .bind(first.run?.id)
+      .run();
+
+    const repeat = await runCommand();
+
+    expect(repeat.outcome).toMatchObject({
+      status: "already_processed",
+      runStatus: "completed",
+    });
+    expect(repeat.reactions.map((reaction) => reaction.content)).toEqual([
+      "+1",
+    ]);
+    expect(repeat.comments).toEqual([]);
+  });
+
+  it("replies instead of reacting when the daily cap is hit", async () => {
+    for (let index = 0; index < DAILY_REVIEW_RUN_CAP; index += 1) {
+      await Effect.runPromise(
+        ReviewRunRepository.create({
+          repositoryId: 1,
+          pullRequestNumber: 7,
+          headSha: `busy${index}`,
+          trigger: "opened",
+        }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+      );
+    }
+
+    const result = await runCommand();
+
+    expect(result.outcome).toEqual({ status: "rate_limited" });
+    expect(result.reactions).toEqual([]);
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]).toContain(`${DAILY_REVIEW_RUN_CAP} reviews`);
+  });
+
+  it("stays quiet when reviews are off for the repository", async () => {
+    await env.DB.prepare("UPDATE repositories SET enabled = 0").run();
+
+    const result = await runCommand();
+
+    expect(result.outcome).toEqual({ status: "ignored" });
+    expect(result.reactions).toEqual([]);
+    expect(result.comments).toEqual([]);
   });
 
   it("still queues the review when the reaction fails", async () => {

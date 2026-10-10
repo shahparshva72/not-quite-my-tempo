@@ -152,6 +152,7 @@ describe("/fletcher again on the same commit", () => {
     expect(await handle(request("manual", "done"), created)).toEqual({
       status: "already_processed",
       reviewRunId: completed,
+      runStatus: "completed",
     });
 
     const failed = runIdOf(await handle(request("opened", "broken"), created));
@@ -161,6 +162,7 @@ describe("/fletcher again on the same commit", () => {
     expect(await handle(request("synchronize", "broken"), created)).toEqual({
       status: "already_processed",
       reviewRunId: failed,
+      runStatus: "failed",
     });
     expect(await findingCount(failed)).toBe(1);
   });
