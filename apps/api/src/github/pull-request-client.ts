@@ -68,6 +68,9 @@ const PullRequestDetailsResponse = Schema.Struct({
   head: Schema.Struct({ sha: Schema.NonEmptyString }),
 });
 
+/** The reactions Fletcher uses on comments. */
+export type CommentReaction = "eyes" | "+1";
+
 export interface PullRequestDetails {
   readonly title: string;
   readonly body: string | null;
@@ -135,6 +138,13 @@ export interface GitHubPullRequestClientService {
     installationToken: string,
     ref: PullRequestRef,
     body: string,
+  ) => Effect.Effect<void, ReviewSubmitError>;
+  /** Adds a reaction to a conversation comment on the pull request. */
+  readonly createCommentReaction: (
+    installationToken: string,
+    ref: PullRequestRef,
+    commentId: number,
+    content: CommentReaction,
   ) => Effect.Effect<void, ReviewSubmitError>;
   readonly fetchRepositoryFile: (
     installationToken: string,
@@ -336,6 +346,13 @@ export const GitHubPullRequestClientLive = (
           installationToken,
           `/repos/${ref.owner}/${ref.repo}/issues/${ref.pullRequestNumber}/comments`,
           { method: "POST", body: JSON.stringify({ body }) },
+        ).pipe(Effect.asVoid),
+      createCommentReaction: (installationToken, ref, commentId, content) =>
+        submitRequest(
+          config,
+          installationToken,
+          `/repos/${ref.owner}/${ref.repo}/issues/comments/${commentId}/reactions`,
+          { method: "POST", body: JSON.stringify({ content }) },
         ).pipe(Effect.asVoid),
       fetchRepositoryFile: (installationToken, ref, filePath, gitRef) =>
         Effect.gen(function* () {

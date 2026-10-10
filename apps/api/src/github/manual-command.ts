@@ -7,6 +7,7 @@ export const MANUAL_REVIEW_COMMAND = "/fletcher again";
 const IssueCommentWebhook = Schema.Struct({
   action: Schema.Literal("created"),
   comment: Schema.Struct({
+    id: GitHubId,
     body: Schema.String,
     author_association: Schema.String,
   }),
@@ -37,6 +38,8 @@ export interface ManualReviewCommand {
   readonly repo: string;
   readonly defaultBranch: string;
   readonly pullRequestNumber: number;
+  /** The `/fletcher again` comment, so Fletcher can react to it. */
+  readonly commentId: number;
 }
 
 /**
@@ -70,6 +73,7 @@ export const decodeIssueCommentBody = (
             repo: payload.repository.name,
             defaultBranch: payload.repository.default_branch,
             pullRequestNumber: payload.issue.number,
+            commentId: payload.comment.id,
           })
         : Option.none(),
     );

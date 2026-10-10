@@ -297,3 +297,33 @@ describe("GitHubPullRequestClient.fetchDetails", () => {
     expect(error._tag).toBe("PullRequestRequestError");
   });
 });
+
+describe("GitHubPullRequestClient.createCommentReaction", () => {
+  it("posts the reaction to the issue comment", async () => {
+    const requests: { url: string; init: RequestInit | undefined }[] = [];
+
+    const fetchImpl: typeof fetch = (input, init) => {
+      requests.push({ url: String(input), init });
+
+      return Promise.resolve(
+        new Response(JSON.stringify({ id: 1, content: "eyes" }), {
+          status: 201,
+        }),
+      );
+    };
+
+    await Effect.runPromise(
+      withClient({ baseUrl: "https://github.test", fetchImpl }, (client) =>
+        client.createCommentReaction("ghs_token", ref, 5001, "eyes"),
+      ),
+    );
+
+    expect(requests[0]?.url).toBe(
+      "https://github.test/repos/shaffer/studio-band/issues/comments/5001/reactions",
+    );
+    expect(requests[0]?.init?.method).toBe("POST");
+    expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+      content: "eyes",
+    });
+  });
+});

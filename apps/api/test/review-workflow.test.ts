@@ -298,6 +298,7 @@ describe("fetchReviewablePullRequest", () => {
         createReview: () => Effect.succeed({ reviewId: 1 }),
         listReviewComments: () => Effect.succeed([]),
         createIssueComment: () => Effect.void,
+        createCommentReaction: () => Effect.void,
         fetchRepositoryFile: () => Effect.succeed(configFile),
       }),
     );
@@ -333,6 +334,7 @@ describe("fetchReviewablePullRequest", () => {
               createReview: () => Effect.succeed({ reviewId: 1 }),
               listReviewComments: () => Effect.succeed([]),
               createIssueComment: () => Effect.void,
+              createCommentReaction: () => Effect.void,
               fetchRepositoryFile: (_token, _ref, _path, gitRef) => {
                 gitRefs.push(gitRef);
 
@@ -466,6 +468,7 @@ describe("postReviewToGitHub", () => {
           );
         },
         createIssueComment: () => Effect.void,
+        createCommentReaction: () => Effect.void,
         fetchRepositoryFile: () => Effect.succeed(Option.none()),
       }),
     );

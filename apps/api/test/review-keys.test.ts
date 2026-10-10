@@ -427,6 +427,7 @@ describe("explaining a blocked review", () => {
                 Effect.sync(() => {
                   comments.push(body);
                 }),
+              createCommentReaction: () => Effect.void,
               fetchRepositoryFile: () => Effect.succeed(Option.none()),
             }),
           ),
