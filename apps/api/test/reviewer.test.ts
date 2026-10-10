@@ -202,7 +202,8 @@ describe("Reviewer on the Gemini API", () => {
       generationConfig: {
         responseMimeType: string;
         responseSchema: { required: string[] };
-        temperature: number;
+        temperature?: number;
+        thinkingConfig: { thinkingLevel: string };
       };
     };
 
@@ -214,7 +215,29 @@ describe("Reviewer on the Gemini API", () => {
       "summary",
       "findings",
     ]);
-    expect(body.generationConfig.temperature).toBe(0.2);
+    expect(body.generationConfig.temperature).toBeUndefined();
+    expect(body.generationConfig.thinkingConfig).toEqual({
+      thinkingLevel: "medium",
+    });
+  });
+
+  it("gives Flash-Lite models a low thinking level", async () => {
+    const requests: RecordedRequest[] = [];
+
+    await Effect.runPromise(
+      runReview({
+        model: "gemini-3.5-flash-lite",
+        fetch: fakeFetch(() => geminiResponse(), requests),
+      }),
+    );
+
+    // SAFETY: fakeFetch recorded the JSON body Fletcher sent.
+
+    const body = requests[0]?.body as {
+      generationConfig: { thinkingConfig: { thinkingLevel: string } };
+    };
+
+    expect(body.generationConfig.thinkingConfig.thinkingLevel).toBe("low");
   });
 
   it("sends Vertex AI keys to Vertex AI's express endpoint", async () => {

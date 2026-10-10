@@ -58,8 +58,18 @@ const DEFAULT_TIMEOUT_MILLIS: Readonly<Record<ReviewProvider, number>> = {
 };
 
 // Low temperature keeps findings reproducible; the persona lives in the
-// prompt, not in sampling randomness. Reasoning models reject it.
+// prompt, not in sampling randomness. Reasoning models reject it, and
+// Gemini 3+ isn't sent one: Google warns that values below 1.0 can make it
+// loop or reason worse.
 const GENERATION_TEMPERATURE = 0.2;
+
+/**
+ * How hard Gemini thinks before answering. Set explicitly rather than
+ * left to each model's default (Flash-Lite's is "minimal", too little to
+ * find bugs); "high" would add thinking tokens, billed as output.
+ */
+const geminiThinkingLevel = (model: string) =>
+  model.includes("flash-lite") ? "low" : "medium";
 
 // Enough for a long review; Anthropic requires an explicit cap.
 const ANTHROPIC_MAX_TOKENS = 16_000;
@@ -217,7 +227,7 @@ const geminiRequest = (
       { role: "user", parts: [{ text: buildReviewUserPrompt(input) }] },
     ],
     generationConfig: {
-      temperature: GENERATION_TEMPERATURE,
+      thinkingConfig: { thinkingLevel: geminiThinkingLevel(config.model) },
       responseMimeType: "application/json",
       responseSchema: geminiResponseJsonSchema,
     },
