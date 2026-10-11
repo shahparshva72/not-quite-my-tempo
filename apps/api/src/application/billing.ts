@@ -50,8 +50,7 @@ const statusIn = (
  * Whether reviews may use the platform key without the trial. Only Polar's
  * active and trialing statuses count, and only until shortly after the
  * period the workspace paid for; a plan with no period end never counts.
- * Past-due and canceled plans fall back to the workspace key or trial
- * (docs/BILLING.md).
+ * Past-due and canceled plans fall back to the workspace key or trial.
  */
 export const hasPaidPlan = (workspace: Workspace, now: Date) =>
   statusIn(paidSubscriptionStatuses, workspace.subscriptionStatus) &&

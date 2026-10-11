@@ -188,7 +188,7 @@ export class WorkspaceRepository extends Effect.Service<WorkspaceRepository>()(
          * (installations, repositories, reviews, findings, members, audit
          * history, and the API key) in one batch, leaving the workspace
          * row as a record of the account, its billing references, and its
-         * used free reviews (docs/ACCOUNT_DELETION.md). Free reviews used by
+         * used free reviews. Free reviews used by
          * the deleted runs are carried onto the workspaces they were
          * charged to, so a repository transferred in can't refund another
          * workspace's trial either. Paid-plan credits the workspace's own

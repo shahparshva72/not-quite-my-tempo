@@ -52,9 +52,9 @@ export interface TrialUsage {
  * Free trial reviews a workspace has used, as a scalar subquery. A free
  * trial review counts while its run is queued, running, or completed on
  * the platform key. Failed and cancelled runs never count, so people aren't
- * charged for reviews they didn't get, and nothing has to be refunded. See
- * docs/BYOK_TRIAL_DESIGN.md. Reviews whose runs were deleted with the
- * workspace's data are carried on the workspace (docs/ACCOUNT_DELETION.md).
+ * charged for reviews they didn't get, and nothing has to be refunded.
+ * Reviews whose runs were deleted with the workspace's data are carried
+ * on the workspace.
  * Aliased so it can sit inside an UPDATE of review_runs.
  */
 const trialReviewsUsedBy = (workspaceId: SQL | number) =>
@@ -77,10 +77,9 @@ const trialRunsSince = (since: Date) =>
 /**
  * Paid-plan credits (× 100) a workspace has used in a billing period, as a
  * subquery. Like the trial, a claim counts while its run is queued,
- * running, or completed, so a failed review refunds itself
- * (docs/MULTI_PROVIDER_BYOK_DESIGN.md, "Counting and claiming"). Credits
+ * running, or completed, so a failed review refunds itself. Credits
  * whose runs were deleted with the workspace's data are carried on the
- * workspace for their period (docs/ACCOUNT_DELETION.md).
+ * workspace for their period.
  */
 const creditsUsedSql = (workspaceId: number, periodStart: Date) =>
   sql`select (select coalesce(sum(charged.credits_x100), 0) from review_runs as charged

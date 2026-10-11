@@ -36,8 +36,7 @@ export const ENABLED_VENDORS: ReadonlySet<ModelVendor> = new Set<ModelVendor>([
 ]);
 
 /**
- * Credit tiers on the paid plan (docs/MULTI_PROVIDER_BYOK_DESIGN.md, "Paid
- * plan credits"). "excluded" models are too expensive for the plan and
+ * Credit tiers on the paid plan. "excluded" models are too expensive and
  * only run on a workspace's own key.
  */
 export type ModelTier = "lite" | "standard" | "pro" | "excluded";
@@ -73,8 +72,8 @@ export const DEFAULT_PLAN_CATALOG_MODEL: CatalogModel = {
 
 /**
  * Models Fletcher supports: GPT-5.6+, Claude 5.5+, and Gemini 3.5+. Tiers
- * are reviewed by hand against docs/MODEL_PRICING.md. Order within a
- * vendor is most to least expensive, which is also the downgrade order.
+ * are reviewed by hand against model prices and usage estimates. Order
+ * within a vendor is most to least expensive, also the downgrade order.
  */
 export const MODEL_CATALOG: readonly CatalogModel[] = [
   // OpenAI

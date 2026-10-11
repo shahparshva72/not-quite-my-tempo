@@ -121,7 +121,7 @@ type Bindings = Env & {
   readonly OPENAI_API_KEY?: string;
   readonly ANTHROPIC_API_KEY?: string;
   readonly PLAN_MONTHLY_CREDITS?: string;
-  // Billing is optional: unset means no paid plan (docs/BILLING.md).
+  // Billing is optional: unset means no paid plan.
   readonly POLAR_ACCESS_TOKEN?: string;
   readonly POLAR_WEBHOOK_SECRET?: string;
   readonly POLAR_PRODUCT_ID?: string;
@@ -299,7 +299,7 @@ app.post("/webhooks/github", (c) => {
 
 // Polar subscription events. The signature, not the origin, authenticates
 // them. Each one only triggers a re-read of the workspace's subscriptions
-// from Polar (docs/BILLING.md); failures return 500 so Polar retries.
+// from Polar; failures return 500 so Polar retries.
 app.post("/webhooks/polar", async (c): Promise<Response> => {
   const config = polarConfig(c.env);
 
@@ -350,7 +350,7 @@ app.route("/auth", createAuthRoutes());
 
 /**
  * The signed-in session for this request, with GitHub access re-read when
- * it is older than the refresh interval (docs/WORKSPACES_DESIGN.md).
+ * it is older than the refresh interval.
  */
 const currentSession = (c: AppContext) =>
   Effect.runPromise(

@@ -13,3 +13,5 @@ coverage/
 .agents/
 skills-lock.json
 .dev.vars
+
+/docs/SPEC.md

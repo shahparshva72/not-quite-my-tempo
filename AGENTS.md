@@ -1,5 +1,9 @@
 # AGENTS.md
 
+For product behavior, feature purpose, and future work, read the local,
+Git-ignored `docs/SPEC.md` when available. Keep it private and update it as
+features change. README.md owns setup; this file owns coding instructions.
+
 ## Commands (repo root; pnpm 12, Node per `.nvmrc`)
 
 - Setup: `nvm use` (or `nvm install`), `pnpm install`.
@@ -13,7 +17,7 @@
 
 - `apps/api/src/index.ts` is the only entrypoint (Hono app, default export; also exports `ReviewPullRequestWorkflow`). Routes delegate to Effect via `Effect.runPromise` + `makeLiveLayer(c.env.DB)`.
 - `packages/core`: platform-neutral Effect primitives. `packages/db`: D1/Drizzle layer — schema in `src/schema/**/*.ts`, Effect services in `src/services/`, `src/layers/`, `src/repositories/`. `packages/reviewer`: provider adapters (Gemini/Vertex, OpenAI Responses, Anthropic Messages) behind one `Reviewer` service, plus the model catalog and credit maths (`src/catalog.ts`). All are consumed as source via `workspace:*` + `exports` → `src/*.ts` (no build step).
-- Model calls are hand-written `fetch` adapters, not `@effect/ai`: its v3 providers import tokenizers that don't load in workerd (see `docs/MULTI_PROVIDER_BYOK_DESIGN.md`). Model prices and tiers live in `packages/reviewer/src/catalog.ts`; update them from models.dev, never at runtime.
+- Model calls are hand-written `fetch` adapters, not `@effect/ai`: its v3 providers import tokenizers that don't load in workerd. Model prices and tiers live in `packages/reviewer/src/catalog.ts`; update them from models.dev, never at runtime.
 - Bindings live in `apps/api/wrangler.jsonc`: D1 `DB` (migrations dir `../../packages/db/drizzle`) and Workflow `REVIEW_PULL_REQUEST_WORKFLOW` / `review-pull-request`. `compatibility_date` 2026-09-10.
 
 ## Gotchas

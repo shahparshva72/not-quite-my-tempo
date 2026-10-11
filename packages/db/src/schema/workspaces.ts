@@ -4,8 +4,7 @@ import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { users } from "./users.js";
 
 // One workspace per GitHub account (user or organization), keyed on the
-// immutable account ID so reinstalling the App re-attaches to it. See
-// docs/WORKSPACES_DESIGN.md.
+// immutable account ID so reinstalling the App re-attaches to it.
 // Which API the workspace's own key works with; mirrors ReviewProvider in
 // @not-quite-my-tempo/reviewer (kept dependency-free). The column kept its
 // original name when OpenAI and Anthropic keys were added.
@@ -25,7 +24,6 @@ export const workspaces = sqliteTable("workspaces", {
   // gemini_key_* names predate the other providers), AES-GCM encrypted
   // with TOKEN_ENCRYPTION_KEY (context "workspace:<id>:gemini" for Google
   // keys, "workspace:<id>:<provider>" otherwise). Only last4 is ever shown.
-  // See docs/BYOK_TRIAL_DESIGN.md and docs/MULTI_PROVIDER_BYOK_DESIGN.md.
   geminiKeyCiphertext: text("gemini_key_ciphertext"),
   geminiKeyLast4: text("gemini_key_last4"),
   geminiKeyProvider: text("gemini_key_provider", { enum: reviewKeyProviders }),
@@ -41,7 +39,7 @@ export const workspaces = sqliteTable("workspaces", {
   // The paid plan's model (a catalog model); null means the plan default.
   planModel: text("plan_model"),
   // The workspace's Polar subscription as Fletcher last read it from
-  // Polar's API (docs/BILLING.md). Webhooks only trigger that read, so
+  // Polar's API. Webhooks only trigger that read, so
   // these never come from a webhook payload. subscriptionStatus is Polar's
   // raw status ("active", "past_due", "canceled", ...); only active and
   // trialing count as paid. subscriptionSyncedAt is when the read started,
@@ -64,8 +62,8 @@ export const workspaces = sqliteTable("workspaces", {
     mode: "timestamp_ms",
   }),
   // Counted free trial reviews whose runs were deleted with the workspace's
-  // data. Deleting keeps this row (docs/ACCOUNT_DELETION.md) so deleting
-  // and reinstalling can't reset the trial.
+  // data. Keeping this row prevents deletion and reinstall from resetting
+  // the trial.
   trialReviewsCarried: integer("trial_reviews_carried").notNull().default(0),
   // Paid-plan credits (× 100) the deleted runs had used in their billing
   // period, so deleting mid-period can't refund them either.

@@ -30,7 +30,7 @@ export const accountWorkspaces = (access: SessionAccess) =>
 
 /**
  * Deletes the signed-in user's account: the user, their sessions, and their
- * memberships (docs/ACCOUNT_DELETION.md). Workspaces and their reviews stay;
+ * memberships. Workspaces and their reviews stay;
  * they belong to the GitHub account, and an owner deletes them separately.
  * Then revokes Fletcher's authorization on GitHub, as a best effort: the
  * account is already gone, and people can also revoke it on GitHub.
@@ -79,7 +79,7 @@ export const deleteAccount = (
   });
 
 /**
- * Deletes a workspace's data (owner only, docs/ACCOUNT_DELETION.md):
+ * Deletes a workspace's data (owner only):
  * refuses while a subscription would keep charging, uninstalls the GitHub
  * App from the account, then deletes its repositories, reviews, members,
  * audit history, and API key in one batch. Uninstalling comes first:

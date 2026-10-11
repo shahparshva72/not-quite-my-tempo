@@ -1,6 +1,7 @@
 # Not Quite My Tempo
 
-A pnpm monorepo boilerplate for a Cloudflare Worker API backed by D1, Hono, and Effect.
+A GitHub pull-request reviewer powered by AI, with inline feedback from
+Fletcher. Built on Cloudflare Workers, D1, Hono, and Effect.
 
 ## Structure
 
@@ -88,11 +89,9 @@ For a Vertex AI platform key, set `GEMINI_API_PROVIDER=vertex_express`.
 
 Each workspace gets 5 free reviews on the platform `GEMINI_API_KEY`; after
 that, reviews use the key an admin saves at `/workspaces/:id/settings`
-(stored encrypted with `TOKEN_ENCRYPTION_KEY`). See
-`docs/BYOK_TRIAL_DESIGN.md` and `docs/MULTI_PROVIDER_BYOK_DESIGN.md`.
+(stored encrypted with `TOKEN_ENCRYPTION_KEY`).
 
-Workspaces and roles are described in `docs/WORKSPACES_DESIGN.md`. Sessions
-store the user's GitHub token encrypted with `TOKEN_ENCRYPTION_KEY` so
+Sessions store the user's GitHub token encrypted with `TOKEN_ENCRYPTION_KEY` so
 repository access can be re-checked every 10 minutes:
 
 ```sh
@@ -173,13 +172,12 @@ fixed review persona.
 ## Billing (Polar)
 
 The paid plan includes 200 review credits per billing period on Fletcher's
-platform keys, with Lite, Standard, and Pro Gemini models to choose from (see `docs/MULTI_PROVIDER_BYOK_DESIGN.md`, "Paid
-plan credits"). Reviews on a workspace's own key never use credits. Polar
+platform keys, with Lite, Standard, and Pro Gemini models to choose from.
+Reviews on a workspace's own key never use credits. Polar
 (polar.sh) is the merchant of record: it runs checkout, the customer portal,
 and sales tax. Billing is optional and turns on only when the token, product,
 and webhook secret are all set; otherwise settings pages show no Subscribe
 button and workspaces stay on bring-your-own-key plus the trial.
-See [docs/BILLING.md](docs/BILLING.md) for the full setup.
 
 - `POLAR_ACCESS_TOKEN` (optional secret): an organization access token with
   `checkouts:write`, `customer_sessions:write`, `subscriptions:read`, and `products:read`.
@@ -188,6 +186,13 @@ See [docs/BILLING.md](docs/BILLING.md) for the full setup.
   webhook pointing at `/webhooks/polar`.
 - `POLAR_SERVER` (optional): `sandbox` for sandbox.polar.sh; production by
   default.
+
+Create a recurring Polar product and a webhook in Raw format at
+`<worker-url>/webhooks/polar`. Subscribe to `subscription.created`,
+`subscription.updated`, `subscription.active`, `subscription.canceled`,
+`subscription.uncanceled`, `subscription.past_due`, and
+`subscription.revoked`. Use Polar's sandbox to test checkout and billing
+changes before enabling them in production.
 
 ```sh
 pnpm --filter @not-quite-my-tempo/api exec wrangler secret put POLAR_ACCESS_TOKEN
@@ -204,8 +209,8 @@ deletes its repositories, reviews, findings, members, audit history, and
 API key. A subscription that still renews must be cancelled first. The
 workspace row stays with the account ID, billing references, used free
 reviews, and this period's used plan credits, so reinstalling resets
-neither. See [docs/ACCOUNT_DELETION.md](docs/ACCOUNT_DELETION.md). It needs
-migration `0017`, which the deploy job applies before deploying.
+neither. This requires migration `0017`, which the deploy job applies before
+deploying.
 
 Lint and format the workspace with Oxlint and Oxfmt:
 
@@ -372,12 +377,10 @@ Apply migration `0002_good_metal_master.sql` before running this version
 (`pnpm db:migrate:local`, or `pnpm db:migrate:remote` for a configured remote
 database). It adds `users` and `sessions` without changing existing reviews.
 
-Repository permissions are a sign-in snapshot, valid for at most one hour;
-changes on GitHub are not reflected immediately. Sign in again to refresh
-access. Automatic permission refresh/revocation, workspace memberships, and
-self-service installation onboarding remain required follow-up work before
-public SaaS launch. Repositories still enter the local catalog through review
-webhooks. Plans and billing are outside the current development scope.
+Repository permissions are refreshed against GitHub every 10 minutes when
+the session is used. Revocation webhooks remove access sooner. Workspace
+membership alone never grants access to a private repository. Onboarding
+and installation webhooks sync the repositories available to each workspace.
 
 A server-rendered dashboard sits on the same API at `/dashboard`: signed-out
 visitors get a sign-in page; signed-in users see their repositories with run

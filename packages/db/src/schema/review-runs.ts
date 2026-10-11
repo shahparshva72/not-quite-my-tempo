@@ -60,8 +60,7 @@ export const reviewRuns = sqliteTable(
     // On a paid-plan run: the model the workspace had picked, when the run
     // switched to a smaller one because credits ran low.
     requestedModel: text("requested_model"),
-    // Paid-plan credits this run claimed, × 100 so sums stay exact
-    // (docs/MULTI_PROVIDER_BYOK_DESIGN.md, "Paid plan credits").
+    // Paid-plan credits this run claimed, × 100 so sums stay exact.
     creditsX100: integer("credits_x100"),
     // The workspace and billing period charged, fixed at claim time like
     // trialWorkspaceId.

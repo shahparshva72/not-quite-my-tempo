@@ -1,5 +1,4 @@
-// "Rehearsal Score" visual system, Stage light palette. See
-// docs/DESIGN_PLAN.md for the reasoning behind each token and device.
+// "Rehearsal Score" visual system, Stage light palette.
 
 export const FONTS_HREF =
   "https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=Bodoni+Moda:ital,opsz,wght@1,6..96,700..900&family=JetBrains+Mono:wght@400;600&display=swap";

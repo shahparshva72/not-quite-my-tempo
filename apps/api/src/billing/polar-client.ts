@@ -1,6 +1,6 @@
 import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 
-// Polar is the merchant of record for the paid plan (docs/BILLING.md).
+// Polar is the merchant of record for the paid plan.
 const POLAR_API_BASE_URLS = {
   production: "https://api.polar.sh",
   sandbox: "https://sandbox-api.polar.sh",
@@ -33,7 +33,7 @@ const Subscription = Schema.Struct({
   status: Schema.NonEmptyString,
   customer_id: Schema.NonEmptyString,
   product_id: Schema.NonEmptyString,
-  // Starts each period's paid-plan credits (docs/MULTI_PROVIDER_BYOK_DESIGN.md).
+  // Starts each period's paid-plan credits.
   current_period_start: Schema.optional(Schema.NullOr(Schema.DateFromString)),
   current_period_end: Schema.NullOr(Schema.DateFromString),
   cancel_at_period_end: Schema.Boolean,

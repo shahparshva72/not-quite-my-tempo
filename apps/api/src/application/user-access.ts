@@ -113,7 +113,7 @@ export const saveUserAccess = (userId: number, answer: UserAccessAnswer) =>
 
 /**
  * Re-reads and saves an existing user's access. Used by the periodic
- * refresh (docs/WORKSPACES_DESIGN.md); sign-in calls the two halves around
+ * refresh; sign-in calls the two halves around
  * creating the user.
  */
 export const refreshUserAccess = (user: AccessUser, accessToken: string) =>

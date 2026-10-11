@@ -250,8 +250,8 @@ const claimPlanReview = (
  * workspace spends plan credits first (switching to a smaller model when
  * the chosen one no longer fits), then falls back to its own key, else is
  * blocked. Other workspaces use their own key, else one free trial review
- * (within the platform-wide daily cap), else none. See
- * docs/MULTI_PROVIDER_BYOK_DESIGN.md. Returns only the source and model,
+ * (within the platform-wide daily cap), else none. Returns only the source
+ * and model,
  * never a key, because Workflow step outputs are persisted.
  */
 export const chooseReviewKey = (
@@ -451,7 +451,7 @@ const blockedComment = (
 ) => {
   const where = settingsLocation(workspaceId, appOrigin);
 
-  // Subscribing is only offered where billing is set up (docs/BILLING.md).
+  // Subscribing is only offered where billing is set up.
   const situation = billingEnabled
     ? `has no review key, and isn't on the paid plan. An admin or owner can add a Gemini key or subscribe ${where}`
     : `and has no review key. An admin or owner can add a Gemini key ${where}`;

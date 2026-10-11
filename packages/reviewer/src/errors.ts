@@ -4,8 +4,7 @@ import type { ReviewProvider } from "./catalog.js";
 
 /**
  * Why a provider refused or failed a review request. Decides retries and
- * which message a workspace sees for its own key
- * (docs/MULTI_PROVIDER_BYOK_DESIGN.md, "Errors").
+ * which message a workspace sees for its own key.
  */
 export type ReviewFailureReason =
   | "key_rejected"

@@ -224,8 +224,7 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
     });
 
     // The reviewer is built per run: the key and model depend on the
-    // workspace (its own key, plan credits, or the trial). See
-    // docs/MULTI_PROVIDER_BYOK_DESIGN.md.
+    // workspace (its own key, plan credits, or the trial).
     const platformKeys: PlatformKeys = {
       gemini: {
         apiKey: env.GEMINI_API_KEY,
