@@ -440,6 +440,7 @@ section.band { padding: clamp(3rem, 7vw, 5rem) 0; border-top: 1px solid var(--st
 /* Settings */
 .key-status { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; margin: 0; max-width: none; }
 .key-form { display: grid; gap: 0.5rem; max-width: 34rem; margin: 1.5rem 0 0; }
+.card-body > .key-form:first-child { margin-top: 0; }
 .key-form label { font-weight: 700; font-size: 0.93rem; }
 .key-form input:not([type="radio"]), .key-form select {
   font: inherit; font-family: var(--code); color: var(--ink);
