@@ -1322,36 +1322,41 @@ const reviewToneCard = (repository: GitHubRepository, canChange: boolean) => {
 
   return html`<section class="card">
     <div class="card-head"><h2>Review tone</h2></div>
-    ${
-      canChange
-        ? html`<form
-            class="key-form"
-            method="post"
-            action="/dashboard/repositories/${repository.id}/review-tone"
-          >
-            <label for="review-tone">Tone for this repository</label>
-            <select id="review-tone" name="tone">
-              ${reviewToneChoices.map(
-                ([value, label]) =>
-                  html`<option
-                    value="${value}"
-                    ${value === current ? "selected" : ""}
-                  >
-                    ${label}
-                  </option>`,
-              )}
-            </select>
-            <p class="fine">
-              Applies to this repository only, from its next review. Tone
-              changes the voice, never which findings are raised.
-            </p>
-            <button class="btn btn-secondary" type="submit">Save tone</button>
-          </form>`
-        : html`<p>
-              ${reviewToneChoices.find(([value]) => value === current)?.[1] ?? ""}
-            </p>
-            <p class="fine">Ask an admin to change this.</p>`
-    }
+    <div class="card-body">
+      ${
+        canChange
+          ? html`<form
+              class="key-form"
+              method="post"
+              action="/dashboard/repositories/${repository.id}/review-tone"
+            >
+              <label for="review-tone">Tone for this repository</label>
+              <select id="review-tone" name="tone">
+                ${reviewToneChoices.map(
+                  ([value, label]) =>
+                    html`<option
+                      value="${value}"
+                      ${value === current ? "selected" : ""}
+                    >
+                      ${label}
+                    </option>`,
+                )}
+              </select>
+              <p class="fine">
+                Applies to this repository only, from its next review. Tone
+                changes the voice, never which findings are raised.
+              </p>
+              <button class="btn btn-secondary" type="submit">Save tone</button>
+            </form>`
+          : html`<p>
+                ${
+                  reviewToneChoices.find(([value]) => value === current)?.[1] ??
+                  ""
+                }
+              </p>
+              <p class="fine">Ask an admin to change this.</p>`
+      }
+    </div>
   </section>`;
 };
 
@@ -1366,38 +1371,42 @@ export const repositoryRunsPage = (
     repository.fullName,
     login,
     html`${crumbs([["/dashboard", "Your repositories"]], repository.fullName)}
-    ${pageHead(
-      repository.fullName,
-      html`<a href="https://github.com/${repository.fullName}"
-        >View repository on GitHub</a
-      >`,
-      reviewControl(
-        repository,
-        repositoryActionAllowed(role, "toggle_reviews"),
-        "repository",
-      ),
-    )}
-    ${reviewToneCard(
-      repository,
-      repositoryActionAllowed(role, "set_review_tone"),
-    )}
-    ${
-      reviews.length === 0
-        ? html`<div class="card empty">
-            <span class="feature-icon">${icon("pullRequest")}</span>
-            <h2>No reviews yet</h2>
-            <p>Open a pull request and Fletcher reviews it within a minute.</p>
-          </div>`
-        : html`<section class="card">
-            <div class="card-head">
-              <h2>Reviews</h2>
-              <span class="badge">${formatNumber(reviews.length)}</span>
-            </div>
-            <ul class="entries">
-              ${reviews.map((review) => reviewRow(repository, review, now))}
-            </ul>
-          </section>`
-    }`,
+      ${pageHead(
+        repository.fullName,
+        html`<a href="https://github.com/${repository.fullName}"
+          >View repository on GitHub</a
+        >`,
+        reviewControl(
+          repository,
+          repositoryActionAllowed(role, "toggle_reviews"),
+          "repository",
+        ),
+      )}
+      <div class="stack">
+        ${reviewToneCard(
+          repository,
+          repositoryActionAllowed(role, "set_review_tone"),
+        )}
+        ${
+          reviews.length === 0
+            ? html`<div class="card empty">
+                <span class="feature-icon">${icon("pullRequest")}</span>
+                <h2>No reviews yet</h2>
+                <p>
+                  Open a pull request and Fletcher reviews it within a minute.
+                </p>
+              </div>`
+            : html`<section class="card">
+                <div class="card-head">
+                  <h2>Reviews</h2>
+                  <span class="badge">${formatNumber(reviews.length)}</span>
+                </div>
+                <ul class="entries">
+                  ${reviews.map((review) => reviewRow(repository, review, now))}
+                </ul>
+              </section>`
+        }
+      </div>`,
     "repositories",
   );
 
