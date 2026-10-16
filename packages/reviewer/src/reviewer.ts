@@ -9,7 +9,7 @@ import {
   Schema,
 } from "effect";
 
-import { findCatalogModel } from "./catalog.js";
+import { reviewEffort } from "./catalog.js";
 import type { ReviewProvider } from "./catalog.js";
 import {
   isRetryableReviewerError,
@@ -57,24 +57,16 @@ const DEFAULT_TIMEOUT_MILLIS: Readonly<Record<ReviewProvider, number>> = {
   anthropic: 180_000,
 };
 
-// Low temperature keeps findings reproducible; the persona lives in the
-// prompt, not in sampling randomness. Reasoning models reject it, and
-// Gemini 3+ isn't sent one: Google warns that values below 1.0 can make it
-// loop or reason worse.
-const GENERATION_TEMPERATURE = 0.2;
+// No request sets a temperature. Every supported model reasons before it
+// answers: Claude 5.5+ and GPT reasoning models reject sampling settings,
+// and Google warns that Gemini 3+ below 1.0 can loop or reason worse. How
+// hard each model thinks comes from the catalog's `effort` instead.
 
-/**
- * How hard Gemini thinks before answering. Set explicitly rather than
- * left to each model's default (Flash-Lite's is "minimal", too little to
- * find bugs); "high" would add thinking tokens, billed as output.
- */
-const geminiThinkingLevel = (model: string) =>
-  model.includes("flash-lite") ? "low" : "medium";
+// Anthropic requires an explicit cap, and thinking counts toward it: room
+// for a long review plus high-effort thinking on a large diff.
+const ANTHROPIC_MAX_TOKENS = 32_000;
 
-// Enough for a long review; Anthropic requires an explicit cap.
-const ANTHROPIC_MAX_TOKENS = 16_000;
-
-// The name OpenAI and Anthropic see for the structured review.
+// The name OpenAI sees for the structured review.
 const REVIEW_OBJECT_NAME = "fletcher_review";
 
 export interface ReviewUsage {
@@ -185,8 +177,7 @@ const AnthropicEnvelope = Schema.Struct({
   content: Schema.Array(
     Schema.Struct({
       type: Schema.String,
-      name: Schema.optional(Schema.String),
-      input: Schema.optional(Schema.Unknown),
+      text: Schema.optional(Schema.String),
     }),
   ),
   usage: Schema.optional(
@@ -227,7 +218,7 @@ const geminiRequest = (
       { role: "user", parts: [{ text: buildReviewUserPrompt(input) }] },
     ],
     generationConfig: {
-      thinkingConfig: { thinkingLevel: geminiThinkingLevel(config.model) },
+      thinkingConfig: { thinkingLevel: reviewEffort(config.model) },
       responseMimeType: "application/json",
       responseSchema: geminiResponseJsonSchema,
     },
@@ -256,72 +247,66 @@ const geminiRequest = (
 const openAiRequest = (
   config: ReviewerConfig,
   input: GeminiReviewInput,
-): ProviderRequest => {
-  // Every supported GPT model reasons and rejects temperature; own-key
-  // models outside the catalog are treated the same.
-  const sampling =
-    findCatalogModel(config.model)?.reasoning === false
-      ? { temperature: GENERATION_TEMPERATURE }
-      : { reasoning: { effort: "low" } };
-
-  return {
-    url: `${config.baseUrl ?? OPENAI_API_BASE_URL}/v1/responses`,
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.model,
-      instructions: buildSystemPrompt(input.intensity, input.tone),
-      input: [
-        {
-          role: "user",
-          content: [{ type: "input_text", text: buildReviewUserPrompt(input) }],
-        },
-      ],
-      store: false,
-      text: {
-        format: {
-          type: "json_schema",
-          name: REVIEW_OBJECT_NAME,
-          strict: true,
-          schema: reviewJsonSchema,
-        },
+): ProviderRequest => ({
+  url: `${config.baseUrl ?? OPENAI_API_BASE_URL}/v1/responses`,
+  headers: {
+    "content-type": "application/json",
+    authorization: `Bearer ${config.apiKey}`,
+  },
+  body: JSON.stringify({
+    model: config.model,
+    instructions: buildSystemPrompt(input.intensity, input.tone),
+    input: [
+      {
+        role: "user",
+        content: [{ type: "input_text", text: buildReviewUserPrompt(input) }],
       },
-      ...sampling,
-    }),
-    read: (body) =>
-      decodeEnvelope(
-        config.provider,
-        OpenAiEnvelope,
-      )(body).pipe(
-        Effect.flatMap((envelope) =>
-          envelope.status !== undefined && envelope.status !== "completed"
-            ? Effect.fail(
-                invalidOutput(config.provider, `response ${envelope.status}`),
-              )
-            : Effect.succeed({
-                reviewJson: envelope.output
-                  .flatMap((item) =>
-                    item.type === "message" ? (item.content ?? []) : [],
-                  )
-                  .flatMap((part) =>
-                    part.type === "output_text" ? [part.text ?? ""] : [],
-                  )
-                  .join(""),
-                usage: {
-                  inputTokens: envelope.usage?.input_tokens ?? null,
-                  outputTokens: envelope.usage?.output_tokens ?? null,
-                  totalTokens: envelope.usage?.total_tokens ?? null,
-                  cachedInputTokens:
-                    envelope.usage?.input_tokens_details?.cached_tokens ?? null,
-                },
-              }),
-        ),
+    ],
+    store: false,
+    text: {
+      format: {
+        type: "json_schema",
+        name: REVIEW_OBJECT_NAME,
+        strict: true,
+        schema: reviewJsonSchema,
+      },
+    },
+    reasoning: { effort: reviewEffort(config.model) },
+  }),
+  read: (body) =>
+    decodeEnvelope(
+      config.provider,
+      OpenAiEnvelope,
+    )(body).pipe(
+      Effect.flatMap((envelope) =>
+        envelope.status !== undefined && envelope.status !== "completed"
+          ? Effect.fail(
+              invalidOutput(config.provider, `response ${envelope.status}`),
+            )
+          : Effect.succeed({
+              reviewJson: envelope.output
+                .flatMap((item) =>
+                  item.type === "message" ? (item.content ?? []) : [],
+                )
+                .flatMap((part) =>
+                  part.type === "output_text" ? [part.text ?? ""] : [],
+                )
+                .join(""),
+              usage: {
+                inputTokens: envelope.usage?.input_tokens ?? null,
+                outputTokens: envelope.usage?.output_tokens ?? null,
+                totalTokens: envelope.usage?.total_tokens ?? null,
+                cachedInputTokens:
+                  envelope.usage?.input_tokens_details?.cached_tokens ?? null,
+              },
+            }),
       ),
-  };
-};
+    ),
+});
 
+// Claude 5.5+ rejects forced tool use and sampling settings, and always
+// thinks (adaptive); effort sets how hard. The review comes back as JSON
+// text constrained to the schema.
 const anthropicRequest = (
   config: ReviewerConfig,
   input: GeminiReviewInput,
@@ -332,22 +317,16 @@ const anthropicRequest = (
     "x-api-key": config.apiKey,
     "anthropic-version": ANTHROPIC_VERSION,
   },
-  // Structured output through one forced tool call, which every Claude
-  // model supports.
   body: JSON.stringify({
     model: config.model,
     max_tokens: ANTHROPIC_MAX_TOKENS,
-    temperature: GENERATION_TEMPERATURE,
+    thinking: { type: "adaptive" },
     system: buildSystemPrompt(input.intensity, input.tone),
     messages: [{ role: "user", content: buildReviewUserPrompt(input) }],
-    tools: [
-      {
-        name: REVIEW_OBJECT_NAME,
-        description: "Fletcher's review of the pull request.",
-        input_schema: reviewJsonSchema,
-      },
-    ],
-    tool_choice: { type: "tool", name: REVIEW_OBJECT_NAME },
+    output_config: {
+      effort: reviewEffort(config.model),
+      format: { type: "json_schema", schema: reviewJsonSchema },
+    },
   }),
   read: (body) =>
     decodeEnvelope(
@@ -355,13 +334,8 @@ const anthropicRequest = (
       AnthropicEnvelope,
     )(body).pipe(
       Effect.flatMap((envelope) => {
-        const call = envelope.content.find(
-          (part) =>
-            part.type === "tool_use" && part.name === REVIEW_OBJECT_NAME,
-        );
-
-        // A max_tokens stop leaves the tool input cut off.
-        if (call === undefined || envelope.stop_reason === "max_tokens") {
+        // A refusal or a max_tokens stop leaves no schema-valid review.
+        if (envelope.stop_reason !== "end_turn") {
           return Effect.fail(
             invalidOutput(
               config.provider,
@@ -374,7 +348,9 @@ const anthropicRequest = (
         const outputTokens = envelope.usage?.output_tokens ?? null;
 
         return Effect.succeed({
-          reviewJson: JSON.stringify(call.input ?? null),
+          reviewJson: envelope.content
+            .flatMap((part) => (part.type === "text" ? [part.text ?? ""] : []))
+            .join(""),
           usage: {
             inputTokens,
             outputTokens,

@@ -41,6 +41,13 @@ export const ENABLED_VENDORS: ReadonlySet<ModelVendor> = new Set<ModelVendor>([
  */
 export type ModelTier = "lite" | "standard" | "pro" | "excluded";
 
+/**
+ * How hard a model thinks before it reviews: Gemini's thinking level,
+ * OpenAI's reasoning effort, or Claude's effort. All three APIs accept
+ * these names. Thinking tokens bill as output, so effort follows the tier.
+ */
+export type ReviewEffort = "low" | "medium" | "high";
+
 export interface CatalogModel {
   readonly vendor: ModelVendor;
   readonly id: string;
@@ -51,8 +58,8 @@ export interface CatalogModel {
   readonly outputUsdPerMillion: number;
   /** Input tokens served from the provider's prompt cache. */
   readonly cachedInputUsdPerMillion: number;
-  /** Reasoning models reject sampling settings such as temperature. */
-  readonly reasoning: boolean;
+  /** Lite tiers think "low", standard "medium", pro and excluded "high". */
+  readonly effort: ReviewEffort;
 }
 
 /** When the prices below were copied from models.dev (cross-checked on OpenRouter). */
@@ -67,7 +74,7 @@ export const DEFAULT_PLAN_CATALOG_MODEL: CatalogModel = {
   inputUsdPerMillion: 0.75,
   outputUsdPerMillion: 3.75,
   cachedInputUsdPerMillion: 0.075,
-  reasoning: false,
+  effort: "medium",
 };
 
 /**
@@ -85,7 +92,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 10,
     outputUsdPerMillion: 50,
     cachedInputUsdPerMillion: 1,
-    reasoning: true,
+    effort: "high",
   },
   {
     vendor: "openai",
@@ -95,7 +102,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 4,
     outputUsdPerMillion: 20,
     cachedInputUsdPerMillion: 0.4,
-    reasoning: true,
+    effort: "high",
   },
   {
     vendor: "openai",
@@ -105,7 +112,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 4,
     outputUsdPerMillion: 20,
     cachedInputUsdPerMillion: 0.4,
-    reasoning: true,
+    effort: "high",
   },
   {
     vendor: "openai",
@@ -115,7 +122,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 2,
     outputUsdPerMillion: 12,
     cachedInputUsdPerMillion: 0.2,
-    reasoning: true,
+    effort: "high",
   },
   {
     vendor: "openai",
@@ -125,7 +132,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 2,
     outputUsdPerMillion: 10,
     cachedInputUsdPerMillion: 0.1,
-    reasoning: true,
+    effort: "high",
   },
   {
     vendor: "openai",
@@ -135,7 +142,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 2,
     outputUsdPerMillion: 10,
     cachedInputUsdPerMillion: 0.2,
-    reasoning: true,
+    effort: "high",
   },
   {
     vendor: "openai",
@@ -145,7 +152,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 0.2,
     outputUsdPerMillion: 1.2,
     cachedInputUsdPerMillion: 0.02,
-    reasoning: true,
+    effort: "low",
   },
   {
     vendor: "openai",
@@ -155,7 +162,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 0.1,
     outputUsdPerMillion: 0.5,
     cachedInputUsdPerMillion: 0.01,
-    reasoning: true,
+    effort: "low",
   },
   // Anthropic. Claude Haiku 5.5 joins once its price is published.
   {
@@ -166,7 +173,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 4,
     outputUsdPerMillion: 20,
     cachedInputUsdPerMillion: 0.2,
-    reasoning: false,
+    effort: "high",
   },
   {
     vendor: "anthropic",
@@ -176,9 +183,21 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 2,
     outputUsdPerMillion: 10,
     cachedInputUsdPerMillion: 0.1,
-    reasoning: false,
+    effort: "high",
   },
   // Google
+  // Introductory prices run through Nov 30, 2026; from Dec 1 they are
+  // $4 input, $20 output, and $0.20 cached per million tokens.
+  {
+    vendor: "google",
+    id: "gemini-4-argon",
+    tier: "pro",
+    weight: 4.5,
+    inputUsdPerMillion: 2,
+    outputUsdPerMillion: 10,
+    cachedInputUsdPerMillion: 0.1,
+    effort: "high",
+  },
   {
     vendor: "google",
     id: "gemini-3.5-flash",
@@ -187,7 +206,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 1.5,
     outputUsdPerMillion: 9,
     cachedInputUsdPerMillion: 0.15,
-    reasoning: false,
+    effort: "high",
   },
   DEFAULT_PLAN_CATALOG_MODEL,
   {
@@ -198,7 +217,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 0.75,
     outputUsdPerMillion: 3.75,
     cachedInputUsdPerMillion: 0.075,
-    reasoning: false,
+    effort: "medium",
   },
   {
     vendor: "google",
@@ -208,7 +227,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 0.75,
     outputUsdPerMillion: 3.75,
     cachedInputUsdPerMillion: 0.075,
-    reasoning: false,
+    effort: "medium",
   },
   {
     vendor: "google",
@@ -218,7 +237,7 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     inputUsdPerMillion: 0.3,
     outputUsdPerMillion: 2.5,
     cachedInputUsdPerMillion: 0.03,
-    reasoning: false,
+    effort: "low",
   },
 ];
 
@@ -234,13 +253,20 @@ export const DEFAULT_PLAN_MODEL = DEFAULT_PLAN_CATALOG_MODEL.id;
 export const findCatalogModel = (id: string): CatalogModel | undefined =>
   MODEL_CATALOG.find((model) => model.id === id);
 
+/**
+ * The effort a review runs at. Own-key models outside the catalog get
+ * "medium", the default of current Gemini, GPT, and Claude Opus models.
+ */
+export const reviewEffort = (id: string): ReviewEffort =>
+  findCatalogModel(id)?.effort ?? "medium";
+
 const GENERATION = {
   openai: { pattern: /^gpt-(\d+)(?:\.(\d+))?(?:-|$)/, minimum: [5, 6] },
   anthropic: {
     pattern: /^claude-[a-z]+-(\d+)(?:-(\d+))?(?:-|$)/,
     minimum: [5, 5],
   },
-  google: { pattern: /^gemini-(\d+)\.(\d+)(?:-|$)/, minimum: [3, 5] },
+  google: { pattern: /^gemini-(\d+)(?:\.(\d+))?(?:-|$)/, minimum: [3, 5] },
 } as const;
 
 /**
