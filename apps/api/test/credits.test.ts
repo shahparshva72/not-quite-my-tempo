@@ -3,6 +3,8 @@ import { Effect } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeLiveLayer, ReviewRunRepository } from "@not-quite-my-tempo/db";
 import {
+  DEFAULT_MODELS,
+  DEFAULT_PLAN_MODEL,
   downgradeOrder,
   estimateInputTokens,
   findCatalogModel,
@@ -121,6 +123,22 @@ describe("the model catalog", () => {
       false,
     );
     expect(isSupportedGeneration("google", "gemini-3.5-flash-lite")).toBe(true);
+    expect(isSupportedGeneration("google", "gemini-4-argon")).toBe(true);
+    expect(isSupportedGeneration("google", "gemini-3-flash")).toBe(false);
+  });
+
+  it("keeps Gemini 3.8 Flash as the plan default", () => {
+    expect(DEFAULT_PLAN_MODEL).toBe("gemini-3.8-flash");
+    expect(DEFAULT_MODELS.google).toBe("gemini-3.8-flash");
+  });
+
+  it("prices Gemini 4 Argon at the introductory rate", () => {
+    const argon = findCatalogModel("gemini-4-argon");
+
+    expect(argon?.tier).toBe("pro");
+    // 20k in × $2/M + 4k out × $10/M = $0.08.
+    expect(argon && reviewCostUsdMicros(argon, 20_000, 4_000)).toBe(80_000);
+    expect(argon && reviewCreditsX100(argon, 20_000)).toBe(450);
   });
 
   it("prices reviews by tier and size", () => {

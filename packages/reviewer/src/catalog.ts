@@ -179,6 +179,18 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     reasoning: false,
   },
   // Google
+  // Introductory prices run through Nov 30, 2026; from Dec 1 they are
+  // $4 input, $20 output, and $0.20 cached per million tokens.
+  {
+    vendor: "google",
+    id: "gemini-4-argon",
+    tier: "pro",
+    weight: 4.5,
+    inputUsdPerMillion: 2,
+    outputUsdPerMillion: 10,
+    cachedInputUsdPerMillion: 0.1,
+    reasoning: false,
+  },
   {
     vendor: "google",
     id: "gemini-3.5-flash",
@@ -240,7 +252,7 @@ const GENERATION = {
     pattern: /^claude-[a-z]+-(\d+)(?:-(\d+))?(?:-|$)/,
     minimum: [5, 5],
   },
-  google: { pattern: /^gemini-(\d+)\.(\d+)(?:-|$)/, minimum: [3, 5] },
+  google: { pattern: /^gemini-(\d+)(?:\.(\d+))?(?:-|$)/, minimum: [3, 5] },
 } as const;
 
 /**
