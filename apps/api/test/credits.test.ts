@@ -141,6 +141,22 @@ describe("the model catalog", () => {
     expect(argon && reviewCreditsX100(argon, 20_000)).toBe(450);
   });
 
+  it("thinks harder on pricier tiers", () => {
+    const tierEffort = {
+      lite: "low",
+      standard: "medium",
+      pro: "high",
+      excluded: "high",
+    } as const;
+
+    for (const model of MODEL_CATALOG) {
+      expect([model.id, model.effort]).toEqual([
+        model.id,
+        tierEffort[model.tier],
+      ]);
+    }
+  });
+
   it("prices reviews by tier and size", () => {
     const flash = findCatalogModel("gemini-3.8-flash");
     const sonnet = findCatalogModel("claude-sonnet-5-5");

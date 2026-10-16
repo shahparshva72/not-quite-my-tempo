@@ -105,7 +105,7 @@ const openAiResponse = () =>
     { headers: { "content-type": "application/json" } },
   );
 
-const anthropicResponse = () =>
+const anthropicResponse = (stopReason = "end_turn") =>
   new Response(
     JSON.stringify({
       id: "msg_1",
@@ -113,14 +113,11 @@ const anthropicResponse = () =>
       role: "assistant",
       model: "claude-sonnet-5-5",
       content: [
-        {
-          type: "tool_use",
-          id: "toolu_1",
-          name: "fletcher_review",
-          input: reviewJson,
-        },
+        // Thinking text is omitted by default; only the review is read.
+        { type: "thinking", thinking: "", signature: "sig_1" },
+        { type: "text", text: JSON.stringify(reviewJson) },
       ],
-      stop_reason: "tool_use",
+      stop_reason: stopReason,
       stop_sequence: null,
       usage: { input_tokens: 1800, output_tokens: 400 },
     }),
@@ -238,6 +235,32 @@ describe("Reviewer on the Gemini API", () => {
     };
 
     expect(body.generationConfig.thinkingConfig.thinkingLevel).toBe("low");
+  });
+
+  it("thinks hardest on pro models and at medium off the catalog", async () => {
+    const requests: RecordedRequest[] = [];
+
+    for (const model of ["gemini-4-argon", "gemini-3.9-flash"]) {
+      await Effect.runPromise(
+        runReview({
+          model,
+          fetch: fakeFetch(() => geminiResponse(), requests),
+        }),
+      );
+    }
+
+    // SAFETY: fakeFetch recorded the JSON bodies Fletcher sent.
+
+    const levels = requests.map(
+      (request) =>
+        (
+          request.body as {
+            generationConfig: { thinkingConfig: { thinkingLevel: string } };
+          }
+        ).generationConfig.thinkingConfig.thinkingLevel,
+    );
+
+    expect(levels).toEqual(["high", "medium"]);
   });
 
   it("sends Vertex AI keys to Vertex AI's express endpoint", async () => {
@@ -428,7 +451,7 @@ describe("Reviewer on the Gemini API", () => {
 });
 
 describe("Reviewer on OpenAI", () => {
-  it("sends a strict JSON-schema Responses request without sampling settings", async () => {
+  it("sends a strict JSON-schema Responses request at the model's effort", async () => {
     const requests: RecordedRequest[] = [];
 
     const result = await Effect.runPromise(
@@ -457,7 +480,7 @@ describe("Reviewer on OpenAI", () => {
     expect(body.model).toBe("gpt-6.1-sol");
     expect(body.store).toBe(false);
     expect(body.temperature).toBeUndefined();
-    expect(body.reasoning).toEqual({ effort: "low" });
+    expect(body.reasoning).toEqual({ effort: "high" });
     expect(body.text.format).toMatchObject({
       type: "json_schema",
       strict: true,
@@ -524,7 +547,7 @@ describe("Reviewer on OpenAI", () => {
 });
 
 describe("Reviewer on Anthropic", () => {
-  it("forces the review tool with a large output budget", async () => {
+  it("asks for schema-constrained JSON with adaptive thinking at the model's effort", async () => {
     const requests: RecordedRequest[] = [];
 
     const result = await Effect.runPromise(
@@ -542,20 +565,51 @@ describe("Reviewer on Anthropic", () => {
 
     const body = requests[0]?.body as {
       max_tokens: number;
-      temperature: number;
-      tool_choice: { type: string; name: string };
-      tools: { name: string }[];
+      temperature?: number;
+      tool_choice?: unknown;
+      tools?: unknown;
+      thinking: { type: string };
+      output_config: {
+        effort: string;
+        format: { type: string; schema: { required: string[] } };
+      };
     };
 
-    expect(body.max_tokens).toBe(16_000);
-    expect(body.temperature).toBe(0.2);
-    expect(body.tool_choice).toMatchObject({
-      type: "tool",
-      name: "fletcher_review",
-    });
+    expect(body.max_tokens).toBe(32_000);
+    // Claude 5.5+ answers 400 to forced tool use and sampling settings.
+    expect(body.temperature).toBeUndefined();
+    expect(body.tool_choice).toBeUndefined();
+    expect(body.tools).toBeUndefined();
+    expect(body.thinking).toEqual({ type: "adaptive" });
+    expect(body.output_config.effort).toBe("high");
+    expect(body.output_config.format.type).toBe("json_schema");
+    expect(body.output_config.format.schema.required).toEqual([
+      "verdict",
+      "summary",
+      "findings",
+    ]);
     expect(result.review).toEqual(reviewJson);
     expect(result.usage.inputTokens).toBe(1800);
     expect(result.usage.outputTokens).toBe(400);
+  });
+
+  it("fails as invalid output when Claude refuses or runs out of tokens", async () => {
+    for (const stopReason of ["refusal", "max_tokens"]) {
+      const error = await Effect.runPromise(
+        Effect.flip(
+          runReview({
+            provider: "anthropic",
+            model: "claude-sonnet-5-5",
+            fetch: fakeFetch(() => anthropicResponse(stopReason)),
+          }),
+        ),
+      );
+
+      expect(error._tag).toBe("ReviewOutputInvalidError");
+      expect(error).toMatchObject({
+        detail: `no complete review (stop_reason ${stopReason})`,
+      });
+    }
   });
 
   it("reports an empty credit balance as quota, not a bad request", async () => {

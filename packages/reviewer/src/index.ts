@@ -41,6 +41,7 @@ export {
   MODEL_PRICES_FETCHED_AT,
   reviewCostUsdMicros,
   reviewCreditsX100,
+  reviewEffort,
   vendorOf,
 } from "./catalog.js";
 
@@ -49,6 +50,7 @@ export type {
   GeminiProvider,
   ModelTier,
   ModelVendor,
+  ReviewEffort,
   ReviewProvider,
 } from "./catalog.js";
 
