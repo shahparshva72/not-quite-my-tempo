@@ -143,10 +143,24 @@ const GeminiEnvelope = Schema.Struct({
       promptTokenCount: OptionalCount,
       cachedContentTokenCount: OptionalCount,
       candidatesTokenCount: OptionalCount,
+      thoughtsTokenCount: OptionalCount,
       totalTokenCount: OptionalCount,
     }),
   ),
 });
+
+type GeminiUsage = (typeof GeminiEnvelope.Type)["usageMetadata"];
+
+// Gemini reports thinking apart from the answer but bills both as output.
+// OpenAI and Anthropic already count reasoning in their output totals.
+const geminiOutputTokens = (usage: GeminiUsage) => {
+  const answer = usage?.candidatesTokenCount;
+  const thinking = usage?.thoughtsTokenCount;
+
+  return answer === undefined && thinking === undefined
+    ? null
+    : (answer ?? 0) + (thinking ?? 0);
+};
 
 const OpenAiEnvelope = Schema.Struct({
   status: Schema.optional(Schema.String),
@@ -238,7 +252,7 @@ const geminiRequest = (
             .join("") ?? "",
         usage: {
           inputTokens: envelope.usageMetadata?.promptTokenCount ?? null,
-          outputTokens: envelope.usageMetadata?.candidatesTokenCount ?? null,
+          outputTokens: geminiOutputTokens(envelope.usageMetadata),
           totalTokens: envelope.usageMetadata?.totalTokenCount ?? null,
           cachedInputTokens:
             envelope.usageMetadata?.cachedContentTokenCount ?? null,

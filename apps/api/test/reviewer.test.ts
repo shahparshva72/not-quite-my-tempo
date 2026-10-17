@@ -55,7 +55,10 @@ const geminiUsage = {
 const geminiResponse = (
   review: ReviewPayload = reviewJson,
   usageMetadata:
-    | (typeof geminiUsage & { readonly cachedContentTokenCount?: number })
+    | (typeof geminiUsage & {
+        readonly cachedContentTokenCount?: number;
+        readonly thoughtsTokenCount?: number;
+      })
     | null = geminiUsage,
 ) =>
   new Response(
@@ -306,6 +309,27 @@ describe("Reviewer on the Gemini API", () => {
     );
 
     expect(result.usage.cachedInputTokens).toBe(800);
+  });
+
+  it("counts Gemini's thinking tokens as output, as they are billed", async () => {
+    const result = await Effect.runPromise(
+      runReview({
+        fetch: fakeFetch(() =>
+          geminiResponse(reviewJson, {
+            ...geminiUsage,
+            thoughtsTokenCount: 900,
+            totalTokenCount: 2400,
+          }),
+        ),
+      }),
+    );
+
+    expect(result.usage).toEqual({
+      inputTokens: 1200,
+      outputTokens: 1200,
+      totalTokens: 2400,
+      cachedInputTokens: null,
+    });
   });
 
   it("returns null usage when the response omits it", async () => {
