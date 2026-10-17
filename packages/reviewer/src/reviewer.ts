@@ -48,13 +48,16 @@ const DEFAULT_RETRY_BASE_MILLIS = 2_000;
 const DEFAULT_MAX_RETRIES = 3;
 
 // Gemini 3.x models think before answering, and under load even a short
-// prompt can take half a minute; 60s timed out real reviews. Reasoning
-// models and long Claude reviews are slower still.
+// prompt can take half a minute; 60s timed out real reviews. How long a
+// review takes follows how long the model thinks, not the prompt size: on
+// the Martian benchmark a 39k-token prompt thought for 43k tokens and hit
+// 180s on every attempt, then finished within 360s. Seven minutes leaves
+// the run-review step (10 minutes) room to fetch repository context first.
 const DEFAULT_TIMEOUT_MILLIS: Readonly<Record<ReviewProvider, number>> = {
-  gemini_api: 180_000,
-  vertex_express: 180_000,
-  openai: 180_000,
-  anthropic: 180_000,
+  gemini_api: 420_000,
+  vertex_express: 420_000,
+  openai: 420_000,
+  anthropic: 420_000,
 };
 
 // No request sets a temperature. Every supported model reasons before it
