@@ -191,6 +191,9 @@ catalogs:
     oxlint:
       specifier: 1.82.0
       version: 1.82.0
+    tsx:
+      specifier: 4.23.13
+      version: 4.23.13
     typescript:
       specifier: 7.0.2
       version: 7.0.2
@@ -254,6 +257,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: 'catalog:'
         version: 5.20260910.1
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.13
       wrangler:
         specifier: 'catalog:'
         version: 4.131.0(@cloudflare/workers-types@5.20260910.1)(@types/node@22.20.2)

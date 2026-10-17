@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "bench:judge-proxy": "tsx scripts/martian-bench/judge-proxy.ts",
+    "bench:review": "tsx scripts/martian-bench/review.ts",
     "build": "pnpm types && wrangler deploy --dry-run",
     "db:create": "wrangler d1 create not-quite-my-tempo --binding DB",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
@@ -12,7 +14,7 @@
     "dev": "wrangler dev",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "pnpm types && tsc --noEmit -p tsconfig.json",
+    "typecheck": "pnpm types && tsc --noEmit -p tsconfig.json && tsc --noEmit -p scripts/tsconfig.json",
     "typecheck:test": "pnpm types && tsc --noEmit -p test/tsconfig.json",
     "types": "wrangler types"
   },
@@ -25,6 +27,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
+    "tsx": "catalog:",
     "wrangler": "catalog:"
   }
 }
