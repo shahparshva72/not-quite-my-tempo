@@ -104,6 +104,12 @@ export interface ReviewerConfig {
   readonly provider: ReviewProvider;
   readonly apiKey: string;
   readonly model: string;
+  /**
+   * The Google Cloud project behind a Vertex AI express key. When known,
+   * calls go to the global location, which serves models us-central1
+   * doesn't (see detectVertexProject).
+   */
+  readonly vertexProject?: string;
   /** Overrides the provider's API origin (tests). */
   readonly baseUrl?: string;
   /** Defaults to the global fetch; tests answer locally. */
@@ -215,14 +221,23 @@ const decodeEnvelope =
       Effect.mapError((cause) => invalidOutput(provider, cause.message)),
     );
 
+const geminiUrl = (config: ReviewerConfig) => {
+  if (config.provider !== "vertex_express") {
+    return `${config.baseUrl ?? GEMINI_API_BASE_URL}/v1beta/models/${config.model}:generateContent`;
+  }
+
+  const base = config.baseUrl ?? VERTEX_API_BASE_URL;
+
+  return config.vertexProject === undefined
+    ? `${base}/v1/publishers/google/models/${config.model}:generateContent`
+    : `${base}/v1/projects/${config.vertexProject}/locations/global/publishers/google/models/${config.model}:generateContent`;
+};
+
 const geminiRequest = (
   config: ReviewerConfig,
   input: GeminiReviewInput,
 ): ProviderRequest => ({
-  url:
-    config.provider === "vertex_express"
-      ? `${config.baseUrl ?? VERTEX_API_BASE_URL}/v1/publishers/google/models/${config.model}:generateContent`
-      : `${config.baseUrl ?? GEMINI_API_BASE_URL}/v1beta/models/${config.model}:generateContent`,
+  url: geminiUrl(config),
   headers: {
     "content-type": "application/json",
     "x-goog-api-key": config.apiKey,

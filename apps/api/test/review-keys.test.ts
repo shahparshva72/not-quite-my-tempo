@@ -2,7 +2,10 @@ import { env } from "cloudflare:workers";
 import { Effect, Either, Layer, Option } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeLiveLayer, ReviewRunRepository } from "@not-quite-my-tempo/db";
-import { checkGeminiKey } from "@not-quite-my-tempo/reviewer";
+import {
+  checkGeminiKey,
+  detectVertexProject,
+} from "@not-quite-my-tempo/reviewer";
 
 import {
   chooseReviewKey,
@@ -11,6 +14,7 @@ import {
   GeminiKeyUnreadableError,
   resolveReviewKey,
   trialDailyReviewCap,
+  withVertexProject,
 } from "../src/application/review-keys";
 import type { BlockedReviewCode } from "../src/application/review-keys";
 import { reviewKeyContext } from "../src/application/workspace-settings";
@@ -527,5 +531,112 @@ describe("checking a Gemini key", () => {
     expect(await check(400, 401)).toEqual(Either.right(Option.none()));
     expect(Either.isLeft(await check(503, 401))).toBe(true);
     expect(Either.isLeft(await check(403, 503))).toBe(true);
+  });
+});
+
+describe("finding a Vertex AI key's project", () => {
+  const vertexNotFound = (project: string) =>
+    new Response(
+      JSON.stringify({
+        error: {
+          code: 404,
+          message: `Publisher model \`projects/${project}/locations/us-central1/publishers/google/models/fletcher-project-probe\` was not found or your project does not have access to it.`,
+          status: "NOT_FOUND",
+        },
+      }),
+      { status: 404, headers: { "content-type": "application/json" } },
+    );
+
+  const detect = (answer: () => Promise<Response>) => {
+    const urls: string[] = [];
+
+    const fetchImpl: typeof fetch = async (url) => {
+      urls.push(String(url));
+
+      return answer();
+    };
+
+    return Effect.runPromise(
+      detectVertexProject("vertex-key", { fetchImpl }),
+    ).then((project) => ({ project, urls }));
+  };
+
+  it("reads the project from the 404 for a model that doesn't exist", async () => {
+    const { project, urls } = await detect(async () =>
+      vertexNotFound("778137311135"),
+    );
+
+    expect(project).toEqual(Option.some("778137311135"));
+    expect(urls).toEqual([
+      "https://aiplatform.googleapis.com/v1/publishers/google/models/fletcher-project-probe:countTokens",
+    ]);
+  });
+
+  it("finds nothing when the answer names no project", async () => {
+    const { project } = await detect(
+      async () => new Response("{}", { status: 403 }),
+    );
+
+    expect(project).toEqual(Option.none());
+  });
+
+  it("finds nothing when Vertex AI can't be reached", async () => {
+    const { project } = await detect(async () => {
+      throw new Error("network down");
+    });
+
+    expect(project).toEqual(Option.none());
+  });
+
+  it("adds the project to Vertex AI keys only", async () => {
+    let probes = 0;
+
+    const found = (apiKey: string) => {
+      probes += 1;
+
+      return Effect.succeed(Option.some(`project-for-${apiKey}`));
+    };
+
+    const vertex = await Effect.runPromise(
+      withVertexProject(
+        { apiKey: "v", provider: "vertex_express", model: "gemini-4-argon" },
+        found,
+      ),
+    );
+
+    const gemini = await Effect.runPromise(
+      withVertexProject(
+        { apiKey: "g", provider: "gemini_api", model: "gemini-3.8-flash" },
+        found,
+      ),
+    );
+
+    expect(vertex).toEqual({
+      apiKey: "v",
+      provider: "vertex_express",
+      model: "gemini-4-argon",
+      vertexProject: "project-for-v",
+    });
+    expect(gemini).toEqual({
+      apiKey: "g",
+      provider: "gemini_api",
+      model: "gemini-3.8-flash",
+    });
+    expect(probes).toBe(1);
+  });
+
+  it("keeps the short URL when the project can't be found", async () => {
+    const key = await Effect.runPromise(
+      withVertexProject(
+        { apiKey: "v", provider: "vertex_express", model: "gemini-3.8-flash" },
+        () => Effect.succeed(Option.none()),
+      ),
+    );
+
+    expect(key).toEqual({
+      apiKey: "v",
+      provider: "vertex_express",
+      model: "gemini-3.8-flash",
+    });
   });
 });

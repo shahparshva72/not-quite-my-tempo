@@ -282,6 +282,24 @@ describe("Reviewer on the Gemini API", () => {
     expect(requests[0]?.headers.get("x-goog-api-key")).toBe("test-api-key");
   });
 
+  it("sends Vertex AI keys with a known project to the global location", async () => {
+    const requests: RecordedRequest[] = [];
+
+    await Effect.runPromise(
+      runReview({
+        provider: "vertex_express",
+        model: "gemini-4-argon",
+        vertexProject: "778137311135",
+        fetch: fakeFetch(() => geminiResponse(), requests),
+      }),
+    );
+
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://aiplatform.googleapis.com/v1/projects/778137311135/locations/global/publishers/google/models/gemini-4-argon:generateContent",
+    ]);
+    expect(requests[0]?.headers.get("x-goog-api-key")).toBe("test-api-key");
+  });
+
   it("decodes the reply into a review with usage", async () => {
     const result = await Effect.runPromise(
       runReview({ fetch: fakeFetch(() => geminiResponse()) }),

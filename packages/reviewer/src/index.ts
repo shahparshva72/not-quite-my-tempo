@@ -64,6 +64,10 @@ export {
 
 export type { ReviewerError, ReviewFailureReason } from "./errors.js";
 
+export { detectVertexProject } from "./vertex-project.js";
+
+export type { VertexProjectConfig } from "./vertex-project.js";
+
 export {
   ANTHROPIC_API_BASE_URL,
   DEFAULT_GEMINI_MODEL,
