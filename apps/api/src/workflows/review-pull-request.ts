@@ -35,6 +35,7 @@ import {
   platformVendors,
   resolveReviewKey,
   trialDailyReviewCap,
+  withVertexProject,
   WorkspaceReviewKeyError,
 } from "../application/review-keys.js";
 import type {
@@ -409,6 +410,7 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
             env.TOKEN_ENCRYPTION_KEY,
           ).pipe(
             Effect.provide(databaseLayer),
+            Effect.flatMap((key) => withVertexProject(key)),
             Effect.flatMap((key) =>
               repositoryContext.pipe(
                 Effect.flatMap((context) =>

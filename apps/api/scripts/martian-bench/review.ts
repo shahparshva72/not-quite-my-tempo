@@ -37,6 +37,8 @@ import type {
 } from "@not-quite-my-tempo/reviewer";
 
 import { fetchRepositoryContext } from "../../src/application/repository-context.js";
+import { withVertexProject } from "../../src/application/review-keys.js";
+import type { ResolvedReviewKey } from "../../src/application/review-keys.js";
 import {
   buildFindingCommentBody,
   buildReviewSummaryBody,
@@ -542,23 +544,35 @@ const program = Effect.gen(function* () {
   return yield* runReviews(data, selected);
 });
 
-const reviewerConfig: ReviewerConfig = {
-  provider: "vertex_express",
-  apiKey: vertexApiKey,
-  model: modelId,
-};
-
-const MainLive = Layer.merge(
-  GitHubPullRequestClientLive({}),
-  ReviewerLive(
-    Option.match(timeoutSeconds, {
-      onNone: (): ReviewerConfig => reviewerConfig,
-      onSome: (seconds): ReviewerConfig => ({
-        ...reviewerConfig,
-        timeoutMillis: seconds * 1_000,
-      }),
-    }),
+// The same project lookup production does, so models served only from
+// Vertex AI's global location (Gemini 4 Argon) work here too.
+const ReviewerFromKey = Layer.unwrapEffect(
+  (dryRun
+    ? Effect.succeed<ResolvedReviewKey>({
+        apiKey: vertexApiKey,
+        provider: "vertex_express",
+        model: modelId,
+      })
+    : withVertexProject({
+        apiKey: vertexApiKey,
+        provider: "vertex_express",
+        model: modelId,
+      })
+  ).pipe(
+    Effect.map((key) =>
+      ReviewerLive(
+        Option.match(timeoutSeconds, {
+          onNone: (): ReviewerConfig => key,
+          onSome: (seconds): ReviewerConfig => ({
+            ...key,
+            timeoutMillis: seconds * 1_000,
+          }),
+        }),
+      ),
+    ),
   ),
 );
+
+const MainLive = Layer.merge(GitHubPullRequestClientLive({}), ReviewerFromKey);
 
 await Effect.runPromise(program.pipe(Effect.provide(MainLive)));

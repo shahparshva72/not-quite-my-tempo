@@ -12,6 +12,7 @@ import {
   DEFAULT_GEMINI_MODEL,
   DEFAULT_MODELS,
   DEFAULT_PLAN_CATALOG_MODEL,
+  detectVertexProject,
   downgradeOrder,
   ENABLED_VENDORS,
   estimateInputTokens,
@@ -382,7 +383,32 @@ export interface ResolvedReviewKey {
   readonly apiKey: string;
   readonly provider: ReviewProvider;
   readonly model: string;
+  /** The project behind a Vertex AI express key, when detected. */
+  readonly vertexProject?: string;
 }
+
+/**
+ * Adds the Google Cloud project to a Vertex AI express key so the review
+ * can use the global location, where models such as Gemini 4 Argon are
+ * served. Other keys, and keys whose project can't be read, are returned
+ * as they are and keep the short us-central1 URL.
+ */
+export const withVertexProject = (
+  key: ResolvedReviewKey,
+  detect: (
+    apiKey: string,
+  ) => Effect.Effect<Option.Option<string>> = detectVertexProject,
+): Effect.Effect<ResolvedReviewKey> =>
+  key.provider === "vertex_express"
+    ? detect(key.apiKey).pipe(
+        Effect.map(
+          Option.match({
+            onNone: () => key,
+            onSome: (vertexProject) => ({ ...key, vertexProject }),
+          }),
+        ),
+      )
+    : Effect.succeed(key);
 
 /**
  * The key and model for a run's chosen source. Called inside the review
