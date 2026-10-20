@@ -517,3 +517,12 @@ curl -i http://localhost:8787/webhooks/github \
 - [Effect: Using generators](https://effect.website/docs/getting-started/using-generators/)
 - [GitHub: Validating webhook deliveries](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
 - [pnpm: Workspaces](https://pnpm.io/workspaces)
+
+## License
+
+Copyright (C) 2026 Parshva Shah.
+
+Licensed under the [GNU Affero General Public License v3.0](LICENSE)
+(`AGPL-3.0-only`). You may run, modify, and self-host it; if you offer a
+modified version to users over a network, you must make your modified source
+available to them under the same license.

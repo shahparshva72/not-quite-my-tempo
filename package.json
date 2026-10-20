@@ -1,6 +1,7 @@
 {
   "name": "not-quite-my-tempo",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @not-quite-my-tempo/api build",
