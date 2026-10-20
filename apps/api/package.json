@@ -2,6 +2,7 @@
   "name": "@not-quite-my-tempo/api",
   "version": "0.0.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "bench:judge-proxy": "tsx scripts/martian-bench/judge-proxy.ts",
