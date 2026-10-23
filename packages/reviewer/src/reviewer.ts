@@ -257,7 +257,9 @@ const decodeEnvelope =
 // Streamed, though the reply is still read whole: Cloudflare answers 524
 // when response headers take longer than about 100 seconds, and a model
 // thinking through a large diff takes longer than that to answer at all.
-// A stream sends its headers at once.
+// Google sends a stream's headers with its first part, which comes only
+// after thinking unless thought summaries are streamed too (includeThoughts
+// below): on PR #30's diff, headers came at 221s without them and 37s with.
 const GEMINI_METHOD = "streamGenerateContent?alt=sse";
 
 const geminiUrl = (config: ReviewerConfig) => {
@@ -333,7 +335,12 @@ const geminiRequest = (
       { role: "user", parts: [{ text: buildReviewUserPrompt(input) }] },
     ],
     generationConfig: {
-      thinkingConfig: { thinkingLevel: reviewEffort(config.model) },
+      thinkingConfig: {
+        thinkingLevel: reviewEffort(config.model),
+        // Streams thought summaries so headers arrive early (GEMINI_METHOD);
+        // readGeminiStream leaves them out of the review.
+        includeThoughts: true,
+      },
       responseMimeType: "application/json",
       responseSchema: geminiResponseJsonSchema,
     },

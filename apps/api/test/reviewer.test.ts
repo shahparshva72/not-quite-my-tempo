@@ -220,7 +220,7 @@ describe("Reviewer on the Gemini API", () => {
         responseMimeType: string;
         responseSchema: { required: string[] };
         temperature?: number;
-        thinkingConfig: { thinkingLevel: string };
+        thinkingConfig: { thinkingLevel: string; includeThoughts: boolean };
       };
     };
 
@@ -233,8 +233,10 @@ describe("Reviewer on the Gemini API", () => {
       "findings",
     ]);
     expect(body.generationConfig.temperature).toBeUndefined();
+    // Thought summaries stream before the answer, so headers arrive early.
     expect(body.generationConfig.thinkingConfig).toEqual({
       thinkingLevel: "medium",
+      includeThoughts: true,
     });
   });
 
