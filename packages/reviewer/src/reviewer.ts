@@ -4,6 +4,7 @@ import {
   Effect,
   Layer,
   Match,
+  Option,
   Predicate,
   Schedule,
   Schema,
@@ -131,18 +132,34 @@ interface ProviderRequest {
   readonly body: string;
   readonly read: (
     body: string,
-  ) => Effect.Effect<ProviderReply, ReviewOutputInvalidError>;
+  ) => Effect.Effect<
+    ProviderReply,
+    ReviewOutputInvalidError | ReviewProviderError
+  >;
 }
 
 const OptionalCount = Schema.optional(Schema.Number);
 
-const GeminiEnvelope = Schema.Struct({
-  candidates: Schema.Array(
-    Schema.Struct({
-      content: Schema.Struct({
-        parts: Schema.Array(Schema.Struct({ text: Schema.String })),
+// One event of a streamGenerateContent reply. Chunks may carry no text
+// (the last often holds only usage), and usage counts are cumulative.
+const GeminiChunk = Schema.Struct({
+  candidates: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        content: Schema.optional(
+          Schema.Struct({
+            parts: Schema.optional(
+              Schema.Array(
+                Schema.Struct({
+                  text: Schema.optional(Schema.String),
+                  thought: Schema.optional(Schema.Boolean),
+                }),
+              ),
+            ),
+          }),
+        ),
       }),
-    }),
+    ),
   ),
   usageMetadata: Schema.optional(
     Schema.Struct({
@@ -155,7 +172,23 @@ const GeminiEnvelope = Schema.Struct({
   ),
 });
 
-type GeminiUsage = (typeof GeminiEnvelope.Type)["usageMetadata"];
+// A failure Google reports inside the stream, after a 200 status.
+const GeminiStreamError = Schema.Struct({
+  error: Schema.Struct({ code: Schema.Number }),
+});
+
+type GeminiUsage = (typeof GeminiChunk.Type)["usageMetadata"];
+
+/** The data of each server-sent event in a fully read stream, in order. */
+const serverSentEventData = (body: string) =>
+  body.split(/\r?\n\r?\n/).flatMap((event) => {
+    const data = event
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice("data:".length).replace(/^ /, ""));
+
+    return data.length === 0 ? [] : [data.join("\n")];
+  });
 
 // Gemini reports thinking apart from the answer but bills both as output.
 // OpenAI and Anthropic already count reasoning in their output totals.
@@ -221,17 +254,67 @@ const decodeEnvelope =
       Effect.mapError((cause) => invalidOutput(provider, cause.message)),
     );
 
+// Streamed, though the reply is still read whole: Cloudflare answers 524
+// when response headers take longer than about 100 seconds, and a model
+// thinking through a large diff takes longer than that to answer at all.
+// A stream sends its headers at once.
+const GEMINI_METHOD = "streamGenerateContent?alt=sse";
+
 const geminiUrl = (config: ReviewerConfig) => {
   if (config.provider !== "vertex_express") {
-    return `${config.baseUrl ?? GEMINI_API_BASE_URL}/v1beta/models/${config.model}:generateContent`;
+    return `${config.baseUrl ?? GEMINI_API_BASE_URL}/v1beta/models/${config.model}:${GEMINI_METHOD}`;
   }
 
   const base = config.baseUrl ?? VERTEX_API_BASE_URL;
 
   return config.vertexProject === undefined
-    ? `${base}/v1/publishers/google/models/${config.model}:generateContent`
-    : `${base}/v1/projects/${config.vertexProject}/locations/global/publishers/google/models/${config.model}:generateContent`;
+    ? `${base}/v1/publishers/google/models/${config.model}:${GEMINI_METHOD}`
+    : `${base}/v1/projects/${config.vertexProject}/locations/global/publishers/google/models/${config.model}:${GEMINI_METHOD}`;
 };
+
+const readGeminiStream = (provider: ReviewProvider, body: string) =>
+  Effect.gen(function* () {
+    const events = serverSentEventData(body);
+
+    if (events.length === 0) {
+      return yield* invalidOutput(provider, "empty stream");
+    }
+
+    let reviewJson = "";
+    let usage: GeminiUsage = undefined;
+
+    for (const data of events) {
+      const streamError = yield* Schema.decodeUnknown(
+        Schema.parseJson(GeminiStreamError),
+      )(data).pipe(Effect.option);
+
+      if (Option.isSome(streamError)) {
+        return yield* providerErrorFor(
+          provider,
+          streamError.value.error.code,
+          data,
+        );
+      }
+
+      const chunk = yield* decodeEnvelope(provider, GeminiChunk)(data);
+
+      reviewJson +=
+        chunk.candidates?.[0]?.content?.parts
+          ?.flatMap((part) => (part.thought === true ? [] : [part.text ?? ""]))
+          .join("") ?? "";
+      usage = chunk.usageMetadata ?? usage;
+    }
+
+    return {
+      reviewJson,
+      usage: {
+        inputTokens: usage?.promptTokenCount ?? null,
+        outputTokens: geminiOutputTokens(usage),
+        totalTokens: usage?.totalTokenCount ?? null,
+        cachedInputTokens: usage?.cachedContentTokenCount ?? null,
+      },
+    };
+  });
 
 const geminiRequest = (
   config: ReviewerConfig,
@@ -255,25 +338,7 @@ const geminiRequest = (
       responseSchema: geminiResponseJsonSchema,
     },
   }),
-  read: (body) =>
-    decodeEnvelope(
-      config.provider,
-      GeminiEnvelope,
-    )(body).pipe(
-      Effect.map((envelope) => ({
-        reviewJson:
-          envelope.candidates[0]?.content.parts
-            .map((part) => part.text)
-            .join("") ?? "",
-        usage: {
-          inputTokens: envelope.usageMetadata?.promptTokenCount ?? null,
-          outputTokens: geminiOutputTokens(envelope.usageMetadata),
-          totalTokens: envelope.usageMetadata?.totalTokenCount ?? null,
-          cachedInputTokens:
-            envelope.usageMetadata?.cachedContentTokenCount ?? null,
-        },
-      })),
-    ),
+  read: (body) => readGeminiStream(config.provider, body),
 });
 
 const openAiRequest = (

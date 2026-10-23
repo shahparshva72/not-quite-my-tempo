@@ -142,7 +142,7 @@ Workflow.
 ## Model credentials
 
 The review itself is performed by the `@not-quite-my-tempo/reviewer` package
-(`packages/reviewer`), which calls Gemini's `generateContent`, OpenAI's
+(`packages/reviewer`), which calls Gemini's `streamGenerateContent`, OpenAI's
 Responses API, or Anthropic's Messages API with structured JSON output and a
 fixed review persona.
 

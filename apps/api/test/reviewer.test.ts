@@ -60,18 +60,35 @@ const geminiResponse = (
         readonly thoughtsTokenCount?: number;
       })
     | null = geminiUsage,
-) =>
-  new Response(
-    JSON.stringify({
+) => {
+  const text = JSON.stringify(review);
+  const half = Math.floor(text.length / 2);
+
+  // As streamGenerateContent sends it: the review split across chunks, and
+  // usage only on the last one.
+  return geminiStream([
+    { candidates: [{ content: { role: "model", parts: [{ text: "" }] } }] },
+    {
+      candidates: [
+        { content: { role: "model", parts: [{ text: text.slice(0, half) }] } },
+      ],
+    },
+    {
       candidates: [
         {
-          content: { role: "model", parts: [{ text: JSON.stringify(review) }] },
+          content: { role: "model", parts: [{ text: text.slice(half) }] },
           finishReason: "STOP",
         },
       ],
       usageMetadata: usageMetadata ?? undefined,
-    }),
-    { headers: { "content-type": "application/json" } },
+    },
+  ]);
+};
+
+const geminiStream = (events: ReadonlyArray<unknown>) =>
+  new Response(
+    events.map((event) => `data: ${JSON.stringify(event)}\r\n\r\n`).join(""),
+    { headers: { "content-type": "text/event-stream" } },
   );
 
 const openAiResponse = () =>
@@ -190,7 +207,7 @@ describe("Reviewer on the Gemini API", () => {
     expect(result.model).toBe("gemini-3.8-flash");
     expect(result.provider).toBe("gemini_api");
     expect(requests[0]?.url).toBe(
-      "https://gemini.test/v1beta/models/gemini-3.8-flash:generateContent",
+      "https://gemini.test/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
     );
     expect(requests[0]?.headers.get("x-goog-api-key")).toBe("test-api-key");
 
@@ -277,7 +294,7 @@ describe("Reviewer on the Gemini API", () => {
     );
 
     expect(requests.map((request) => request.url)).toEqual([
-      "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.8-flash:generateContent",
+      "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
     ]);
     expect(requests[0]?.headers.get("x-goog-api-key")).toBe("test-api-key");
   });
@@ -295,7 +312,7 @@ describe("Reviewer on the Gemini API", () => {
     );
 
     expect(requests.map((request) => request.url)).toEqual([
-      "https://aiplatform.googleapis.com/v1/projects/778137311135/locations/global/publishers/google/models/gemini-4-argon:generateContent",
+      "https://aiplatform.googleapis.com/v1/projects/778137311135/locations/global/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse",
     ]);
     expect(requests[0]?.headers.get("x-goog-api-key")).toBe("test-api-key");
   });
@@ -374,6 +391,61 @@ describe("Reviewer on the Gemini API", () => {
 
     expect(fetch.calls()).toBe(2);
     expect(result.review.verdict).toBe("almost");
+  });
+
+  it("retries an overload Google reports inside the stream", async () => {
+    const fetch = fakeFetch((call) =>
+      call === 1
+        ? geminiStream([
+            { candidates: [{ content: { parts: [{ text: '{"verd' }] } }] },
+            {
+              error: {
+                code: 503,
+                message: "overloaded",
+                status: "UNAVAILABLE",
+              },
+            },
+          ])
+        : geminiResponse(),
+    );
+
+    const result = await Effect.runPromise(runReview({ fetch }));
+
+    expect(fetch.calls()).toBe(2);
+    expect(result.review).toEqual(reviewJson);
+  });
+
+  it("leaves thought parts out of the review", async () => {
+    const result = await Effect.runPromise(
+      runReview({
+        fetch: fakeFetch(() =>
+          geminiStream([
+            {
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      { text: "Counting off the tempo...", thought: true },
+                      { text: JSON.stringify(reviewJson) },
+                    ],
+                  },
+                },
+              ],
+            },
+          ]),
+        ),
+      }),
+    );
+
+    expect(result.review).toEqual(reviewJson);
+  });
+
+  it("fails as invalid output when the stream is empty", async () => {
+    const error = await Effect.runPromise(
+      Effect.flip(runReview({ fetch: fakeFetch(() => geminiStream([])) })),
+    );
+
+    expect(error._tag).toBe("ReviewOutputInvalidError");
   });
 
   it("reports a rejected key without retrying", async () => {
