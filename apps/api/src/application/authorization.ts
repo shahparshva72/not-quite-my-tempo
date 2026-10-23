@@ -31,7 +31,11 @@ export class ForbiddenError extends Data.TaggedError("ForbiddenError")<{
   readonly requiredRole: WorkspaceRole;
 }> {}
 
-export type RepositoryAction = "view" | "toggle_reviews" | "set_review_tone" | "retry_review";
+export type RepositoryAction =
+  | "view"
+  | "toggle_reviews"
+  | "set_review_tone"
+  | "retry_review";
 
 const roleRank = { member: 0, admin: 1, owner: 2 } as const;
 

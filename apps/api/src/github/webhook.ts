@@ -109,7 +109,8 @@ export const processGitHubWebhook = (
           ),
       ),
       Match.when(
-        (event) => event === "github_app_authorization" || event === "organization",
+        (event) =>
+          event === "github_app_authorization" || event === "organization",
         (event) =>
           decodeAccessRevocation(event, rawBody).pipe(
             Effect.flatMap(
