@@ -2,6 +2,7 @@ import { Data, Effect, Match, Option } from "effect";
 
 import { handleAccessRevocation } from "../application/access-revocation.js";
 import { handleInstallationEvent } from "../application/installation-sync.js";
+import { recordPullRequest } from "../application/pull-requests.js";
 import {
   handleManualReviewCommand,
   handleReviewRequest,
@@ -10,6 +11,7 @@ import { logInfo } from "../logging.js";
 import { decodeAccessRevocation } from "./access-event.js";
 import { decodeInstallationBody } from "./installation-event.js";
 import { decodeIssueCommentBody } from "./manual-command.js";
+import { decodePullRequestSnapshot } from "./pull-request-event.js";
 import { decodePullRequestBody } from "./review-request.js";
 import { verifyGitHubWebhookSignature } from "./signature.js";
 
@@ -63,6 +65,18 @@ export const processGitHubWebhook = (
                 ),
             }),
           ),
+          // After the review path, which creates the repository on its
+          // first pull request.
+          Effect.tap(() =>
+            decodePullRequestSnapshot(rawBody).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => Effect.void,
+                  onSome: recordPullRequest,
+                }),
+              ),
+            ),
+          ),
         ),
       ),
       Match.when("issue_comment", () =>
@@ -95,8 +109,7 @@ export const processGitHubWebhook = (
           ),
       ),
       Match.when(
-        (event) =>
-          event === "github_app_authorization" || event === "organization",
+        (event) => event === "github_app_authorization" || event === "organization",
         (event) =>
           decodeAccessRevocation(event, rawBody).pipe(
             Effect.flatMap(

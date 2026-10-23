@@ -3,6 +3,7 @@ import { html } from "hono/html";
 import type {
   Finding,
   GitHubRepository,
+  PullRequest,
   ReviewRun,
   VisibleRepository,
   Workspace,
@@ -51,6 +52,8 @@ import {
   logo,
   messagePage,
   pageHead,
+  pullRequestName,
+  pullRequestStateBadge,
   rehearsalStep,
   relativeTime,
   reviewControl,
@@ -416,7 +419,10 @@ const repositoryRow = (
           latest === null || outcome === null
             ? html`<span class="quiet">No reviews yet</span>`
             : html`<a href="/dashboard/runs/${latest.run.id}"
-                  >Pull request ${latest.run.pullRequestNumber}</a
+                  >${pullRequestName(
+                    latest.run.pullRequestNumber,
+                    latest.pullRequest,
+                  )}</a
                 >,
                 <span class="quiet"
                   >${relativeTime(latest.run.createdAt, now)}</span
@@ -1279,7 +1285,7 @@ export const ownerRolePage = (login: string) =>
 
 const reviewRow = (
   repository: GitHubRepository,
-  { run, counts }: ReviewSummary,
+  { run, counts, pullRequest }: ReviewSummary,
   now: Date,
 ) => {
   const outcome = reviewOutcome(run, counts);
@@ -1289,11 +1295,17 @@ const reviewRow = (
     <div>
       <p class="entry-title">
         <a href="/dashboard/runs/${run.id}"
-          >Pull request ${run.pullRequestNumber}</a
+          >${pullRequestName(run.pullRequestNumber, pullRequest)}</a
         >
-        ${outcome.text}
+        ${pullRequestStateBadge(pullRequest)} ${outcome.text}
       </p>
       <p class="entry-detail quiet">
+        ${
+          pullRequest === null
+            ? ""
+            : html`By ${pullRequest.authorLogin}
+                <span class="code">${pullRequest.headRef}</span>.`
+        }
         ${triggerLabel(run.trigger)}, ${relativeTime(run.createdAt, now)}.
         <a href="${pullRequestUrl(repository.fullName, run.pullRequestNumber)}"
           >View on GitHub</a
@@ -1425,22 +1437,50 @@ const inferredVerdict = (findings: readonly Finding[]) =>
       ? "almost"
       : "good_job";
 
+/**
+ * How a failed review can be retried from its page: a button for admins
+ * while the pull request is open, the comment command for everyone else,
+ * and nothing once it's closed.
+ */
+const retryHint = (run: ReviewRun, canRetry: boolean, prOpen: boolean) =>
+  !prOpen
+    ? ""
+    : canRetry
+      ? html`<form
+          class="retry"
+          method="post"
+          action="/dashboard/runs/${run.id}/retry"
+        >
+          <button class="btn btn-sm" type="submit">
+            ${icon("refresh")} Retry review
+          </button>
+          <span class="fine"
+            >Reviews the latest commit, like commenting
+            <code>/fletcher again</code>.</span
+          >
+        </form>`
+      : html`Comment <code>/fletcher again</code> on the pull request to retry.`;
+
 /** Headline and one explanatory line for a run's current state. */
-const reviewHeadline = (run: ReviewRun, findings: readonly Finding[]) => {
+const reviewHeadline = (
+  run: ReviewRun,
+  findings: readonly Finding[],
+  retry: HtmlContent | string,
+) => {
   switch (run.status) {
     case "queued":
     case "running":
       return {
         headline: "Reviewing now",
         tone: "active",
-        note: "Fletcher is reading this pull request. Reload in a minute for his review.",
+        note: "Fletcher is reading this pull request. This page updates on its own.",
       };
     case "failed":
       return {
         headline: "Review failed",
         tone: "failed",
         note: html`The review failed because ${failureReason(run.errorCode)}.
-          Comment <code>/fletcher again</code> on the pull request to retry.`,
+        ${retry}`,
       };
     case "cancelled":
       return { headline: "Review cancelled", tone: "quiet", note: null };
@@ -1517,14 +1557,65 @@ const findingTally = (findings: readonly Finding[]) =>
     </ul>
   </section>`;
 
+const retryNotQueuedReasons = {
+  rate_limited: [
+    "Not now",
+    "Fletcher has hit this account's limit of reviews in 24 hours. Try again later.",
+  ],
+  ignored: [
+    "Reviews are off",
+    "Reviews are turned off for this repository, or Fletcher no longer has access to it.",
+  ],
+  github_unavailable: [
+    "GitHub didn't answer",
+    "Fletcher couldn't reach this pull request on GitHub, so nothing was retried. Try again in a minute, or comment /fletcher again on the pull request.",
+  ],
+} as const;
+
+/**
+ * Why a dashboard retry queued nothing: the daily cap, reviews are off, or
+ * GitHub couldn't be reached.
+ */
+export const retryNotQueuedPage = (
+  login: string,
+  reviewRunId: number,
+  reason: keyof typeof retryNotQueuedReasons,
+) => {
+  const [title, explanation] = retryNotQueuedReasons[reason];
+
+  return messagePage(
+    title,
+    login,
+    html`<p>${explanation}</p>
+      <a class="btn btn-secondary" href="/dashboard/runs/${reviewRunId}"
+        >Back to the review</a
+      >`,
+  );
+};
+
+// How often a review's page reloads while Fletcher is still on it.
+const REVIEWING_REFRESH_SECONDS = 15;
+
 export const runFindingsPage = (
   login: string,
   repository: GitHubRepository,
+  role: WorkspaceRole,
   run: ReviewRun,
   findings: readonly Finding[],
+  pullRequest: PullRequest | null,
   now: Date,
 ) => {
-  const { headline, tone, note } = reviewHeadline(run, findings);
+  const { headline, tone, note } = reviewHeadline(
+    run,
+    findings,
+    retryHint(
+      run,
+      repositoryActionAllowed(role, "retry_review"),
+      pullRequest === null || pullRequest.state === "open",
+    ),
+  );
+
+  const reviewing = run.status === "queued" || run.status === "running";
 
   return layout(
     `Pull request ${run.pullRequestNumber}: ${headline}`,
@@ -1539,13 +1630,29 @@ export const runFindingsPage = (
       <div class="review-layout">
         <div>
           <section class="card review-hero">
+            ${
+              pullRequest === null
+                ? ""
+                : html`<p class="review-title">
+                    <strong>${pullRequest.title}</strong>
+                    ${pullRequestStateBadge(pullRequest)}
+                  </p>`
+            }
             <h1 class="verdict verdict-${tone}">${headline}</h1>
             <p class="review-meta">
-              Pull request ${run.pullRequestNumber} in ${repository.fullName},
+              Pull request
+              ${run.pullRequestNumber}${
+                pullRequest === null
+                  ? ""
+                  : html` by ${pullRequest.authorLogin}, from
+                      <span class="code">${pullRequest.headRef}</span> into
+                      <span class="code">${pullRequest.baseRef}</span>,`
+              }
+              in ${repository.fullName},
               ${triggerLabel(run.trigger).toLowerCase()}
               ${relativeTime(run.createdAt, now)}.
             </p>
-            ${note === null ? "" : html`<p class="review-note">${note}</p>`}
+            ${note === null ? "" : html`<div class="review-note">${note}</div>`}
             ${run.summary === null ? "" : html`<p class="summary">${run.summary}</p>`}
           </section>
           ${
@@ -1613,6 +1720,7 @@ export const runFindingsPage = (
         </aside>
       </div>`,
     "repositories",
+    reviewing ? { refreshSeconds: REVIEWING_REFRESH_SECONDS } : {},
   );
 };
 

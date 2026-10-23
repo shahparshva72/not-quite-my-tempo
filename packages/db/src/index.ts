@@ -12,6 +12,8 @@ export * from "./repositories/github-repository-repository.js";
 
 export * from "./repositories/membership-repository.js";
 
+export * from "./repositories/pull-request-repository.js";
+
 export * from "./repositories/review-run-repository.js";
 
 export * from "./repositories/session-repository.js";

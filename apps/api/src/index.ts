@@ -18,6 +18,7 @@ import {
   deleteAccount,
   deleteWorkspace,
 } from "./application/account-deletion.js";
+import { pruneActiveDays, recordActiveDay } from "./application/activity.js";
 import { ReviewWorkflowLive } from "./application/review-requests.js";
 import type { ReviewWorkflowParams } from "./application/review-requests.js";
 import {
@@ -39,6 +40,7 @@ import {
   startCheckout,
 } from "./application/billing.js";
 import type { BillingLink } from "./application/billing.js";
+import { retryFailedReview } from "./application/review-retry.js";
 import { refreshSessionAccess } from "./application/session-access.js";
 import {
   recoverStuckRuns,
@@ -87,6 +89,7 @@ import {
   ownerRolePage,
   settingsPage,
   repositoryRunsPage,
+  retryNotQueuedPage,
   runFindingsPage,
 } from "./dashboard/views.js";
 import type { PaidPlanOffer, SettingsNotice } from "./dashboard/views.js";
@@ -407,6 +410,14 @@ const paidPlanOffer = (c: AppContext): Promise<PaidPlanOffer> =>
       ),
   });
 
+/** Counts the signed-in user as active today, for usage numbers. */
+const noteActiveDay = (c: AppContext, session: SessionPayload) =>
+  Effect.runPromise(
+    recordActiveDay(session.userId).pipe(
+      Effect.provide(makeLiveLayer(c.env.DB)),
+    ),
+  );
+
 const withSessionPage = (
   c: AppContext,
   handle: (session: SessionPayload) => Promise<Response | Promise<Response>>,
@@ -416,7 +427,8 @@ const withSessionPage = (
       Option.match({
         onNone: () =>
           paidPlanOffer(c).then((offer) => c.html(landingPage(offer))),
-        onSome: handle,
+        onSome: (session) =>
+          noteActiveDay(c, session).then(() => handle(session)),
       }),
     )
     .then((response) => Promise.resolve(response));
@@ -539,15 +551,109 @@ app.get("/dashboard/runs/:id", (c) =>
               ),
               Match.orElse((error) => internalError(c, error)),
             ),
-          onSuccess: ({ repository, run, findings }) =>
+          onSuccess: ({ repository, role, run, findings, pullRequest }) =>
             c.html(
               runFindingsPage(
                 session.login,
                 repository,
+                role,
                 run,
                 findings,
+                pullRequest,
                 new Date(),
               ),
+            ),
+        }),
+      ),
+    );
+  }),
+);
+
+app.post("/dashboard/runs/:id/retry", (c) =>
+  withSessionPage(c, (session) => {
+    const reviewRunId = Number(c.req.param("id"));
+
+    if (!Number.isInteger(reviewRunId)) {
+      return Promise.resolve(c.html(notFoundPage(session.login), 404));
+    }
+
+    const backToRun = (id: number) => c.redirect(`/dashboard/runs/${id}`, 303);
+
+    return Effect.runPromise(
+      retryFailedReview(session, reviewRunId).pipe(
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.provide(
+          ReviewWorkflowLive(
+            c.env.REVIEW_PULL_REQUEST_WORKFLOW,
+            new URL(c.req.url).origin,
+          ),
+        ),
+        Effect.provide(
+          GitHubAppAuthLive({
+            appId: c.env.GITHUB_APP_ID,
+            privateKey: c.env.GITHUB_APP_PRIVATE_KEY,
+          }),
+        ),
+        Effect.provide(GitHubPullRequestClientLive({})),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                c.html(notFoundPage(session.login), 404),
+              ),
+              Match.tag("ForbiddenError", (error) =>
+                c.html(forbiddenPage(session.login, error.requiredRole), 403),
+              ),
+              // Fletcher couldn't sign in to GitHub or read the pull request.
+              Match.tag(
+                "GitHubAppJwtError",
+                "GitHubApiRequestError",
+                "GitHubInstallationTokenError",
+                "PullRequestRequestError",
+                "PullRequestResponseError",
+                (error) => {
+                  Effect.runSync(
+                    logError("dashboard_retry_github_failed", {
+                      reviewRunId,
+                      error: Inspectable.toStringUnknown(error),
+                    }),
+                  );
+
+                  return c.html(
+                    retryNotQueuedPage(
+                      session.login,
+                      reviewRunId,
+                      "github_unavailable",
+                    ),
+                    502,
+                  );
+                },
+              ),
+              Match.orElse((error) => internalError(c, error)),
+            ),
+          // A queued, requeued, or already reviewed commit shows its run,
+          // which may be a newer one than the run retried.
+          onSuccess: (outcome) =>
+            Match.value(outcome).pipe(
+              Match.discriminatorsExhaustive("status")({
+                not_failed: ({ reviewRunId: id }) => backToRun(id),
+                queued: ({ reviewRunId: id }) => backToRun(id),
+                already_processed: ({ reviewRunId: id }) => backToRun(id),
+                rate_limited: () =>
+                  c.html(
+                    retryNotQueuedPage(
+                      session.login,
+                      reviewRunId,
+                      "rate_limited",
+                    ),
+                    429,
+                  ),
+                ignored: () =>
+                  c.html(
+                    retryNotQueuedPage(session.login, reviewRunId, "ignored"),
+                    409,
+                  ),
+              }),
             ),
         }),
       ),
@@ -1505,7 +1611,8 @@ app.onError((error, c) => internalError(c, error));
 
 /**
  * Cron trigger (wrangler.jsonc): fails reviews whose workflow died without
- * finishing them, so the dashboard doesn't say "Reviewing now" forever.
+ * finishing them, so the dashboard doesn't say "Reviewing now" forever,
+ * and forgets active days past their retention.
  */
 const scheduled = (
   _controller: ScheduledController,
@@ -1521,6 +1628,19 @@ const scheduled = (
         ),
         Effect.catchAll((error) =>
           logError("stuck_runs_check_failed", {
+            error: Inspectable.toStringUnknown(error),
+          }),
+        ),
+      ),
+    ),
+  );
+
+  ctx.waitUntil(
+    Effect.runPromise(
+      pruneActiveDays.pipe(
+        Effect.provide(makeLiveLayer(env.DB)),
+        Effect.catchAll((error) =>
+          logError("active_days_prune_failed", {
             error: Inspectable.toStringUnknown(error),
           }),
         ),

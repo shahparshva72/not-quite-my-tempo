@@ -6,6 +6,7 @@ import { auditEvents } from "../schema/audit-events.js";
 import { findings } from "../schema/findings.js";
 import { githubInstallations } from "../schema/github-installations.js";
 import { memberships } from "../schema/memberships.js";
+import { pullRequests } from "../schema/pull-requests.js";
 import { repositories } from "../schema/repositories.js";
 import { reviewRunRetries } from "../schema/review-run-retries.js";
 import { reviewRuns } from "../schema/review-runs.js";
@@ -185,8 +186,8 @@ export class WorkspaceRepository extends Effect.Service<WorkspaceRepository>()(
           }),
         /**
          * Deletes everything stored for the workspace's GitHub account
-         * (installations, repositories, reviews, findings, members, audit
-         * history, and the API key) in one batch, leaving the workspace
+         * (installations, repositories, pull requests, reviews, findings,
+         * members, audit history, and the API key) in one batch, leaving the workspace
          * row as a record of the account, its billing references, and its
          * used free reviews. Free reviews used by
          * the deleted runs are carried onto the workspaces they were
@@ -285,6 +286,11 @@ export class WorkspaceRepository extends Effect.Service<WorkspaceRepository>()(
               client
                 .delete(reviewRuns)
                 .where(inArray(reviewRuns.repositoryId, workspaceRepositories)),
+              client
+                .delete(pullRequests)
+                .where(
+                  inArray(pullRequests.repositoryId, workspaceRepositories),
+                ),
               client
                 .delete(repositories)
                 .where(

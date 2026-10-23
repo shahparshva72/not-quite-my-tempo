@@ -98,10 +98,49 @@ const RATE_LIMITED_REPLY = `### 🥁 Not now
 
 Fletcher has hit this account's limit of ${DAILY_REVIEW_RUN_CAP} reviews in 24 hours. Comment \`/fletcher again\` later to try once more.`;
 
+/** A pull request to review again, as the GitHub App installation. */
+export type ManualReviewTarget = Omit<ManualReviewCommand, "commentId">;
+
 /**
- * Handles a `/fletcher again` comment: resolves the pull request's current
- * head SHA as the GitHub App installation and enqueues a `manual` review
- * through the normal path (idempotency and the daily cap both apply).
+ * Resolves the pull request's current head SHA as the GitHub App
+ * installation and enqueues a `manual` review through the normal path
+ * (idempotency and the daily cap both apply). A failed review of that
+ * commit is retried. Shared by `/fletcher again` and the dashboard.
+ */
+export const queueManualReview = (target: ManualReviewTarget) =>
+  Effect.gen(function* () {
+    const auth = yield* GitHubAppAuth;
+    const client = yield* GitHubPullRequestClient;
+
+    const token = yield* auth.mintInstallationToken(target.installationId);
+
+    const ref = {
+      owner: target.owner,
+      repo: target.repo,
+      pullRequestNumber: target.pullRequestNumber,
+    };
+
+    const details = yield* client.fetchDetails(token.token, ref);
+
+    const fields = {
+      repository: `${target.owner}/${target.repo}`,
+      pullRequestNumber: target.pullRequestNumber,
+      headSha: details.headSha,
+    };
+
+    yield* logInfo("manual_review_requested", fields);
+
+    const outcome = yield* handleReviewRequest({
+      ...target,
+      headSha: details.headSha,
+      trigger: "manual",
+    });
+
+    return { outcome, token, ref, fields };
+  });
+
+/**
+ * Handles a `/fletcher again` comment with queueManualReview.
  * Fletcher always answers the comment, so the commenter knows it was heard:
  * 👀 while a review of the commit is queued or running, 👍 when the commit
  * already has a finished review, and a reply when the daily cap is hit.
@@ -111,32 +150,9 @@ export const handleManualReviewCommand = ({
   ...command
 }: ManualReviewCommand) =>
   Effect.gen(function* () {
-    const auth = yield* GitHubAppAuth;
     const client = yield* GitHubPullRequestClient;
 
-    const token = yield* auth.mintInstallationToken(command.installationId);
-
-    const ref = {
-      owner: command.owner,
-      repo: command.repo,
-      pullRequestNumber: command.pullRequestNumber,
-    };
-
-    const details = yield* client.fetchDetails(token.token, ref);
-
-    const fields = {
-      repository: `${command.owner}/${command.repo}`,
-      pullRequestNumber: command.pullRequestNumber,
-      headSha: details.headSha,
-    };
-
-    yield* logInfo("manual_review_requested", fields);
-
-    const outcome = yield* handleReviewRequest({
-      ...command,
-      headSha: details.headSha,
-      trigger: "manual",
-    });
+    const { outcome, token, ref, fields } = yield* queueManualReview(command);
 
     // The answer is a courtesy: failing to post it never fails the review,
     // and it may not hold up the webhook response. A disabled repository or

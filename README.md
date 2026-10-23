@@ -279,6 +279,14 @@ event) triggers a `manual` review of the PR's current head SHA through the
 same pipeline. Only comments whose author is the repository `OWNER`, an org
 `MEMBER`, or a `COLLABORATOR` are honored. Idempotency still applies: if the
 head SHA was already reviewed, the delivery reports `already_processed`.
+Workspace admins and owners can make the same request from a failed review's
+dashboard page (`POST /dashboard/runs/:id/retry`).
+
+Every `pull_request` delivery, whatever its action or author, also stores the
+pull request's title, author, branches, and open/draft/merged/closed state
+for repositories Fletcher already knows, so dashboard pages can name it. An
+older delivery never overwrites newer details. Pull requests with no delivery
+since this was added show only their number until their next event.
 
 ## Per-repository configuration
 

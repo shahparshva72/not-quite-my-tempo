@@ -2,6 +2,7 @@ import { Effect, Option } from "effect";
 import {
   FindingRepository,
   MembershipRepository,
+  PullRequestRepository,
   ReviewRunRepository,
 } from "@not-quite-my-tempo/db";
 import {
@@ -13,6 +14,8 @@ import type { SessionAccess } from "./authorization.js";
 import type {
   FindingSeverityCount,
   GitHubRepository,
+  PullRequest,
+  ReviewRunPullRequest,
   ReviewRun,
   Workspace,
   WorkspaceRole,
@@ -25,16 +28,24 @@ export const listAccessibleRepositories = (access: SessionAccess) =>
     Effect.map((visible) => visible.map((entry) => entry.repository)),
   );
 
+/** A repository the user may view with their role, or ResourceNotFoundError. */
+const requireVisibleRepository = (
+  access: SessionAccess,
+  repositoryId: number,
+) =>
+  authorizeRepository(access, repositoryId, "view").pipe(
+    // Viewing needs only membership, so ForbiddenError can't occur; keep
+    // the 404-only contract for readers.
+    Effect.catchTag("ForbiddenError", () => new ResourceNotFoundError()),
+  );
+
 /** A repository the user may view, or ResourceNotFoundError. */
 export const requireAccessibleRepository = (
   access: SessionAccess,
   repositoryId: number,
 ) =>
-  authorizeRepository(access, repositoryId, "view").pipe(
+  requireVisibleRepository(access, repositoryId).pipe(
     Effect.map((visible) => visible.repository),
-    // Viewing needs only membership, so ForbiddenError can't occur; keep
-    // the 404-only contract for readers.
-    Effect.catchTag("ForbiddenError", () => new ResourceNotFoundError()),
   );
 
 export const listRepositoryRuns = (
@@ -100,15 +111,27 @@ export interface SeverityCounts {
   readonly suggestion: number;
 }
 
-/** A review run with how many findings of each severity it produced. */
+/**
+ * A review run with how many findings of each severity it produced, and
+ * its pull request's details when GitHub has sent them.
+ */
 export interface ReviewSummary {
   readonly run: ReviewRun;
   readonly counts: SeverityCounts;
+  readonly pullRequest: PullRequest | null;
 }
+
+const pullRequestOf = (
+  run: ReviewRun,
+  pullRequests: readonly ReviewRunPullRequest[],
+) =>
+  pullRequests.find((entry) => entry.reviewRunId === run.id)?.pullRequest ??
+  null;
 
 const summarize = (
   runs: readonly ReviewRun[],
   counts: readonly FindingSeverityCount[],
+  pullRequests: readonly ReviewRunPullRequest[],
 ): readonly ReviewSummary[] =>
   runs.map((run) => {
     const countOf = (severity: FindingSeverityCount["severity"]) =>
@@ -123,13 +146,18 @@ const summarize = (
         warning: countOf("warning"),
         suggestion: countOf("suggestion"),
       },
+      pullRequest: pullRequestOf(run, pullRequests),
     };
   });
 
 const summarizeRuns = (runs: readonly ReviewRun[]) =>
-  FindingRepository.severityCountsByReviewRunIds(
-    runs.map((run) => run.id),
-  ).pipe(Effect.map((counts) => summarize(runs, counts)));
+  Effect.gen(function* () {
+    const ids = runs.map((run) => run.id);
+    const counts = yield* FindingRepository.severityCountsByReviewRunIds(ids);
+    const pullRequests = yield* PullRequestRepository.listForReviewRuns(ids);
+
+    return summarize(runs, counts, pullRequests);
+  });
 
 export interface RepositoryOverview {
   readonly repository: GitHubRepository;
@@ -212,14 +240,15 @@ export const repositoryReviewHistory = (
 const severityOrder = { critical: 0, warning: 1, suggestion: 2 } as const;
 
 /**
- * Review page data: the run, its repository (for GitHub links), and its
- * findings loudest first, then by file and line.
+ * Review page data: the run, its repository (for GitHub links) and the
+ * user's role there, its findings loudest first, then by file and line,
+ * and its pull request's details when known.
  */
 export const reviewDetail = (access: SessionAccess, reviewRunId: number) =>
   Effect.gen(function* () {
     const { run, findings } = yield* listRunFindings(access, reviewRunId);
 
-    const repository = yield* requireAccessibleRepository(
+    const { repository, role } = yield* requireVisibleRepository(
       access,
       run.repositoryId,
     );
@@ -231,5 +260,15 @@ export const reviewDetail = (access: SessionAccess, reviewRunId: number) =>
         (left.line ?? 0) - (right.line ?? 0),
     );
 
-    return { repository, run, findings: ordered };
+    const [pullRequest] = yield* PullRequestRepository.listForReviewRuns([
+      run.id,
+    ]);
+
+    return {
+      repository,
+      role,
+      run,
+      findings: ordered,
+      pullRequest: pullRequest?.pullRequest ?? null,
+    };
   });

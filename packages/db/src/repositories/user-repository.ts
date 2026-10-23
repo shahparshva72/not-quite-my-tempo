@@ -1,7 +1,8 @@
-import { eq } from "drizzle-orm";
+import { eq, lt } from "drizzle-orm";
 import { Effect, Option } from "effect";
 
 import { databaseEffect } from "../errors.js";
+import { userActiveDays } from "../schema/user-active-days.js";
 import { users } from "../schema/users.js";
 import { Database } from "../services/database.js";
 
@@ -52,6 +53,23 @@ export class UserRepository extends Effect.Service<UserRepository>()(
               .where(eq(users.githubUserId, githubUserId))
               .get(),
           ).pipe(Effect.map(Option.fromNullable)),
+        /** Notes that the user opened a signed-in page on this UTC day. */
+        recordActiveDay: (userId: number, day: string) =>
+          databaseEffect("user_active_days.record", () =>
+            client
+              .insert(userActiveDays)
+              .values({ userId, day })
+              .onConflictDoNothing()
+              .run(),
+          ).pipe(Effect.asVoid),
+        /** Forgets active days before this UTC day. */
+        pruneActiveDaysBefore: (day: string) =>
+          databaseEffect("user_active_days.prune", () =>
+            client
+              .delete(userActiveDays)
+              .where(lt(userActiveDays.day, day))
+              .run(),
+          ).pipe(Effect.asVoid),
       };
     }),
   },

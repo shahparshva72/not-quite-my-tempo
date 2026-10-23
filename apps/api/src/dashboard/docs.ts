@@ -114,7 +114,9 @@ export const docsPage = (login: string | null) =>
           On demand: an owner, member, or collaborator comments
           <code>/fletcher again</code> on the pull request. Fletcher reviews the
           latest commit if it hasn't been reviewed yet (for example, an outside
-          contributor's pull request), or retries a review that failed.
+          contributor's pull request), or retries a review that failed. Admins
+          and owners can also press <strong>Retry review</strong> on a failed
+          review's page in the dashboard, which does the same.
         </li>
       </ul>
       <p>
