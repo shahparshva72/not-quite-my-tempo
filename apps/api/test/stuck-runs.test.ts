@@ -5,6 +5,7 @@ import { makeLiveLayer, ReviewRunRepository } from "@not-quite-my-tempo/db";
 
 import app from "../src/index";
 import {
+  ABANDONED_AFTER_MILLIS,
   recoverStuckRuns,
   ReviewWorkflowStatus,
   STUCK_AFTER_MILLIS,
@@ -40,8 +41,14 @@ const runState = (id: number) =>
     .bind(id)
     .first<{ status: string; error_code: string | null }>();
 
+const abandonedAgo = () => Date.now() - ABANDONED_AFTER_MILLIS - 60_000;
+
 // Workflow statuses by instance ID; missing IDs have no instance.
-const recover = (statuses: Record<string, string>) =>
+// Terminated instance IDs are collected in `terminated`.
+const recover = (
+  statuses: Record<string, string>,
+  terminated: Array<string> = [],
+) =>
   Effect.runPromise(
     recoverStuckRuns.pipe(
       Effect.provide(db()),
@@ -51,6 +58,10 @@ const recover = (statuses: Record<string, string>) =>
           ReviewWorkflowStatus.of({
             status: (instanceId) =>
               Effect.succeed(Option.fromNullable(statuses[instanceId])),
+            terminate: (instanceId) =>
+              Effect.sync(() => {
+                terminated.push(instanceId);
+              }),
           }),
         ),
       ),
@@ -70,7 +81,12 @@ describe("stuck review recovery", () => {
       [`review-run-${finished}`]: "complete",
     });
 
-    expect(result).toEqual({ checked: 3, recovered: 3, skipped: 0 });
+    expect(result).toEqual({
+      checked: 3,
+      recovered: 3,
+      terminated: 0,
+      skipped: 0,
+    });
 
     for (const id of [errored, missing, finished]) {
       expect(await runState(id)).toEqual({
@@ -92,23 +108,87 @@ describe("stuck review recovery", () => {
             ReviewWorkflowStatus.of({
               status: () =>
                 new WorkflowStatusUnavailableError({ cause: "503 from API" }),
+              terminate: () => Effect.void,
             }),
           ),
         ),
       ),
     );
 
-    expect(result).toEqual({ checked: 1, recovered: 0, skipped: 1 });
+    expect(result).toEqual({
+      checked: 1,
+      recovered: 0,
+      terminated: 0,
+      skipped: 1,
+    });
     expect(await runState(id)).toEqual({ status: "running", error_code: null });
   });
 
   it("leaves runs whose workflow is still making progress", async () => {
     const running = await seedRun("running", "running", longAgo());
+    const terminated: Array<string> = [];
 
-    const result = await recover({ [`review-run-${running}`]: "running" });
+    const result = await recover(
+      { [`review-run-${running}`]: "running" },
+      terminated,
+    );
 
     expect(result.recovered).toBe(0);
+    expect(terminated).toEqual([]);
     expect(await runState(running)).toEqual({
+      status: "running",
+      error_code: null,
+    });
+  });
+
+  it("terminates and fails a run whose workflow has been live too long", async () => {
+    const hung = await seedRun("hung", "running", abandonedAgo());
+    const terminated: Array<string> = [];
+
+    const result = await recover(
+      { [`review-run-${hung}`]: "running" },
+      terminated,
+    );
+
+    expect(result).toEqual({
+      checked: 1,
+      recovered: 1,
+      terminated: 1,
+      skipped: 0,
+    });
+    expect(terminated).toEqual([`review-run-${hung}`]);
+    expect(await runState(hung)).toEqual({
+      status: "failed",
+      error_code: "stuck",
+    });
+  });
+
+  it("leaves a hung run alone when its workflow can't be stopped", async () => {
+    const hung = await seedRun("hung", "running", abandonedAgo());
+
+    const result = await Effect.runPromise(
+      recoverStuckRuns.pipe(
+        Effect.provide(db()),
+        Effect.provide(
+          Layer.succeed(
+            ReviewWorkflowStatus,
+            ReviewWorkflowStatus.of({
+              status: () => Effect.succeed(Option.some("running")),
+              terminate: () =>
+                new WorkflowStatusUnavailableError({ cause: "503 from API" }),
+            }),
+          ),
+        ),
+      ),
+    );
+
+    expect(result).toEqual({
+      checked: 1,
+      recovered: 0,
+      terminated: 0,
+      skipped: 1,
+    });
+    expect(await runState(hung)).toEqual({
       status: "running",
       error_code: null,
     });
