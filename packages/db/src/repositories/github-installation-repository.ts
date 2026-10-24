@@ -1,5 +1,5 @@
 import { eq, sql } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 
 import { databaseEffect, DatabaseError } from "../errors.js";
 import { githubInstallations } from "../schema/github-installations.js";
@@ -84,6 +84,14 @@ export class GitHubInstallationRepository extends Effect.Service<GitHubInstallat
             }),
           );
         },
+        findById: (id: number) =>
+          databaseEffect("github_installations.find_by_id", () =>
+            client
+              .select()
+              .from(githubInstallations)
+              .where(eq(githubInstallations.id, id))
+              .get(),
+          ).pipe(Effect.map(Option.fromNullable)),
         listForWorkspace: (workspaceId: number) =>
           databaseEffect("github_installations.list_for_workspace", () =>
             client

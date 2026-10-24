@@ -552,6 +552,14 @@ section.band { padding: clamp(3rem, 7vw, 5rem) 0; border-top: 1px solid var(--st
   font-size: 1.1rem; max-width: 44rem;
 }
 .review-note { margin: 1rem 0 0; }
+.review-title {
+  display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center;
+  margin: 0 0 0.75rem; font-size: 1.1rem; overflow-wrap: anywhere;
+}
+.retry {
+  display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center;
+  margin-top: 0.75rem;
+}
 .findings-heading { margin: 2rem 0 1rem; }
 .findings { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
 .finding {

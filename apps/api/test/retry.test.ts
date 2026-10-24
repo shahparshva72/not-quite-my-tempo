@@ -230,6 +230,7 @@ describe("/fletcher again on the same commit", () => {
                     ? Option.some("running")
                     : Option.none(),
                 ),
+              terminate: () => Effect.void,
             }),
           ),
         ),

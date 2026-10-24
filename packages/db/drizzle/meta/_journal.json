@@ -127,6 +127,13 @@
       "when": 1791620129176,
       "tag": "0017_legal_blob",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1792520492564,
+      "tag": "0018_bizarre_smiling_tiger",
+      "breakpoints": true
     }
   ]
 }

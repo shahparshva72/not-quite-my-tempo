@@ -130,6 +130,22 @@ const REVIEW_STEP_RETRY: LaterRetry = {
   ),
 };
 
+// What the provider said, so a retried model call shows why in the logs:
+// the step's own error is only "An error has occurred". Provider bodies
+// never echo the key (errors.ts).
+const retryDetails = Match.type<ReviewPipelineError>().pipe(
+  Match.tag("ReviewProviderError", (error) => ({
+    provider: error.provider,
+    reason: error.reason,
+    status: error.status ?? undefined,
+    detail: error.detail,
+  })),
+  Match.tag("ReviewTimeoutError", (error) => ({
+    timeoutMillis: error.timeoutMillis,
+  })),
+  Match.orElse(() => ({})),
+);
+
 /**
  * Runs an Effect inside a durable Workflow step. Retryable failures reject
  * the step promise so Cloudflare's step retry policy re-runs them;
@@ -157,6 +173,7 @@ const runStep = <A extends Rpc.Serializable<A>, E extends ReviewPipelineError>(
                 step: name,
                 attempt: ctx.attempt,
                 error: error._tag,
+                ...retryDetails(error),
               }).pipe(Effect.zipRight(Effect.fail(error)))
             : Effect.succeed<StepOutcome<A>>({
                 status: "error",

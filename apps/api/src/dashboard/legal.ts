@@ -4,7 +4,7 @@ import type { HtmlContent } from "./components.js";
 import { layout } from "./components.js";
 
 // Shown on both pages. Bump it whenever either document changes.
-const EFFECTIVE_DATE = "10 October 2026";
+const EFFECTIVE_DATE = "21 October 2026";
 
 const CONTACT_EMAIL = "support@notmytempo.dev";
 
@@ -82,7 +82,10 @@ export const privacyPage = (login: string | null) =>
         verdict, summary, and each finding (file path, line, severity, and
         message, which can quote short pieces of your code). We also keep the
         commit SHA, the pull request number, timing, errors, and token counts.
-        Reviews are also posted as comments on the pull request in GitHub.
+        For each pull request in a repository Fletcher can see, we keep its
+        title, its author's GitHub username, its branch names, and whether it's
+        a draft, open, merged, or closed, so the dashboard can name it. Reviews
+        are also posted as comments on the pull request in GitHub.
       </p>
       <h3>Your own API keys</h3>
       <p>
@@ -103,19 +106,23 @@ export const privacyPage = (login: string | null) =>
       <h3>Activity and operations</h3>
       <p>
         We keep an audit log of role, key, and settings changes in each
-        workspace (who, what, and when). Our operational logs record event
-        names, internal and GitHub IDs, repository names, and error details, but
-        not your code. Cloudflare, which hosts the service, processes request
-        data such as IP addresses to deliver and protect it.
+        workspace (who, what, and when). We note each day you open a page while
+        signed in (just the date, not which pages or what you did there), so we
+        can count how many people use the dashboard and come back to it. Our
+        operational logs record event names, internal and GitHub IDs, repository
+        names, and error details, but not your code. Cloudflare, which hosts the
+        service, processes request data such as IP addresses to deliver and
+        protect it.
       </p>
 
       <h2>Cookies and tracking</h2>
       <p>
         We set one session cookie when you sign in, plus short-lived cookies
         that protect the GitHub sign-in itself. These are strictly necessary, so
-        there's no cookie banner. We don't use analytics, advertising, or
-        tracking scripts. Pages load fonts from Google Fonts, so your browser
-        sends its IP address to Google when fetching them.
+        there's no cookie banner. We don't use analytics services, advertising,
+        or tracking scripts; the days you were active, described above, are
+        recorded on our server. Pages load fonts from Google Fonts, so your
+        browser sends its IP address to Google when fetching them.
       </p>
 
       <h2>How we use it</h2>
@@ -125,6 +132,10 @@ export const privacyPage = (login: string | null) =>
           To decide who can see and change what, based on your GitHub access.
         </li>
         <li>To run the free trial and the paid plan.</li>
+        <li>
+          To learn whether the dashboard is useful, from counts of the days
+          people use it.
+        </li>
         <li>
           To keep the service secure and reliable, for example with the daily
           review limit.
@@ -191,6 +202,9 @@ export const privacyPage = (login: string | null) =>
           settings.
         </li>
         <li>Sessions: one hour, or until you sign out.</li>
+        <li>
+          The days you were active: 400 days, or until you delete your account.
+        </li>
         <li>
           Billing records: Polar keeps these for as long as tax and accounting
           law requires.

@@ -15,3 +15,5 @@ skills-lock.json
 .dev.vars
 
 /docs/SPEC.md
+.idea/
+.claude/

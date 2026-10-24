@@ -1,6 +1,10 @@
 import { html, raw } from "hono/html";
 import type { HtmlEscapedString } from "hono/utils/html";
-import type { FindingSeverity, GitHubRepository } from "@not-quite-my-tempo/db";
+import type {
+  FindingSeverity,
+  GitHubRepository,
+  PullRequest,
+} from "@not-quite-my-tempo/db";
 
 import { FONTS_HREF, styles } from "./theme.js";
 
@@ -111,6 +115,11 @@ const SITE_DESCRIPTION =
 export interface PageMeta {
   readonly description?: string;
   readonly path?: string;
+  /**
+   * Reload the page after this many seconds, for pages waiting on work in
+   * progress. Pages run no scripts, so this is how they stay current.
+   */
+  readonly refreshSeconds?: number;
 }
 
 /**
@@ -135,6 +144,14 @@ export const layout = (
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="color-scheme" content="dark" />
         <meta name="theme-color" content="#0e1c1c" />
+        ${
+          meta.refreshSeconds === undefined
+            ? ""
+            : html`<meta
+                http-equiv="refresh"
+                content="${meta.refreshSeconds}"
+              />`
+        }
         <title>${fullTitle}</title>
         <meta name="description" content="${description}" />
         ${
@@ -225,6 +242,27 @@ export const reviewsBadge = (enabled: boolean) =>
   enabled
     ? html`<span class="badge badge-dot badge-on">Reviews on</span>`
     : html`<span class="badge badge-dot">Reviews off</span>`;
+
+/** "#42 Fix the count-in", or "Pull request 42" before its details arrive. */
+export const pullRequestName = (
+  pullRequestNumber: number,
+  pullRequest: PullRequest | null,
+) =>
+  pullRequest === null
+    ? `Pull request ${pullRequestNumber}`
+    : `#${pullRequestNumber} ${pullRequest.title}`;
+
+/** Open, draft, merged, or closed, as GitHub shows it. */
+export const pullRequestStateBadge = (pullRequest: PullRequest | null) =>
+  pullRequest === null
+    ? ""
+    : pullRequest.state === "merged"
+      ? html`<span class="badge badge-brass">Merged</span>`
+      : pullRequest.state === "closed"
+        ? html`<span class="badge">Closed</span>`
+        : pullRequest.draft
+          ? html`<span class="badge badge-dot">Draft</span>`
+          : html`<span class="badge badge-dot badge-on">Open</span>`;
 
 const severityMarks: Record<FindingSeverity, string> = {
   critical: "ff",

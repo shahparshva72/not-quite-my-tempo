@@ -6,6 +6,8 @@ export * from "./github-installations.js";
 
 export * from "./memberships.js";
 
+export * from "./pull-requests.js";
+
 export * from "./repositories.js";
 
 export * from "./review-run-retries.js";
@@ -13,6 +15,8 @@ export * from "./review-run-retries.js";
 export * from "./review-runs.js";
 
 export * from "./sessions.js";
+
+export * from "./user-active-days.js";
 
 export * from "./users.js";
 
