@@ -636,14 +636,14 @@ describe("paid plan price", () => {
     expect(calls).toEqual([]);
   });
 
-  it("still renders when Polar can't be read, without a price", async () => {
-    polarAnswers([], 500);
+  it("shows the fallback price when Polar can't be read", async () => {
+    polarAnswers([], 403);
 
     const page = await landing();
 
     expect(page).toContain("Fletcher Pro");
-    expect(page).toContain("Paid <small>per workspace</small>");
-    expect(page).not.toContain("$10");
+    expect(page).toContain("for $10/month");
+    expect(page).not.toContain("Paid <small>per workspace</small>");
   });
 
   it("keeps the last known price through a Polar outage", async () => {
