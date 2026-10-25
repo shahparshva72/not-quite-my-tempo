@@ -144,7 +144,12 @@ Workflow.
 The review itself is performed by the `@not-quite-my-tempo/reviewer` package
 (`packages/reviewer`), which calls Gemini's `streamGenerateContent`, OpenAI's
 Responses API, or Anthropic's Messages API with structured JSON output and a
-fixed review persona.
+fixed review persona. Reviews with candidate findings make a second call
+that tries to disprove each one against the same code context and returns
+the indices of those that survive. It has its own 2.5-minute budget and
+adds to reported token usage, so it costs extra provider time and money. If
+it fails or runs out of time, the candidates are published unverified;
+reviews without candidates skip it.
 
 - `GEMINI_API_KEY` (required): add to `apps/api/.dev.vars` locally; in
   production store it as a Worker secret:

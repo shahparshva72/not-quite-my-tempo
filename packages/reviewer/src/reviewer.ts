@@ -21,12 +21,26 @@ import {
   truncateDetail,
 } from "./errors.js";
 import type { ReviewerError } from "./errors.js";
-import { buildReviewUserPrompt, buildSystemPrompt } from "./prompt.js";
-import type { GeminiReviewInput } from "./prompt.js";
 import {
+  buildFocusedUserPrompt,
+  buildMergeSystemPrompt,
+  buildMergeUserPrompt,
+  buildReviewUserPrompt,
+  buildSystemPrompt,
+  buildVerificationSystemPrompt,
+  buildVerificationUserPrompt,
+  SPECIALIST_FOCUSES,
+} from "./prompt.js";
+import type { GeminiReviewInput } from "./prompt.js";
+import type { GeminiFinding } from "./schema.js";
+import {
+  CandidateVerification,
   GeminiReview,
   geminiResponseJsonSchema,
+  geminiVerificationJsonSchema,
   reviewJsonSchema,
+  verdictForFindings,
+  verificationJsonSchema,
 } from "./schema.js";
 
 export const GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com";
@@ -61,6 +75,11 @@ const DEFAULT_TIMEOUT_MILLIS: Readonly<Record<ReviewProvider, number>> = {
   anthropic: 420_000,
 };
 
+// Verification only checks candidates already found, and the run-review
+// step must fit both calls plus the repository context fetch in its 10
+// minutes. When it runs out, the unverified candidates are published.
+const DEFAULT_VERIFICATION_TIMEOUT_MILLIS = 150_000;
+
 // No request sets a temperature. Every supported model reasons before it
 // answers: Claude 5.5+ and GPT reasoning models reject sampling settings,
 // and Google warns that Gemini 3+ below 1.0 can loop or reason worse. How
@@ -70,8 +89,25 @@ const DEFAULT_TIMEOUT_MILLIS: Readonly<Record<ReviewProvider, number>> = {
 // for a long review plus high-effort thinking on a large diff.
 const ANTHROPIC_MAX_TOKENS = 32_000;
 
-// The name OpenAI sees for the structured review.
-const REVIEW_OBJECT_NAME = "fletcher_review";
+/** The JSON shape a call must answer in, per provider dialect. */
+interface OutputFormat {
+  /** The name OpenAI sees for the structured output. */
+  readonly name: string;
+  readonly gemini: object;
+  readonly json: object;
+}
+
+const REVIEW_OUTPUT: OutputFormat = {
+  name: "fletcher_review",
+  gemini: geminiResponseJsonSchema,
+  json: reviewJsonSchema,
+};
+
+const VERIFICATION_OUTPUT: OutputFormat = {
+  name: "fletcher_verification",
+  gemini: geminiVerificationJsonSchema,
+  json: verificationJsonSchema,
+};
 
 export interface ReviewUsage {
   readonly inputTokens: number | null;
@@ -84,12 +120,50 @@ export interface ReviewUsage {
   readonly cachedInputTokens?: number | null;
 }
 
+/**
+ * What happened to the candidate findings. "unverified" means the verifier
+ * failed and the candidates were published as found.
+ */
+export type ReviewVerification =
+  | { readonly status: "not_needed" }
+  | {
+      readonly status: "verified";
+      readonly candidates: number;
+      readonly kept: number;
+    }
+  | {
+      readonly status: "unverified";
+      readonly candidates: number;
+      readonly reason: string;
+    };
+
+/** How a specialist review's passes went and what their merge kept. */
+export interface ReviewFanOut {
+  readonly passes: number;
+  readonly failedPasses: number;
+  readonly candidates: number;
+  readonly kept: number;
+  /** "unmerged": the merge failed, so exact duplicates alone were removed. */
+  readonly merge: "merged" | "unmerged" | "not_needed";
+}
+
 export interface ReviewResult {
   readonly review: GeminiReview;
   readonly provider: ReviewProvider;
   readonly model: string;
   readonly usage: ReviewUsage;
+  /** Absent on results persisted before verification existed. */
+  readonly verification?: ReviewVerification;
+  /** Present only on specialist reviews. */
+  readonly fanOut?: ReviewFanOut;
 }
+
+/**
+ * "single": one review call, then a verification pass over its findings.
+ * "specialists": one call per specialist focus in parallel, their findings
+ * merged and deduplicated, with no verification.
+ */
+export type ReviewStrategy = "single" | "specialists";
 
 export interface ReviewerService {
   readonly review: (
@@ -115,13 +189,24 @@ export interface ReviewerConfig {
   readonly baseUrl?: string;
   /** Defaults to the global fetch; tests answer locally. */
   readonly fetchImpl?: typeof fetch;
+  /** Per attempt at the review itself. */
   readonly timeoutMillis?: number;
+  /** For the whole verification (or merge) stage, retries included. */
+  readonly verificationTimeoutMillis?: number;
+  /** Defaults to "single". */
+  readonly strategy?: ReviewStrategy;
   readonly retryBaseMillis?: number;
   readonly maxRetries?: number;
 }
 
+interface ReviewPrompts {
+  readonly system: string;
+  readonly user: string;
+  readonly output: OutputFormat;
+}
+
 interface ProviderReply {
-  readonly reviewJson: string;
+  readonly json: string;
   readonly usage: ReviewUsage;
 }
 
@@ -282,7 +367,7 @@ const readGeminiStream = (provider: ReviewProvider, body: string) =>
       return yield* invalidOutput(provider, "empty stream");
     }
 
-    let reviewJson = "";
+    let json = "";
     let usage: GeminiUsage = undefined;
 
     for (const data of events) {
@@ -300,7 +385,7 @@ const readGeminiStream = (provider: ReviewProvider, body: string) =>
 
       const chunk = yield* decodeEnvelope(provider, GeminiChunk)(data);
 
-      reviewJson +=
+      json +=
         chunk.candidates?.[0]?.content?.parts
           ?.flatMap((part) => (part.thought === true ? [] : [part.text ?? ""]))
           .join("") ?? "";
@@ -308,7 +393,7 @@ const readGeminiStream = (provider: ReviewProvider, body: string) =>
     }
 
     return {
-      reviewJson,
+      json,
       usage: {
         inputTokens: usage?.promptTokenCount ?? null,
         outputTokens: geminiOutputTokens(usage),
@@ -320,7 +405,7 @@ const readGeminiStream = (provider: ReviewProvider, body: string) =>
 
 const geminiRequest = (
   config: ReviewerConfig,
-  input: GeminiReviewInput,
+  prompts: ReviewPrompts,
 ): ProviderRequest => ({
   url: geminiUrl(config),
   headers: {
@@ -329,11 +414,9 @@ const geminiRequest = (
   },
   body: JSON.stringify({
     systemInstruction: {
-      parts: [{ text: buildSystemPrompt(input.intensity, input.tone) }],
+      parts: [{ text: prompts.system }],
     },
-    contents: [
-      { role: "user", parts: [{ text: buildReviewUserPrompt(input) }] },
-    ],
+    contents: [{ role: "user", parts: [{ text: prompts.user }] }],
     generationConfig: {
       thinkingConfig: {
         thinkingLevel: reviewEffort(config.model),
@@ -342,7 +425,7 @@ const geminiRequest = (
         includeThoughts: true,
       },
       responseMimeType: "application/json",
-      responseSchema: geminiResponseJsonSchema,
+      responseSchema: prompts.output.gemini,
     },
   }),
   read: (body) => readGeminiStream(config.provider, body),
@@ -350,7 +433,7 @@ const geminiRequest = (
 
 const openAiRequest = (
   config: ReviewerConfig,
-  input: GeminiReviewInput,
+  prompts: ReviewPrompts,
 ): ProviderRequest => ({
   url: `${config.baseUrl ?? OPENAI_API_BASE_URL}/v1/responses`,
   headers: {
@@ -359,20 +442,20 @@ const openAiRequest = (
   },
   body: JSON.stringify({
     model: config.model,
-    instructions: buildSystemPrompt(input.intensity, input.tone),
+    instructions: prompts.system,
     input: [
       {
         role: "user",
-        content: [{ type: "input_text", text: buildReviewUserPrompt(input) }],
+        content: [{ type: "input_text", text: prompts.user }],
       },
     ],
     store: false,
     text: {
       format: {
         type: "json_schema",
-        name: REVIEW_OBJECT_NAME,
+        name: prompts.output.name,
         strict: true,
-        schema: reviewJsonSchema,
+        schema: prompts.output.json,
       },
     },
     reasoning: { effort: reviewEffort(config.model) },
@@ -388,7 +471,7 @@ const openAiRequest = (
               invalidOutput(config.provider, `response ${envelope.status}`),
             )
           : Effect.succeed({
-              reviewJson: envelope.output
+              json: envelope.output
                 .flatMap((item) =>
                   item.type === "message" ? (item.content ?? []) : [],
                 )
@@ -413,7 +496,7 @@ const openAiRequest = (
 // text constrained to the schema.
 const anthropicRequest = (
   config: ReviewerConfig,
-  input: GeminiReviewInput,
+  prompts: ReviewPrompts,
 ): ProviderRequest => ({
   url: `${config.baseUrl ?? ANTHROPIC_API_BASE_URL}/v1/messages`,
   headers: {
@@ -425,11 +508,11 @@ const anthropicRequest = (
     model: config.model,
     max_tokens: ANTHROPIC_MAX_TOKENS,
     thinking: { type: "adaptive" },
-    system: buildSystemPrompt(input.intensity, input.tone),
-    messages: [{ role: "user", content: buildReviewUserPrompt(input) }],
+    system: prompts.system,
+    messages: [{ role: "user", content: prompts.user }],
     output_config: {
       effort: reviewEffort(config.model),
-      format: { type: "json_schema", schema: reviewJsonSchema },
+      format: { type: "json_schema", schema: prompts.output.json },
     },
   }),
   read: (body) =>
@@ -452,7 +535,7 @@ const anthropicRequest = (
         const outputTokens = envelope.usage?.output_tokens ?? null;
 
         return Effect.succeed({
-          reviewJson: envelope.content
+          json: envelope.content
             .flatMap((part) => (part.type === "text" ? [part.text ?? ""] : []))
             .join(""),
           usage: {
@@ -468,11 +551,11 @@ const anthropicRequest = (
     ),
 });
 
-const providerRequest = (config: ReviewerConfig, input: GeminiReviewInput) =>
+const providerRequest = (config: ReviewerConfig, prompts: ReviewPrompts) =>
   Match.value(config.provider).pipe(
-    Match.when("openai", () => openAiRequest(config, input)),
-    Match.when("anthropic", () => anthropicRequest(config, input)),
-    Match.orElse(() => geminiRequest(config, input)),
+    Match.when("openai", () => openAiRequest(config, prompts)),
+    Match.when("anthropic", () => anthropicRequest(config, prompts)),
+    Match.orElse(() => geminiRequest(config, prompts)),
   );
 
 const requestFailed = (
@@ -487,9 +570,13 @@ const requestFailed = (
     detail: truncateDetail(String(cause)),
   });
 
-const requestReview = (config: ReviewerConfig, input: GeminiReviewInput) =>
+const requestStructured = <A, I>(
+  config: ReviewerConfig,
+  prompts: ReviewPrompts,
+  schema: Schema.Schema<A, I>,
+) =>
   Effect.gen(function* () {
-    const request = providerRequest(config, input);
+    const request = providerRequest(config, prompts);
 
     const fetchImpl =
       config.fetchImpl ??
@@ -519,19 +606,35 @@ const requestReview = (config: ReviewerConfig, input: GeminiReviewInput) =>
 
     const reply = yield* request.read(body);
 
-    const review = yield* Schema.decodeUnknown(Schema.parseJson(GeminiReview))(
-      reply.reviewJson,
+    const value = yield* Schema.decodeUnknown(Schema.parseJson(schema))(
+      reply.json,
     ).pipe(
       Effect.mapError((cause) => invalidOutput(config.provider, cause.message)),
     );
 
-    return {
-      review,
-      provider: config.provider,
-      model: config.model,
-      usage: reply.usage,
-    } satisfies ReviewResult;
+    return { value, usage: reply.usage };
   });
+
+const sumUsage = (
+  left: number | null | undefined,
+  right: number | null | undefined,
+) => (left == null || right == null ? null : left + right);
+
+const combineUsage = (usages: readonly ReviewUsage[]): ReviewUsage =>
+  usages.reduce((total, usage) => ({
+    inputTokens: sumUsage(total.inputTokens, usage.inputTokens),
+    outputTokens: sumUsage(total.outputTokens, usage.outputTokens),
+    totalTokens: sumUsage(total.totalTokens, usage.totalTokens),
+    cachedInputTokens: sumUsage(
+      total.cachedInputTokens,
+      usage.cachedInputTokens,
+    ),
+  }));
+
+// Without a merge, only findings that are identical in place and title are
+// known to be the same defect.
+const exactDuplicateKey = (finding: GeminiFinding) =>
+  JSON.stringify([finding.filePath, finding.line, finding.title]);
 
 /** A Reviewer for one provider, key, and model, built per review run. */
 export const ReviewerLive = (config: ReviewerConfig) => {
@@ -547,25 +650,260 @@ export const ReviewerLive = (config: ReviewerConfig) => {
     ),
   );
 
-  return Layer.succeed(
-    Reviewer,
-    Reviewer.of({
-      review: (input) =>
-        requestReview(config, input).pipe(
-          Effect.timeoutFail({
-            duration: Duration.millis(timeoutMillis),
-            onTimeout: () => new ReviewTimeoutError({ timeoutMillis }),
-          }),
-          // A timed-out attempt is not repeated here: the provider may
-          // still bill it, and an immediate retry hits the same load. The
-          // Workflow retries the whole step later instead.
-          Effect.retry({
-            schedule: retrySchedule,
-            while: (error) =>
-              !Predicate.isTagged(error, "ReviewTimeoutError") &&
-              isRetryableReviewerError(error),
-          }),
-        ),
-    }),
-  );
+  const verificationTimeoutMillis =
+    config.verificationTimeoutMillis ?? DEFAULT_VERIFICATION_TIMEOUT_MILLIS;
+
+  const retried = <A, E extends ReviewerError, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) =>
+    effect.pipe(
+      // A timed-out attempt is not repeated here: the provider may still
+      // bill it, and an immediate retry hits the same load. The Workflow
+      // retries the whole step later instead.
+      Effect.retry({
+        schedule: retrySchedule,
+        while: (error) =>
+          !Predicate.isTagged(error, "ReviewTimeoutError") &&
+          isRetryableReviewerError(error),
+      }),
+    );
+
+  const findCandidates = (
+    input: GeminiReviewInput,
+    user = buildReviewUserPrompt(input),
+  ) =>
+    retried(
+      requestStructured(
+        config,
+        {
+          system: buildSystemPrompt(input.intensity, input.tone),
+          user,
+          output: REVIEW_OUTPUT,
+        },
+        GeminiReview,
+      ).pipe(
+        Effect.timeoutFail({
+          duration: Duration.millis(timeoutMillis),
+          onTimeout: () => new ReviewTimeoutError({ timeoutMillis }),
+        }),
+      ),
+    );
+
+  // Asks which of `count` numbered candidates to keep (verification, or a
+  // merge), within the stage's own budget.
+  const chooseCandidates = (system: string, user: string, count: number) =>
+    retried(
+      requestStructured(
+        config,
+        { system, user, output: VERIFICATION_OUTPUT },
+        CandidateVerification,
+      ),
+    ).pipe(
+      Effect.timeoutFail({
+        duration: Duration.millis(verificationTimeoutMillis),
+        onTimeout: () =>
+          new ReviewTimeoutError({ timeoutMillis: verificationTimeoutMillis }),
+      }),
+      Effect.flatMap((reply) =>
+        reply.value.keep.every((index) => index < count)
+          ? Effect.succeed(reply)
+          : Effect.fail(
+              invalidOutput(
+                config.provider,
+                `kept an unknown candidate: ${JSON.stringify(reply.value.keep)}`,
+              ),
+            ),
+      ),
+    );
+
+  const verify = (input: GeminiReviewInput, candidates: GeminiReview) =>
+    chooseCandidates(
+      buildVerificationSystemPrompt(input.intensity, input.tone),
+      buildVerificationUserPrompt(input, candidates),
+      candidates.findings.length,
+    );
+
+  const reviewWithSpecialists = (input: GeminiReviewInput) =>
+    Effect.gen(function* () {
+      const [failures, passes] = yield* Effect.partition(
+        SPECIALIST_FOCUSES,
+        (focus) => findCandidates(input, buildFocusedUserPrompt(input, focus)),
+        { concurrency: "unbounded" },
+      );
+
+      const [firstPass] = passes;
+
+      // One pass's findings are still a review; only all failing loses it.
+      if (firstPass === undefined) {
+        return yield* Effect.fail(
+          failures[0] ??
+            invalidOutput(config.provider, "no specialist pass ran"),
+        );
+      }
+
+      if (failures.length > 0) {
+        yield* Effect.logWarning("specialist passes failed", {
+          provider: config.provider,
+          errors: failures.map((error) => error._tag),
+        });
+      }
+
+      const candidates = passes.flatMap((pass) => pass.value.findings);
+
+      const passUsage = combineUsage(passes.map((pass) => pass.usage));
+
+      const fanOut = {
+        passes: SPECIALIST_FOCUSES.length,
+        failedPasses: failures.length,
+        candidates: candidates.length,
+      };
+
+      const result = { provider: config.provider, model: config.model };
+
+      if (candidates.length <= 1) {
+        return {
+          ...result,
+          review: {
+            summary: firstPass.value.summary,
+            findings: candidates,
+            verdict: verdictForFindings(candidates),
+          },
+          usage: passUsage,
+          fanOut: { ...fanOut, kept: candidates.length, merge: "not_needed" },
+        } satisfies ReviewResult;
+      }
+
+      return yield* chooseCandidates(
+        buildMergeSystemPrompt(input.intensity, input.tone),
+        buildMergeUserPrompt(input, candidates),
+        candidates.length,
+      ).pipe(
+        Effect.matchEffect({
+          onFailure: (error) => {
+            const seen = new Set<string>();
+
+            const findings = candidates.filter((finding) => {
+              const key = exactDuplicateKey(finding);
+
+              return seen.has(key) ? false : (seen.add(key), true);
+            });
+
+            return Effect.logWarning(
+              "merge failed; removing exact duplicates",
+              {
+                provider: config.provider,
+                error: error._tag,
+              },
+            ).pipe(
+              Effect.as({
+                ...result,
+                review: {
+                  summary: firstPass.value.summary,
+                  findings,
+                  verdict: verdictForFindings(findings),
+                },
+                usage: passUsage,
+                fanOut: { ...fanOut, kept: findings.length, merge: "unmerged" },
+              } satisfies ReviewResult),
+            );
+          },
+          onSuccess: (merged) => {
+            // In the merge's order (most important first), each kept once.
+            const findings = [...new Set(merged.value.keep)].flatMap(
+              (index) => {
+                const finding = candidates[index];
+
+                return finding === undefined ? [] : [finding];
+              },
+            );
+
+            return Effect.succeed({
+              ...result,
+              review: {
+                summary: merged.value.summary,
+                findings,
+                verdict: verdictForFindings(findings),
+              },
+              usage: combineUsage([passUsage, merged.usage]),
+              fanOut: { ...fanOut, kept: findings.length, merge: "merged" },
+            } satisfies ReviewResult);
+          },
+        }),
+      );
+    });
+
+  const reviewOnce = (input: GeminiReviewInput) =>
+    Effect.gen(function* () {
+      const found = yield* findCandidates(input);
+
+      const candidates = found.value;
+
+      const result = { provider: config.provider, model: config.model };
+
+      if (candidates.findings.length === 0) {
+        return {
+          ...result,
+          review: { ...candidates, verdict: "good_job" },
+          usage: found.usage,
+          verification: { status: "not_needed" },
+        } satisfies ReviewResult;
+      }
+
+      return yield* verify(input, candidates).pipe(
+        Effect.matchEffect({
+          // Candidates are a complete review on their own; a verifier
+          // failure publishes them as found rather than losing the review.
+          onFailure: (error) =>
+            Effect.logWarning("verification failed; publishing candidates", {
+              provider: config.provider,
+              error: error._tag,
+            }).pipe(
+              Effect.as({
+                ...result,
+                review: {
+                  ...candidates,
+                  verdict: verdictForFindings(candidates.findings),
+                },
+                usage: found.usage,
+                verification: {
+                  status: "unverified",
+                  candidates: candidates.findings.length,
+                  reason: error._tag,
+                },
+              } satisfies ReviewResult),
+            ),
+          onSuccess: (verified) => {
+            const keep = new Set(verified.value.keep);
+
+            const findings = candidates.findings.filter((_, index) =>
+              keep.has(index),
+            );
+
+            return Effect.succeed({
+              ...result,
+              review: {
+                // Untouched candidates keep the summary that introduced them.
+                summary:
+                  findings.length === candidates.findings.length
+                    ? candidates.summary
+                    : verified.value.summary,
+                findings,
+                verdict: verdictForFindings(findings),
+              },
+              usage: combineUsage([found.usage, verified.usage]),
+              verification: {
+                status: "verified",
+                candidates: candidates.findings.length,
+                kept: findings.length,
+              },
+            } satisfies ReviewResult);
+          },
+        }),
+      );
+    });
+
+  const review =
+    config.strategy === "specialists" ? reviewWithSpecialists : reviewOnce;
+
+  return Layer.succeed(Reviewer, Reviewer.of({ review }));
 };

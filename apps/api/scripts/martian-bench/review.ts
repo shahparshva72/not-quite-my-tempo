@@ -13,7 +13,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 
-import { Effect, Layer, Option, Ref, Schema } from "effect";
+import { Effect, Layer, Match, Option, Ref, Schema } from "effect";
 import {
   commentableLinesByFile,
   filterUnifiedDiff,
@@ -27,12 +27,14 @@ import {
   Reviewer,
   ReviewerLive,
   reviewCostUsdMicros,
+  verdictForFindings,
 } from "@not-quite-my-tempo/reviewer";
 import type {
   CatalogModel,
   GeminiReview,
   GeminiReviewInput,
   ReviewerConfig,
+  ReviewStrategy,
   ReviewUsage,
 } from "@not-quite-my-tempo/reviewer";
 
@@ -120,6 +122,10 @@ const usage = `Usage: pnpm --filter @not-quite-my-tempo/api bench:review \\
   --limit <n>         At most n pull requests in total
   --concurrency <n>   Reviews in flight at once (default 2)
   --timeout <s>       Seconds per model call (default: production's 420)
+  --strategy <s>      single (one call, then verification; default) or
+                      specialists (parallel focused passes, merged)
+  --top <n>           Also record the first n findings of each review as
+                      tool <tool>-top<n> (the merge orders by importance)
   --no-context        Review the diff alone, without repository context
   --force             Re-review pull requests this tool already reviewed
   --dry-run           Fetch and build every prompt, print the estimated
@@ -138,6 +144,8 @@ const { values: args } = parseArgs({
     limit: { type: "string" },
     concurrency: { type: "string", default: "2" },
     timeout: { type: "string" },
+    strategy: { type: "string", default: "single" },
+    top: { type: "string" },
     "no-context": { type: "boolean", default: false },
     force: { type: "boolean", default: false },
     "dry-run": { type: "boolean", default: false },
@@ -173,6 +181,11 @@ const modelId = args.model;
 
 const tool = args.tool ?? `fletcher-${modelId}`;
 
+const strategy: ReviewStrategy =
+  args.strategy === "single" || args.strategy === "specialists"
+    ? args.strategy
+    : fail(`--strategy must be single or specialists, got "${args.strategy}".`);
+
 const perRepo = positiveInt("per-repo", args["per-repo"]);
 
 const limit = positiveInt("limit", args.limit);
@@ -183,6 +196,10 @@ const concurrency = Option.getOrElse(
 );
 
 const timeoutSeconds = positiveInt("timeout", args.timeout);
+
+const top = positiveInt("top", args.top);
+
+const topTool = Option.map(top, (n) => `${tool}-top${n}`);
 
 const dryRun = args["dry-run"];
 
@@ -381,27 +398,72 @@ const reviewPullRequest = (ref: PullRequestRef, model: CatalogModel) =>
       result.usage.cachedInputTokens ?? null,
     );
 
-    const comments = reviewComments(result.review, input.diff);
-
-    const record: BenchmarkReview = {
-      tool,
+    const recordFor = (
+      name: string,
+      review: GeminiReview,
+    ): BenchmarkReview => ({
+      tool: name,
       repo_name: `${ref.owner}/${ref.repo}`,
       pr_url: `https://github.com/${ref.owner}/${ref.repo}/pull/${ref.pullRequestNumber}`,
-      review_comments: comments,
+      review_comments: reviewComments(review, input.diff),
       fletcher: {
         model: result.model,
-        verdict: result.review.verdict,
-        findings: result.review.findings.length,
+        strategy,
+        verdict: review.verdict,
+        findings: review.findings.length,
         context: input.context !== null,
         input_tokens: result.usage.inputTokens,
         output_tokens: outputTokens,
         cached_input_tokens: result.usage.cachedInputTokens ?? null,
         cost_usd: costMicros / 1_000_000,
+        verification: result.verification ?? null,
+        fan_out: result.fanOut === undefined ? null : { ...result.fanOut },
       },
-    };
+    });
+
+    const record = recordFor(tool, result.review);
+
+    // The same review cut to its first n findings; it cost the same calls.
+    const variants = Option.match(Option.all([top, topTool]), {
+      onNone: () => [],
+      onSome: ([n, name]) => {
+        const findings = result.review.findings.slice(0, n);
+
+        return [
+          recordFor(name, {
+            ...result.review,
+            findings,
+            verdict: verdictForFindings(findings),
+          }),
+        ];
+      },
+    });
+
+    const outcome = Match.value(result).pipe(
+      Match.when(
+        { fanOut: { merge: Match.string } },
+        ({ fanOut }) =>
+          `${fanOut.merge} ${fanOut.kept}/${fanOut.candidates} from ${fanOut.passes - fanOut.failedPasses}/${fanOut.passes} passes`,
+      ),
+      Match.when(
+        { verification: { status: "verified" } },
+        ({ verification }) =>
+          `kept ${verification.kept}/${verification.candidates}`,
+      ),
+      Match.when(
+        { verification: { status: "unverified" } },
+        ({ verification }) => `unverified: ${verification.reason}`,
+      ),
+      Match.orElse(() => "no candidates"),
+    );
 
     // The first comment is the summary; the rest are inline.
-    return { record, costMicros, inlineCount: comments.length - 1 };
+    return {
+      records: [record, ...variants],
+      costMicros,
+      inlineCount: reviewComments(result.review, input.diff).length - 1,
+      outcome,
+    };
   });
 
 const writeData = (data: BenchmarkData) =>
@@ -425,7 +487,7 @@ const runReviews = (
           onNone: () => Effect.sync(() => failed.push(goldenUrl)),
           onSome: (ref) =>
             reviewPullRequest(ref, catalogModel).pipe(
-              Effect.flatMap(({ record, costMicros, inlineCount }) =>
+              Effect.flatMap(({ records, costMicros, inlineCount, outcome }) =>
                 Ref.updateAndGet(state, (current) => {
                   const existing = current[goldenUrl] ?? entry;
 
@@ -435,9 +497,12 @@ const runReviews = (
                       ...existing,
                       reviews: [
                         ...existing.reviews.filter(
-                          (review) => review.tool !== tool,
+                          (review) =>
+                            !records.some(
+                              (record) => record.tool === review.tool,
+                            ),
                         ),
-                        record,
+                        ...records,
                       ],
                     },
                   };
@@ -449,7 +514,7 @@ const runReviews = (
                   Effect.tap((total) =>
                     Effect.sync(() =>
                       console.log(
-                        `[${index + 1}/${selected.length}] ${goldenUrl}: ${inlineCount} inline, ${usd(costMicros)} (total ${usd(total)})`,
+                        `[${index + 1}/${selected.length}] ${goldenUrl}: ${inlineCount} inline (${outcome}), ${usd(costMicros)} (total ${usd(total)})`,
                       ),
                     ),
                   ),
@@ -562,9 +627,10 @@ const ReviewerFromKey = Layer.unwrapEffect(
     Effect.map((key) =>
       ReviewerLive(
         Option.match(timeoutSeconds, {
-          onNone: (): ReviewerConfig => key,
+          onNone: (): ReviewerConfig => ({ ...key, strategy }),
           onSome: (seconds): ReviewerConfig => ({
             ...key,
+            strategy,
             timeoutMillis: seconds * 1_000,
           }),
         }),
