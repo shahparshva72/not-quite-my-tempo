@@ -10,6 +10,18 @@ const PRICE_TTL_MS = 60 * 60 * 1000;
 /** After a failed read, wait this long before asking Polar again. */
 const RETRY_AFTER_MS = 5 * 60 * 1000;
 
+/**
+ * What pages show when Polar can't be read and no price is cached, so the
+ * plan never shows without one. Checkout charges whatever Polar sells,
+ * so keep this in step with the product's price.
+ */
+const FALLBACK_PRICE: PlanPrice = {
+  productName: "Fletcher Pro",
+  amount: 1000,
+  currency: "usd",
+  interval: "month",
+};
+
 interface CachedPrice {
   readonly price: Option.Option<PlanPrice>;
   readonly expiresAt: number;
@@ -21,8 +33,8 @@ const cache = new Map<string, CachedPrice>();
 
 /**
  * The paid plan's price for pages to show. Never fails: when Polar can't
- * be read, the last known price is kept, or pages fall back to wording
- * without a price.
+ * be read, the last known price is kept, or pages fall back to
+ * `FALLBACK_PRICE`.
  */
 export const cachedPlanPrice = (config: PolarConfig) =>
   Effect.gen(function* () {
@@ -49,7 +61,12 @@ export const cachedPlanPrice = (config: PolarConfig) =>
             status: error.status ?? "none",
           });
 
-          const price = Option.flatMap(cached, (stale) => stale.price);
+          const price = Option.some(
+            Option.flatMap(cached, (stale) => stale.price).pipe(
+              Option.getOrElse(() => FALLBACK_PRICE),
+            ),
+          );
+
           cache.set(key, { price, expiresAt: now + RETRY_AFTER_MS });
 
           return price;
