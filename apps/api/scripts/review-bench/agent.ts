@@ -29,7 +29,10 @@ import type {
   ReviewStrategy,
 } from "@not-quite-my-tempo/reviewer";
 
-import { findRelatedCode } from "../../src/application/related-code.js";
+import {
+  findRelatedCode,
+  isTestPath,
+} from "../../src/application/related-code.js";
 import { buildRepositoryContext } from "../../src/application/repository-context.js";
 import { withVertexProject } from "../../src/application/review-keys.js";
 import { checkoutSearch, checkoutSource } from "./checkout.js";
@@ -97,7 +100,49 @@ const pr = Schema.decodeUnknownSync(Schema.parseJson(PullRequestJson))(
   readFileSync(env("RB_PR_JSON"), "utf8"),
 );
 
-const diff = filterUnifiedDiff(readFileSync(env("RB_DIFF"), "utf8"));
+// Production refuses pull requests whose diff passes this; here every pull
+// request needs a review, so the files that fit are reviewed instead.
+const MAX_DIFF_BYTES = 300_000;
+
+const byteLength = (text: string) => Buffer.byteLength(text, "utf8");
+
+/** Keeps whole files while they fit, source before tests. */
+const fitDiff = (full: string) => {
+  if (byteLength(full) <= MAX_DIFF_BYTES) {
+    return full;
+  }
+
+  const files = full.split(/^(?=diff --git )/m);
+
+  const ranked = files
+    .map((text, index) => ({
+      text,
+      index,
+      test: isTestPath(/^diff --git a\/(\S+)/.exec(text)?.[1] ?? ""),
+    }))
+    .sort((a, b) => Number(a.test) - Number(b.test) || a.index - b.index);
+
+  const kept = new Set<number>();
+
+  let remaining = MAX_DIFF_BYTES;
+
+  for (const file of ranked) {
+    const size = byteLength(file.text);
+
+    if (size <= remaining) {
+      kept.add(file.index);
+      remaining -= size;
+    }
+  }
+
+  console.error(
+    `diff over ${MAX_DIFF_BYTES} bytes: reviewing ${kept.size} of ${files.length} files`,
+  );
+
+  return files.filter((_, index) => kept.has(index)).join("");
+};
+
+const diff = fitDiff(filterUnifiedDiff(readFileSync(env("RB_DIFF"), "utf8")));
 
 // A finding needs a line: file-level ones go on the file's first added line.
 const firstAddedLine = new Map(
@@ -218,10 +263,14 @@ const ReviewerFromKey = Layer.unwrapEffect(
       const reviewer: ReviewerConfig = {
         ...key,
         strategy,
-        // Free-tier keys answer 429 often; a pull request may take 30
-        // minutes, so wait rate limits out rather than fail the run.
+        // Rate limits are common with several reviews in flight. Wait them
+        // out, but give each pass a deadline so the review (passes, then a
+        // 2.5-minute merge) ends well inside ReviewBench's 30 minutes: one
+        // pull request that never finishes fails the whole run.
         maxRetries: 8,
         retryBaseMillis: 5_000,
+        maxRetryDelayMillis: 60_000,
+        passDeadlineMillis: 18 * 60_000,
         ...Option.match(baseUrl, {
           onNone: () => ({}),
           onSome: (origin) => ({ baseUrl: origin }),

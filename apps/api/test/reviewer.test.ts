@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildReviewUserPrompt,
   buildSystemPrompt,
+  buildVerificationSystemPrompt,
   filterReviewBySeverity,
   FLETCHER_RUTHLESS_SYSTEM_PROMPT,
   FLETCHER_SYSTEM_PROMPT,
@@ -885,6 +886,32 @@ describe("buildSystemPrompt", () => {
     },
   );
 
+  it("asks for every real defect and keeps likely ones at lower confidence", () => {
+    const prompt = buildSystemPrompt("studio_band", "standard");
+
+    expect(prompt).toContain("Report every distinct real defect, each once.");
+    expect(prompt).toContain("Go through every changed file and hunk");
+    expect(prompt).toContain("report it with lower confidence");
+    expect(prompt).toContain(
+      "Drop only\n  suspicions with no concrete trigger.",
+    );
+    expect(prompt).not.toContain("Prefer a few high-signal findings");
+    expect(prompt).not.toContain("Omit unresolved suspicions");
+  });
+
+  it("asks finding messages to state the defect before the persona", () => {
+    expect(FLETCHER_RUTHLESS_SYSTEM_PROMPT).toContain(
+      'Its "message" opens with what\n  is wrong and when it happens',
+    );
+  });
+
+  it("verifies by removing errors, not uncertainty", () => {
+    const prompt = buildVerificationSystemPrompt("studio_band", "standard");
+
+    expect(prompt).toContain("Reject a candidate only when the supplied code");
+    expect(prompt).toContain("you are removing errors, not uncertainty");
+  });
+
   it("keeps the rubric and guardrails intact in the ruthless tone", () => {
     const prompt = buildSystemPrompt("studio_band", "ruthless");
 
@@ -1295,16 +1322,30 @@ describe("specialist review", () => {
   const race = finding("Tempo cache mutated across requests", "critical");
   const vacuous = finding("Patched sleep makes the count-off test vacuous");
 
+  type Focus =
+    | "logic"
+    | "reliability"
+    | "concurrency"
+    | "security"
+    | "tests_contracts";
+
+  // Each focus is found by the opening words of its section of the prompt.
+  const focusOf = (body: string): Focus =>
+    body.includes("Failure handling")
+      ? "reliability"
+      : body.includes("Concurrency and lifetime")
+        ? "concurrency"
+        : body.includes("Security at trust boundaries")
+          ? "security"
+          : body.includes("Tests and contracts")
+            ? "tests_contracts"
+            : "logic";
+
   // Each pass answers by its focus; the merge answers with `merge`.
   const specialists =
     (
       merge: ReviewPayload | Response,
-      byFocus: Partial<
-        Record<
-          "logic" | "concurrency" | "tests_contracts",
-          ReviewPayload | Response
-        >
-      > = {},
+      byFocus: Partial<Record<Focus, ReviewPayload | Response>> = {},
     ) =>
     (_: number, __: boolean, body: string) => {
       const reply = (payload: ReviewPayload | Response) =>
@@ -1314,19 +1355,15 @@ describe("specialist review", () => {
         return reply(merge);
       }
 
-      const focus: "logic" | "concurrency" | "tests_contracts" = body.includes(
-        "Concurrency and lifetime",
-      )
-        ? "concurrency"
-        : body.includes("Tests and contracts")
-          ? "tests_contracts"
-          : "logic";
+      const focus = focusOf(body);
 
       const defaults = {
         logic: { ...reviewJson, findings: [logic] },
+        reliability: { ...reviewJson, findings: [] },
         concurrency: { ...reviewJson, findings: [race, logic] },
+        security: { ...reviewJson, findings: [] },
         tests_contracts: { ...reviewJson, findings: [vacuous] },
-      } satisfies Record<typeof focus, ReviewPayload>;
+      } satisfies Record<Focus, ReviewPayload>;
 
       return reply(byFocus[focus] ?? defaults[focus]);
     };
@@ -1355,9 +1392,9 @@ describe("specialist review", () => {
         },
     );
 
-    const passes = bodies.slice(0, 3);
+    const passes = bodies.slice(0, 5);
 
-    expect(requests).toHaveLength(4);
+    expect(requests).toHaveLength(6);
 
     for (const body of passes) {
       expect(body.systemInstruction.parts[0]?.text).toBe(
@@ -1372,9 +1409,9 @@ describe("specialist review", () => {
 
     expect(
       new Set(passes.map((body) => body.contents[0]?.parts[0]?.text)).size,
-    ).toBe(3);
+    ).toBe(5);
 
-    const merge = bodies[3]?.contents[0]?.parts[0]?.text ?? "";
+    const merge = bodies[5]?.contents[0]?.parts[0]?.text ?? "";
 
     expect(merge).not.toContain(input.diff);
     expect(merge).toContain(`3: ${JSON.stringify(vacuous)}`);
@@ -1393,14 +1430,14 @@ describe("specialist review", () => {
       findings: [race, logic, vacuous],
     });
     expect(result.fanOut).toEqual({
-      passes: 3,
+      passes: 5,
       failedPasses: 0,
       candidates: 4,
       kept: 3,
       merge: "merged",
     });
     expect(result.verification).toBeUndefined();
-    expect(result.usage.totalTokens).toBe(6000);
+    expect(result.usage.totalTokens).toBe(9000);
   });
 
   it("removes exact duplicates when the merge fails", async () => {
@@ -1410,7 +1447,7 @@ describe("specialist review", () => {
 
     expect(result.review.findings).toEqual([logic, race, vacuous]);
     expect(result.fanOut).toMatchObject({ kept: 3, merge: "unmerged" });
-    expect(result.usage.totalTokens).toBe(4500);
+    expect(result.usage.totalTokens).toBe(7500);
   });
 
   it("keeps the other passes' findings when one pass fails", async () => {
@@ -1429,13 +1466,34 @@ describe("specialist review", () => {
     expect(result.fanOut).toMatchObject({ failedPasses: 1, candidates: 2 });
   });
 
+  it("gives up on a pass past its deadline and keeps the others", async () => {
+    const result = await Effect.runPromise(
+      runReview({
+        strategy: "specialists",
+        passDeadlineMillis: 50,
+        fetch: fakeFetch(
+          specialists(
+            { keep: [0, 1], summary: "Merged." },
+            { concurrency: new Response("slow", { status: 503 }) },
+          ),
+        ),
+        // The overloaded pass keeps retrying until its deadline ends it.
+        maxRetries: 100,
+        retryBaseMillis: 20,
+      }),
+    );
+
+    expect(result.review.findings).toEqual([logic, vacuous]);
+    expect(result.fanOut).toMatchObject({ failedPasses: 1, candidates: 2 });
+  });
+
   it("fails only when every pass fails", async () => {
     const fetch = fakeFetch(() => new Response("bad request", { status: 400 }));
 
     const error = await Effect.runPromise(Effect.flip(runSpecialists(fetch)));
 
     expect(error._tag).toBe("ReviewProviderError");
-    expect(fetch.calls()).toBe(3);
+    expect(fetch.calls()).toBe(5);
   });
 
   it("skips the merge with at most one candidate", async () => {
@@ -1450,7 +1508,7 @@ describe("specialist review", () => {
 
     const result = await Effect.runPromise(runSpecialists(fetch));
 
-    expect(fetch.calls()).toBe(3);
+    expect(fetch.calls()).toBe(5);
     expect(result.review.findings).toEqual([logic]);
     expect(result.fanOut).toMatchObject({ merge: "not_needed", kept: 1 });
   });

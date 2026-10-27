@@ -62,6 +62,10 @@ const DEFAULT_RETRY_BASE_MILLIS = 2_000;
 
 const DEFAULT_MAX_RETRIES = 3;
 
+// Doubling waits are capped so a run of rate limits can't stretch one
+// review past its step's time limit.
+const DEFAULT_MAX_RETRY_DELAY_MILLIS = 30_000;
+
 // Gemini 3.x models think before answering, and under load even a short
 // prompt can take half a minute; 60s timed out real reviews. How long a
 // review takes follows how long the model thinks, not the prompt size: on
@@ -197,6 +201,14 @@ export interface ReviewerConfig {
   readonly strategy?: ReviewStrategy;
   readonly retryBaseMillis?: number;
   readonly maxRetries?: number;
+  /** The longest wait between retries. */
+  readonly maxRetryDelayMillis?: number;
+  /**
+   * For each specialist pass, retries included; a pass past it counts as
+   * failed and the others' findings are kept. Unset, a pass is bounded only
+   * per attempt.
+   */
+  readonly passDeadlineMillis?: number;
 }
 
 interface ReviewPrompts {
@@ -636,6 +648,15 @@ const combineUsage = (usages: readonly ReviewUsage[]): ReviewUsage =>
 const exactDuplicateKey = (finding: GeminiFinding) =>
   JSON.stringify([finding.filePath, finding.line, finding.title]);
 
+const describeFailure = (error: ReviewerError) =>
+  Match.value(error).pipe(
+    Match.tag(
+      "ReviewProviderError",
+      (failure) => `${failure.reason} (${failure.status ?? "no status"})`,
+    ),
+    Match.orElse((failure) => failure._tag),
+  );
+
 /** A Reviewer for one provider, key, and model, built per review run. */
 export const ReviewerLive = (config: ReviewerConfig) => {
   const timeoutMillis =
@@ -644,6 +665,13 @@ export const ReviewerLive = (config: ReviewerConfig) => {
   const retrySchedule = Schedule.exponential(
     Duration.millis(config.retryBaseMillis ?? DEFAULT_RETRY_BASE_MILLIS),
   ).pipe(
+    Schedule.union(
+      Schedule.spaced(
+        Duration.millis(
+          config.maxRetryDelayMillis ?? DEFAULT_MAX_RETRY_DELAY_MILLIS,
+        ),
+      ),
+    ),
     Schedule.jittered,
     Schedule.intersect(
       Schedule.recurs(config.maxRetries ?? DEFAULT_MAX_RETRIES),
@@ -657,6 +685,13 @@ export const ReviewerLive = (config: ReviewerConfig) => {
     effect: Effect.Effect<A, E, R>,
   ) =>
     effect.pipe(
+      // Every failed call is logged, so a slow review says what it waited on.
+      Effect.tapError((error) =>
+        Effect.logWarning("model call failed", {
+          provider: config.provider,
+          error: describeFailure(error),
+        }),
+      ),
       // A timed-out attempt is not repeated here: the provider may still
       // bill it, and an immediate retry hits the same load. The Workflow
       // retries the whole step later instead.
@@ -723,11 +758,30 @@ export const ReviewerLive = (config: ReviewerConfig) => {
       candidates.findings.length,
     );
 
+  const withPassDeadline = <A, R>(
+    pass: Effect.Effect<A, ReviewerError, R>,
+  ): Effect.Effect<A, ReviewerError, R> => {
+    const deadline = config.passDeadlineMillis;
+
+    return deadline === undefined
+      ? pass
+      : pass.pipe(
+          Effect.timeoutFail({
+            duration: Duration.millis(deadline),
+            onTimeout: () =>
+              new ReviewTimeoutError({ timeoutMillis: deadline }),
+          }),
+        );
+  };
+
   const reviewWithSpecialists = (input: GeminiReviewInput) =>
     Effect.gen(function* () {
       const [failures, passes] = yield* Effect.partition(
         SPECIALIST_FOCUSES,
-        (focus) => findCandidates(input, buildFocusedUserPrompt(input, focus)),
+        (focus) =>
+          withPassDeadline(
+            findCandidates(input, buildFocusedUserPrompt(input, focus)),
+          ),
         { concurrency: "unbounded" },
       );
 
