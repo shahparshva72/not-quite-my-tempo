@@ -54,6 +54,24 @@ describe("changedSymbols", () => {
       "countOff",
     ]);
   });
+
+  it("doesn't mistake control flow for a definition", () => {
+    const controlFlow = `diff --git a/src/tempo.ts b/src/tempo.ts
+--- a/src/tempo.ts
++++ b/src/tempo.ts
+@@ -1,1 +1,7 @@
++  while (ready) {
++  switch (beat) {
++  catch (error) {
++  foreach ($beats as $beat) {
++  synchronized (lock) {
++  subdivide(beat: number): number {
+`;
+
+    expect(changedSymbols(parseUnifiedDiff(controlFlow))).toEqual([
+      "subdivide",
+    ]);
+  });
 });
 
 describe("test discovery", () => {

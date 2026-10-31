@@ -632,12 +632,19 @@ const sumUsage = (
   right: number | null | undefined,
 ) => (left == null || right == null ? null : left + right);
 
+// Gemini omits the cached count on a call with no cache hit, so a missing
+// count here means none rather than unknown.
+const sumCachedTokens = (
+  left: number | null | undefined,
+  right: number | null | undefined,
+) => (left == null && right == null ? null : (left ?? 0) + (right ?? 0));
+
 const combineUsage = (usages: readonly ReviewUsage[]): ReviewUsage =>
   usages.reduce((total, usage) => ({
     inputTokens: sumUsage(total.inputTokens, usage.inputTokens),
     outputTokens: sumUsage(total.outputTokens, usage.outputTokens),
     totalTokens: sumUsage(total.totalTokens, usage.totalTokens),
-    cachedInputTokens: sumUsage(
+    cachedInputTokens: sumCachedTokens(
       total.cachedInputTokens,
       usage.cachedInputTokens,
     ),
@@ -804,6 +811,11 @@ export const ReviewerLive = (config: ReviewerConfig) => {
 
       const candidates = passes.flatMap((pass) => pass.value.findings);
 
+      // A pass that found nothing would call the pull request clean.
+      const summary = (
+        passes.find((pass) => pass.value.findings.length > 0) ?? firstPass
+      ).value.summary;
+
       const passUsage = combineUsage(passes.map((pass) => pass.usage));
 
       const fanOut = {
@@ -818,7 +830,7 @@ export const ReviewerLive = (config: ReviewerConfig) => {
         return {
           ...result,
           review: {
-            summary: firstPass.value.summary,
+            summary,
             findings: candidates,
             verdict: verdictForFindings(candidates),
           },
@@ -852,7 +864,7 @@ export const ReviewerLive = (config: ReviewerConfig) => {
               Effect.as({
                 ...result,
                 review: {
-                  summary: firstPass.value.summary,
+                  summary,
                   findings,
                   verdict: verdictForFindings(findings),
                 },

@@ -89,6 +89,15 @@ const COMMON_NAMES = new Set([
   "number",
   "boolean",
   "object",
+  // Control flow reads like a method definition: `while (ready) {`.
+  "while",
+  "switch",
+  "catch",
+  "foreach",
+  "elseif",
+  "synchronized",
+  "using",
+  "when",
 ]);
 
 const TEST_PATH =

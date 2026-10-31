@@ -1147,6 +1147,36 @@ describe("candidate verification", () => {
     expect(result.verification).toEqual({ status: "not_needed" });
   });
 
+  it("keeps the cached count when only one call hit the cache", async () => {
+    const fetch = fakeFetch((_, verifying) =>
+      verifying
+        ? geminiResponse(keepAll)
+        : geminiResponse(reviewJson, {
+            ...geminiUsage,
+            cachedContentTokenCount: 800,
+          }),
+    );
+
+    const result = await Effect.runPromise(runReview({ fetch }));
+
+    expect(result.usage.cachedInputTokens).toBe(800);
+  });
+
+  it("reports unknown usage when no call reports a cached count", async () => {
+    const fetch = fakeFetch((_, verifying) =>
+      verifying ? geminiResponse(keepAll, null) : geminiResponse(),
+    );
+
+    const result = await Effect.runPromise(runReview({ fetch }));
+
+    expect(result.usage).toEqual({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      cachedInputTokens: null,
+    });
+  });
+
   it("keeps the candidates' summary when every candidate survives", async () => {
     const result = await Effect.runPromise(
       runReview({ fetch: fakeFetch(verifyWith(keepAll)) }),
@@ -1511,5 +1541,58 @@ describe("specialist review", () => {
     expect(fetch.calls()).toBe(5);
     expect(result.review.findings).toEqual([logic]);
     expect(result.fanOut).toMatchObject({ merge: "not_needed", kept: 1 });
+  });
+
+  const clean = { ...reviewJson, summary: "Clean.", findings: [] };
+
+  it("takes the summary from the pass that found the defect", async () => {
+    const result = await Effect.runPromise(
+      runSpecialists(
+        fakeFetch(
+          specialists(
+            { keep: [], summary: "unused" },
+            {
+              logic: clean,
+              reliability: clean,
+              concurrency: {
+                ...reviewJson,
+                summary: "A race.",
+                findings: [race],
+              },
+              security: clean,
+              tests_contracts: clean,
+            },
+          ),
+        ),
+      ),
+    );
+
+    expect(result.review.summary).toBe("A race.");
+    expect(result.review.findings).toEqual([race]);
+  });
+
+  it("skips clean passes' summaries when the merge fails", async () => {
+    const result = await Effect.runPromise(
+      runSpecialists(
+        fakeFetch(
+          specialists(
+            { verdict: "invalid" },
+            {
+              logic: clean,
+              reliability: clean,
+              concurrency: {
+                ...reviewJson,
+                summary: "A race.",
+                findings: [race, logic],
+              },
+              security: clean,
+            },
+          ),
+        ),
+      ),
+    );
+
+    expect(result.review.summary).toBe("A race.");
+    expect(result.fanOut).toMatchObject({ merge: "unmerged" });
   });
 });
