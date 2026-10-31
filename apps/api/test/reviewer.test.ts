@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildReviewUserPrompt,
   buildSystemPrompt,
+  buildVerificationSystemPrompt,
   filterReviewBySeverity,
   FLETCHER_RUTHLESS_SYSTEM_PROMPT,
   FLETCHER_SYSTEM_PROMPT,
@@ -44,7 +45,13 @@ const reviewJson = {
   ],
 };
 
-type ReviewPayload = typeof reviewJson | { readonly verdict: string };
+// What the verifier answers when every candidate survives.
+const keepAll = { keep: [0], summary: "Verified. Still dragging." };
+
+type ReviewPayload =
+  | typeof reviewJson
+  | { readonly verdict: string }
+  | { readonly keep: readonly number[]; readonly summary: string };
 
 const geminiUsage = {
   promptTokenCount: 1200,
@@ -91,7 +98,7 @@ const geminiStream = (events: ReadonlyArray<unknown>) =>
     { headers: { "content-type": "text/event-stream" } },
   );
 
-const openAiResponse = () =>
+const openAiResponse = (payload: ReviewPayload = reviewJson) =>
   new Response(
     JSON.stringify({
       id: "resp_1",
@@ -108,7 +115,7 @@ const openAiResponse = () =>
           content: [
             {
               type: "output_text",
-              text: JSON.stringify(reviewJson),
+              text: JSON.stringify(payload),
               annotations: [],
             },
           ],
@@ -125,7 +132,10 @@ const openAiResponse = () =>
     { headers: { "content-type": "application/json" } },
   );
 
-const anthropicResponse = (stopReason = "end_turn") =>
+const anthropicResponse = (
+  stopReason = "end_turn",
+  payload: ReviewPayload = reviewJson,
+) =>
   new Response(
     JSON.stringify({
       id: "msg_1",
@@ -135,7 +145,7 @@ const anthropicResponse = (stopReason = "end_turn") =>
       content: [
         // Thinking text is omitted by default; only the review is read.
         { type: "thinking", thinking: "", signature: "sig_1" },
-        { type: "text", text: JSON.stringify(reviewJson) },
+        { type: "text", text: JSON.stringify(payload) },
       ],
       stop_reason: stopReason,
       stop_sequence: null,
@@ -150,22 +160,30 @@ interface RecordedRequest {
   readonly body: unknown;
 }
 
-// Answers every provider call locally, recording what was sent.
+// Answers every provider call locally, recording what was sent, and tells
+// the answer whether the call is the verification pass.
 const fakeFetch = (
-  answer: (call: number) => Response | Promise<Response>,
+  answer: (
+    call: number,
+    verifying: boolean,
+    body: string,
+  ) => Response | Promise<Response>,
   requests: RecordedRequest[] = [],
 ) => {
   let calls = 0;
 
   const fetchImpl: typeof fetch = async (url, init) => {
     calls += 1;
+
+    const body = String(init?.body);
+
     requests.push({
       url: String(url),
       headers: new Headers(init?.headers),
-      body: JSON.parse(String(init?.body)),
+      body: JSON.parse(body),
     });
 
-    return answer(calls);
+    return answer(calls, body.includes("CANDIDATE VERIFICATION"), body);
   };
 
   return { fetchImpl, calls: () => calls };
@@ -282,7 +300,7 @@ describe("Reviewer on the Gemini API", () => {
         ).generationConfig.thinkingConfig.thinkingLevel,
     );
 
-    expect(levels).toEqual(["high", "medium"]);
+    expect(levels).toEqual(["high", "high", "medium", "medium"]);
   });
 
   it("sends Vertex AI keys to Vertex AI's express endpoint", async () => {
@@ -296,6 +314,7 @@ describe("Reviewer on the Gemini API", () => {
     );
 
     expect(requests.map((request) => request.url)).toEqual([
+      "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
       "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
     ]);
     expect(requests[0]?.headers.get("x-goog-api-key")).toBe("test-api-key");
@@ -315,20 +334,25 @@ describe("Reviewer on the Gemini API", () => {
 
     expect(requests.map((request) => request.url)).toEqual([
       "https://aiplatform.googleapis.com/v1/projects/778137311135/locations/global/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse",
+      "https://aiplatform.googleapis.com/v1/projects/778137311135/locations/global/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse",
     ]);
     expect(requests[0]?.headers.get("x-goog-api-key")).toBe("test-api-key");
   });
 
   it("decodes the reply into a review with usage", async () => {
     const result = await Effect.runPromise(
-      runReview({ fetch: fakeFetch(() => geminiResponse()) }),
+      runReview({
+        fetch: fakeFetch((_, verifying) =>
+          geminiResponse(verifying ? keepAll : reviewJson),
+        ),
+      }),
     );
 
     expect(result.review).toEqual(reviewJson);
     expect(result.usage).toEqual({
-      inputTokens: 1200,
-      outputTokens: 300,
-      totalTokens: 1500,
+      inputTokens: 2400,
+      outputTokens: 600,
+      totalTokens: 3000,
       cachedInputTokens: null,
     });
   });
@@ -336,8 +360,8 @@ describe("Reviewer on the Gemini API", () => {
   it("reports tokens served from Gemini's implicit cache", async () => {
     const result = await Effect.runPromise(
       runReview({
-        fetch: fakeFetch(() =>
-          geminiResponse(reviewJson, {
+        fetch: fakeFetch((_, verifying) =>
+          geminiResponse(verifying ? keepAll : reviewJson, {
             ...geminiUsage,
             cachedContentTokenCount: 800,
           }),
@@ -345,14 +369,14 @@ describe("Reviewer on the Gemini API", () => {
       }),
     );
 
-    expect(result.usage.cachedInputTokens).toBe(800);
+    expect(result.usage.cachedInputTokens).toBe(1600);
   });
 
   it("counts Gemini's thinking tokens as output, as they are billed", async () => {
     const result = await Effect.runPromise(
       runReview({
-        fetch: fakeFetch(() =>
-          geminiResponse(reviewJson, {
+        fetch: fakeFetch((_, verifying) =>
+          geminiResponse(verifying ? keepAll : reviewJson, {
             ...geminiUsage,
             thoughtsTokenCount: 900,
             totalTokenCount: 2400,
@@ -362,9 +386,9 @@ describe("Reviewer on the Gemini API", () => {
     );
 
     expect(result.usage).toEqual({
-      inputTokens: 1200,
-      outputTokens: 1200,
-      totalTokens: 2400,
+      inputTokens: 2400,
+      outputTokens: 2400,
+      totalTokens: 4800,
       cachedInputTokens: null,
     });
   });
@@ -391,7 +415,7 @@ describe("Reviewer on the Gemini API", () => {
 
     const result = await Effect.runPromise(runReview({ fetch }));
 
-    expect(fetch.calls()).toBe(2);
+    expect(fetch.calls()).toBe(3);
     expect(result.review.verdict).toBe("almost");
   });
 
@@ -413,7 +437,7 @@ describe("Reviewer on the Gemini API", () => {
 
     const result = await Effect.runPromise(runReview({ fetch }));
 
-    expect(fetch.calls()).toBe(2);
+    expect(fetch.calls()).toBe(3);
     expect(result.review).toEqual(reviewJson);
   });
 
@@ -574,7 +598,10 @@ describe("Reviewer on OpenAI", () => {
       runReview({
         provider: "openai",
         model: "gpt-6.1-sol",
-        fetch: fakeFetch(() => openAiResponse(), requests),
+        fetch: fakeFetch(
+          (_, verifying) => openAiResponse(verifying ? keepAll : reviewJson),
+          requests,
+        ),
       }),
     );
 
@@ -602,11 +629,16 @@ describe("Reviewer on OpenAI", () => {
       strict: true,
       name: "fletcher_review",
     });
+    // SAFETY: the second recorded request is the verification call, sent
+    // with the same body shape.
+    const verification = requests[1]?.body as typeof body | undefined;
+
+    expect(verification?.text.format.name).toBe("fletcher_verification");
     expect(result.review).toEqual(reviewJson);
     expect(result.usage).toEqual({
-      inputTokens: 2000,
-      outputTokens: 500,
-      totalTokens: 2500,
+      inputTokens: 4000,
+      outputTokens: 1000,
+      totalTokens: 5000,
       cachedInputTokens: 0,
     });
   });
@@ -670,7 +702,11 @@ describe("Reviewer on Anthropic", () => {
       runReview({
         provider: "anthropic",
         model: "claude-sonnet-5-5",
-        fetch: fakeFetch(() => anthropicResponse(), requests),
+        fetch: fakeFetch(
+          (_, verifying) =>
+            anthropicResponse("end_turn", verifying ? keepAll : reviewJson),
+          requests,
+        ),
       }),
     );
 
@@ -704,9 +740,17 @@ describe("Reviewer on Anthropic", () => {
       "summary",
       "findings",
     ]);
+    // SAFETY: the second recorded request is the verification call, sent
+    // with the same body shape.
+    const verification = requests[1]?.body as typeof body | undefined;
+
+    expect(verification?.output_config.format.schema.required).toEqual([
+      "keep",
+      "summary",
+    ]);
     expect(result.review).toEqual(reviewJson);
-    expect(result.usage.inputTokens).toBe(1800);
-    expect(result.usage.outputTokens).toBe(400);
+    expect(result.usage.inputTokens).toBe(3600);
+    expect(result.usage.outputTokens).toBe(800);
   });
 
   it("fails as invalid output when Claude refuses or runs out of tokens", async () => {
@@ -829,6 +873,45 @@ describe("buildSystemPrompt", () => {
     expect(prompt).not.toContain("The persona is seasoning");
   });
 
+  it.each(["standard", "ruthless"] as const)(
+    "keeps %s severity tied to evidence rather than repetition",
+    (tone) => {
+      const prompt = buildSystemPrompt("carnegie", tone);
+
+      expect(prompt).toContain("Severity reflects impact");
+      expect(prompt).toContain("Missing context is not evidence of a bug");
+      expect(prompt).toContain("workload assumptions");
+      expect(prompt).not.toContain("raise the severity one level");
+      expect(prompt).not.toContain('"good_job" requires a flawless change');
+    },
+  );
+
+  it("asks for every real defect and keeps likely ones at lower confidence", () => {
+    const prompt = buildSystemPrompt("studio_band", "standard");
+
+    expect(prompt).toContain("Report every distinct real defect, each once.");
+    expect(prompt).toContain("Go through every changed file and hunk");
+    expect(prompt).toContain("report it with lower confidence");
+    expect(prompt).toContain(
+      "Drop only\n  suspicions with no concrete trigger.",
+    );
+    expect(prompt).not.toContain("Prefer a few high-signal findings");
+    expect(prompt).not.toContain("Omit unresolved suspicions");
+  });
+
+  it("asks finding messages to state the defect before the persona", () => {
+    expect(FLETCHER_RUTHLESS_SYSTEM_PROMPT).toContain(
+      'Its "message" opens with what\n  is wrong and when it happens',
+    );
+  });
+
+  it("verifies by removing errors, not uncertainty", () => {
+    const prompt = buildVerificationSystemPrompt("studio_band", "standard");
+
+    expect(prompt).toContain("Reject a candidate only when the supplied code");
+    expect(prompt).toContain("you are removing errors, not uncertainty");
+  });
+
   it("keeps the rubric and guardrails intact in the ruthless tone", () => {
     const prompt = buildSystemPrompt("studio_band", "ruthless");
 
@@ -880,7 +963,7 @@ describe("filterReviewBySeverity", () => {
     );
   });
 
-  it("drops below-threshold findings without touching the verdict", () => {
+  it("drops below-threshold findings and derives the verdict from those retained", () => {
     const filtered = filterReviewBySeverity(review, "warning");
 
     expect(filtered.findings.map((finding) => finding.severity)).toEqual([
@@ -890,6 +973,10 @@ describe("filterReviewBySeverity", () => {
     expect(filtered.verdict).toBe("not_my_tempo");
 
     expect(filterReviewBySeverity(review, "critical").findings).toHaveLength(1);
+  });
+
+  it("keeps the model's summary while any finding remains", () => {
+    expect(filterReviewBySeverity(review, "critical").summary).toBe("Sloppy.");
   });
 });
 
@@ -996,5 +1083,516 @@ describe("buildReviewUserPrompt", () => {
     expect(prompt.indexOf("<file")).toBeLessThan(
       prompt.indexOf("Unified diff:"),
     );
+  });
+});
+
+describe("candidate verification", () => {
+  const critical = {
+    ...reviewJson.findings[0]!,
+    title: "Unsupported allegation",
+    severity: "critical",
+  };
+
+  const twoCandidates = {
+    ...reviewJson,
+    verdict: "not_my_tempo",
+    findings: [...reviewJson.findings, critical],
+  };
+
+  const verifyWith =
+    (verification: ReviewPayload, candidates: ReviewPayload = reviewJson) =>
+    (_: number, verifying: boolean) =>
+      geminiResponse(verifying ? verification : candidates);
+
+  it("verifies numbered candidates in persona against the same context", async () => {
+    const requests: RecordedRequest[] = [];
+
+    await Effect.runPromise(
+      runReview({ fetch: fakeFetch(verifyWith(keepAll), requests) }),
+    );
+
+    expect(requests).toHaveLength(2);
+
+    // SAFETY: fakeFetch recorded the JSON body Fletcher sent.
+
+    const body = requests[1]?.body as {
+      systemInstruction: { parts: { text: string }[] };
+      contents: { parts: { text: string }[] }[];
+      generationConfig: { responseSchema: { required: string[] } };
+    };
+
+    const system = body.systemInstruction.parts[0]?.text ?? "";
+    const user = body.contents[0]?.parts[0]?.text ?? "";
+
+    expect(system.startsWith(FLETCHER_SYSTEM_PROMPT)).toBe(true);
+    expect(system).toContain("CANDIDATE VERIFICATION");
+    expect(user.startsWith(buildReviewUserPrompt(input))).toBe(true);
+    expect(user).toContain(`0: ${JSON.stringify(reviewJson.findings[0])}`);
+    expect(body.generationConfig.responseSchema.required).toEqual([
+      "keep",
+      "summary",
+    ]);
+  });
+
+  it("skips verification when there are no candidates", async () => {
+    const fetch = fakeFetch(() =>
+      geminiResponse({ ...reviewJson, findings: [] }),
+    );
+
+    const result = await Effect.runPromise(runReview({ fetch }));
+
+    expect(fetch.calls()).toBe(1);
+    expect(result.review.verdict).toBe("good_job");
+    expect(result.usage.totalTokens).toBe(1500);
+    expect(result.verification).toEqual({ status: "not_needed" });
+  });
+
+  it("keeps the cached count when only one call hit the cache", async () => {
+    const fetch = fakeFetch((_, verifying) =>
+      verifying
+        ? geminiResponse(keepAll)
+        : geminiResponse(reviewJson, {
+            ...geminiUsage,
+            cachedContentTokenCount: 800,
+          }),
+    );
+
+    const result = await Effect.runPromise(runReview({ fetch }));
+
+    expect(result.usage.cachedInputTokens).toBe(800);
+  });
+
+  it("reports unknown usage when no call reports a cached count", async () => {
+    const fetch = fakeFetch((_, verifying) =>
+      verifying ? geminiResponse(keepAll, null) : geminiResponse(),
+    );
+
+    const result = await Effect.runPromise(runReview({ fetch }));
+
+    expect(result.usage).toEqual({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      cachedInputTokens: null,
+    });
+  });
+
+  it("keeps the candidates' summary when every candidate survives", async () => {
+    const result = await Effect.runPromise(
+      runReview({ fetch: fakeFetch(verifyWith(keepAll)) }),
+    );
+
+    expect(result.review).toEqual(reviewJson);
+    expect(result.usage.totalTokens).toBe(3000);
+    expect(result.verification).toEqual({
+      status: "verified",
+      candidates: 1,
+      kept: 1,
+    });
+  });
+
+  it("publishes the kept subset unchanged with the verifier's summary", async () => {
+    const result = await Effect.runPromise(
+      runReview({
+        fetch: fakeFetch(
+          verifyWith({ keep: [0], summary: "One real defect." }, twoCandidates),
+        ),
+      }),
+    );
+
+    expect(result.review).toEqual({
+      verdict: "almost",
+      summary: "One real defect.",
+      findings: reviewJson.findings,
+    });
+    expect(result.verification).toEqual({
+      status: "verified",
+      candidates: 2,
+      kept: 1,
+    });
+  });
+
+  it("clears the verdict when no candidate survives", async () => {
+    const result = await Effect.runPromise(
+      runReview({
+        fetch: fakeFetch(
+          verifyWith({ keep: [], summary: "Nothing survived scrutiny." }),
+        ),
+      }),
+    );
+
+    expect(result.review).toEqual({
+      verdict: "good_job",
+      summary: "Nothing survived scrutiny.",
+      findings: [],
+    });
+  });
+
+  it("keeps candidates once each, in their original order", async () => {
+    const result = await Effect.runPromise(
+      runReview({
+        fetch: fakeFetch(
+          verifyWith({ keep: [1, 0, 1], summary: "Both." }, twoCandidates),
+        ),
+      }),
+    );
+
+    expect(result.review.findings).toEqual(twoCandidates.findings);
+    expect(result.review.summary).toBe(twoCandidates.summary);
+  });
+
+  it.each([
+    ["an invalid reply", { verdict: "invalid" }],
+    ["an unknown index", { keep: [0, 3], summary: "Phantom." }],
+  ] as const)(
+    "publishes the candidates unverified after %s",
+    async (_, verification) => {
+      const fetch = fakeFetch(verifyWith(verification));
+
+      const result = await Effect.runPromise(runReview({ fetch }));
+
+      expect(fetch.calls()).toBe(2);
+      expect(result.review).toEqual(reviewJson);
+      expect(result.usage.totalTokens).toBe(1500);
+      expect(result.verification).toEqual({
+        status: "unverified",
+        candidates: 1,
+        reason: "ReviewOutputInvalidError",
+      });
+    },
+  );
+
+  it("publishes the candidates unverified when verification times out", async () => {
+    const fetch = fakeFetch((_, verifying) =>
+      verifying ? new Promise<Response>(() => {}) : geminiResponse(),
+    );
+
+    const result = await Effect.runPromise(
+      runReview({ fetch, verificationTimeoutMillis: 50 }),
+    );
+
+    expect(fetch.calls()).toBe(2);
+    expect(result.review).toEqual(reviewJson);
+    expect(result.verification).toMatchObject({
+      status: "unverified",
+      reason: "ReviewTimeoutError",
+    });
+  });
+
+  it("gives the candidates their own timeout, apart from verification", async () => {
+    const fetch = fakeFetch(() => new Promise<Response>(() => {}));
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        runReview({ fetch, timeoutMillis: 50, verificationTimeoutMillis: 1 }),
+      ),
+    );
+
+    expect(error._tag).toBe("ReviewTimeoutError");
+    expect(error).toMatchObject({ timeoutMillis: 50 });
+    expect(fetch.calls()).toBe(1);
+  });
+
+  it("retries verification without generating candidates again", async () => {
+    const requests: RecordedRequest[] = [];
+
+    const fetch = fakeFetch(
+      (call, verifying) =>
+        call === 2
+          ? new Response("overloaded", { status: 503 })
+          : geminiResponse(verifying ? keepAll : reviewJson),
+      requests,
+    );
+
+    const result = await Effect.runPromise(runReview({ fetch }));
+
+    expect(fetch.calls()).toBe(3);
+    expect(requests[2]?.body).toEqual(requests[1]?.body);
+    expect(result.verification).toMatchObject({ status: "verified" });
+    expect(result.usage.totalTokens).toBe(3000);
+  });
+
+  it("keeps combined usage unknown when one stage omits it", async () => {
+    const result = await Effect.runPromise(
+      runReview({
+        fetch: fakeFetch((_, verifying) =>
+          verifying
+            ? geminiResponse(keepAll, null)
+            : geminiResponse(reviewJson, geminiUsage),
+        ),
+      }),
+    );
+
+    expect(result.usage.totalTokens).toBeNull();
+    expect(result.usage.inputTokens).toBeNull();
+  });
+});
+
+describe("filtered review assessment", () => {
+  it("removes stale allegations when the threshold hides all findings", () => {
+    const review = Schema.decodeUnknownSync(GeminiReview)(reviewJson);
+    const filtered = filterReviewBySeverity(review, "critical");
+
+    expect(filtered.findings).toEqual([]);
+    expect(filtered.verdict).toBe("good_job");
+    expect(filtered.summary).toBe(
+      "No findings remain at the configured severity threshold.",
+    );
+  });
+});
+
+describe("specialist review", () => {
+  const finding = (title: string, severity = "warning") => ({
+    ...reviewJson.findings[0]!,
+    title,
+    severity,
+  });
+
+  const logic = finding("Off-by-one in beat subdivision");
+  const race = finding("Tempo cache mutated across requests", "critical");
+  const vacuous = finding("Patched sleep makes the count-off test vacuous");
+
+  type Focus =
+    | "logic"
+    | "reliability"
+    | "concurrency"
+    | "security"
+    | "tests_contracts";
+
+  // Each focus is found by the opening words of its section of the prompt.
+  const focusOf = (body: string): Focus =>
+    body.includes("Failure handling")
+      ? "reliability"
+      : body.includes("Concurrency and lifetime")
+        ? "concurrency"
+        : body.includes("Security at trust boundaries")
+          ? "security"
+          : body.includes("Tests and contracts")
+            ? "tests_contracts"
+            : "logic";
+
+  // Each pass answers by its focus; the merge answers with `merge`.
+  const specialists =
+    (
+      merge: ReviewPayload | Response,
+      byFocus: Partial<Record<Focus, ReviewPayload | Response>> = {},
+    ) =>
+    (_: number, __: boolean, body: string) => {
+      const reply = (payload: ReviewPayload | Response) =>
+        payload instanceof Response ? payload : geminiResponse(payload);
+
+      if (body.includes("MERGING SPECIALIST FINDINGS")) {
+        return reply(merge);
+      }
+
+      const focus = focusOf(body);
+
+      const defaults = {
+        logic: { ...reviewJson, findings: [logic] },
+        reliability: { ...reviewJson, findings: [] },
+        concurrency: { ...reviewJson, findings: [race, logic] },
+        security: { ...reviewJson, findings: [] },
+        tests_contracts: { ...reviewJson, findings: [vacuous] },
+      } satisfies Record<Focus, ReviewPayload>;
+
+      return reply(byFocus[focus] ?? defaults[focus]);
+    };
+
+  const runSpecialists = (fetch: ReturnType<typeof fakeFetch>) =>
+    runReview({ fetch, strategy: "specialists" });
+
+  it("runs one pass per focus on a shared prompt prefix", async () => {
+    const requests: RecordedRequest[] = [];
+
+    await Effect.runPromise(
+      runSpecialists(
+        fakeFetch(
+          specialists({ keep: [0, 1, 3], summary: "Merged." }),
+          requests,
+        ),
+      ),
+    );
+
+    // SAFETY: fakeFetch recorded the JSON body Fletcher sent.
+    const bodies = requests.map(
+      (request) =>
+        request.body as {
+          systemInstruction: { parts: { text: string }[] };
+          contents: { parts: { text: string }[] }[];
+        },
+    );
+
+    const passes = bodies.slice(0, 5);
+
+    expect(requests).toHaveLength(6);
+
+    for (const body of passes) {
+      expect(body.systemInstruction.parts[0]?.text).toBe(
+        FLETCHER_SYSTEM_PROMPT,
+      );
+      expect(
+        body.contents[0]?.parts[0]?.text.startsWith(
+          buildReviewUserPrompt(input),
+        ),
+      ).toBe(true);
+    }
+
+    expect(
+      new Set(passes.map((body) => body.contents[0]?.parts[0]?.text)).size,
+    ).toBe(5);
+
+    const merge = bodies[5]?.contents[0]?.parts[0]?.text ?? "";
+
+    expect(merge).not.toContain(input.diff);
+    expect(merge).toContain(`3: ${JSON.stringify(vacuous)}`);
+  });
+
+  it("publishes one finding per defect in the merge's order", async () => {
+    const result = await Effect.runPromise(
+      runSpecialists(
+        fakeFetch(specialists({ keep: [1, 0, 3, 1], summary: "Merged." })),
+      ),
+    );
+
+    expect(result.review).toEqual({
+      verdict: "not_my_tempo",
+      summary: "Merged.",
+      findings: [race, logic, vacuous],
+    });
+    expect(result.fanOut).toEqual({
+      passes: 5,
+      failedPasses: 0,
+      candidates: 4,
+      kept: 3,
+      merge: "merged",
+    });
+    expect(result.verification).toBeUndefined();
+    expect(result.usage.totalTokens).toBe(9000);
+  });
+
+  it("removes exact duplicates when the merge fails", async () => {
+    const result = await Effect.runPromise(
+      runSpecialists(fakeFetch(specialists({ verdict: "invalid" }))),
+    );
+
+    expect(result.review.findings).toEqual([logic, race, vacuous]);
+    expect(result.fanOut).toMatchObject({ kept: 3, merge: "unmerged" });
+    expect(result.usage.totalTokens).toBe(7500);
+  });
+
+  it("keeps the other passes' findings when one pass fails", async () => {
+    const result = await Effect.runPromise(
+      runSpecialists(
+        fakeFetch(
+          specialists(
+            { keep: [0, 1], summary: "Merged." },
+            { concurrency: new Response("bad request", { status: 400 }) },
+          ),
+        ),
+      ),
+    );
+
+    expect(result.review.findings).toEqual([logic, vacuous]);
+    expect(result.fanOut).toMatchObject({ failedPasses: 1, candidates: 2 });
+  });
+
+  it("gives up on a pass past its deadline and keeps the others", async () => {
+    const result = await Effect.runPromise(
+      runReview({
+        strategy: "specialists",
+        passDeadlineMillis: 50,
+        fetch: fakeFetch(
+          specialists(
+            { keep: [0, 1], summary: "Merged." },
+            { concurrency: new Response("slow", { status: 503 }) },
+          ),
+        ),
+        // The overloaded pass keeps retrying until its deadline ends it.
+        maxRetries: 100,
+        retryBaseMillis: 20,
+      }),
+    );
+
+    expect(result.review.findings).toEqual([logic, vacuous]);
+    expect(result.fanOut).toMatchObject({ failedPasses: 1, candidates: 2 });
+  });
+
+  it("fails only when every pass fails", async () => {
+    const fetch = fakeFetch(() => new Response("bad request", { status: 400 }));
+
+    const error = await Effect.runPromise(Effect.flip(runSpecialists(fetch)));
+
+    expect(error._tag).toBe("ReviewProviderError");
+    expect(fetch.calls()).toBe(5);
+  });
+
+  it("skips the merge with at most one candidate", async () => {
+    const empty = { ...reviewJson, findings: [] };
+
+    const fetch = fakeFetch(
+      specialists(
+        { keep: [], summary: "unused" },
+        { concurrency: empty, tests_contracts: empty },
+      ),
+    );
+
+    const result = await Effect.runPromise(runSpecialists(fetch));
+
+    expect(fetch.calls()).toBe(5);
+    expect(result.review.findings).toEqual([logic]);
+    expect(result.fanOut).toMatchObject({ merge: "not_needed", kept: 1 });
+  });
+
+  const clean = { ...reviewJson, summary: "Clean.", findings: [] };
+
+  it("takes the summary from the pass that found the defect", async () => {
+    const result = await Effect.runPromise(
+      runSpecialists(
+        fakeFetch(
+          specialists(
+            { keep: [], summary: "unused" },
+            {
+              logic: clean,
+              reliability: clean,
+              concurrency: {
+                ...reviewJson,
+                summary: "A race.",
+                findings: [race],
+              },
+              security: clean,
+              tests_contracts: clean,
+            },
+          ),
+        ),
+      ),
+    );
+
+    expect(result.review.summary).toBe("A race.");
+    expect(result.review.findings).toEqual([race]);
+  });
+
+  it("skips clean passes' summaries when the merge fails", async () => {
+    const result = await Effect.runPromise(
+      runSpecialists(
+        fakeFetch(
+          specialists(
+            { verdict: "invalid" },
+            {
+              logic: clean,
+              reliability: clean,
+              concurrency: {
+                ...reviewJson,
+                summary: "A race.",
+                findings: [race, logic],
+              },
+              security: clean,
+            },
+          ),
+        ),
+      ),
+    );
+
+    expect(result.review.summary).toBe("A race.");
+    expect(result.fanOut).toMatchObject({ merge: "unmerged" });
   });
 });

@@ -219,36 +219,49 @@ const fitToBudget = (files: readonly ContextFile[], maxBytes: number) => {
 };
 
 /**
- * Gathers what the reviewer should know beyond the diff. Context is best
- * effort: anything GitHub fails to return is logged and left out, and a
- * review never fails for want of it.
+ * Where repository files come from: GitHub's API in production, or a local
+ * checkout. Both are best effort; a missing tree or file is `None`.
  */
-export const fetchRepositoryContext = (input: RepositoryContextInput) =>
-  Effect.gen(function* () {
-    const client = yield* GitHubPullRequestClient;
+export interface RepositorySource {
+  readonly listFiles: (
+    gitRef: string,
+  ) => Effect.Effect<Option.Option<readonly RepositoryTreeEntry[]>>;
+  readonly readFile: (
+    path: string,
+    gitRef: string,
+  ) => Effect.Effect<Option.Option<string>>;
+}
 
+export interface RepositoryContextOptions {
+  /** Where guidelines are read: the rules a change is held to. */
+  readonly defaultBranch: string;
+  readonly headSha: string;
+  /** The pull request's diff after ignore globs were applied. */
+  readonly diff: string;
+  /** `.fletcher.json` `guidelines`; null for the usual locations. */
+  readonly guidelines: readonly string[] | null;
+}
+
+/** Gathers what the reviewer should know beyond the diff from `source`. */
+export const buildRepositoryContext = (
+  source: RepositorySource,
+  input: RepositoryContextOptions,
+) =>
+  Effect.gen(function* () {
     const readFile = (path: string, gitRef: string, maxBytes: number) =>
-      client
-        .fetchRepositoryFile(input.installationToken, input.ref, path, gitRef)
-        .pipe(
-          Effect.map(
-            Option.map((content): ContextFile =>
-              byteLength(content) <= maxBytes
-                ? { path, content, truncated: false }
-                : {
-                    path,
-                    content: truncateToBytes(content, maxBytes),
-                    truncated: true,
-                  },
-            ),
+      source.readFile(path, gitRef).pipe(
+        Effect.map(
+          Option.map((content): ContextFile =>
+            byteLength(content) <= maxBytes
+              ? { path, content, truncated: false }
+              : {
+                  path,
+                  content: truncateToBytes(content, maxBytes),
+                  truncated: true,
+                },
           ),
-          Effect.catchAll((error) =>
-            logError("repository_context_file_failed", {
-              path,
-              errorCode: error._tag,
-            }).pipe(Effect.as(Option.none<ContextFile>())),
-          ),
-        );
+        ),
+      );
 
     const readFiles = (
       paths: readonly string[],
@@ -259,21 +272,10 @@ export const fetchRepositoryContext = (input: RepositoryContextInput) =>
         concurrency: FETCH_CONCURRENCY,
       }).pipe(Effect.map((files) => files.flatMap(Option.toArray)));
 
-    const listFiles = (gitRef: string) =>
-      client.fetchTree(input.installationToken, input.ref, gitRef).pipe(
-        Effect.map(Option.some),
-        Effect.catchAll((error) =>
-          logError("repository_context_tree_failed", {
-            gitRef,
-            errorCode: error._tag,
-          }).pipe(Effect.as(Option.none<readonly RepositoryTreeEntry[]>())),
-        ),
-      );
-
     // Guidelines are discovered on the default branch too: a pull request
     // that deletes or renames AGENTS.md must still be held to it.
     const [headTree, defaultTree] = yield* Effect.all(
-      [listFiles(input.headSha), listFiles(input.defaultBranch)],
+      [source.listFiles(input.headSha), source.listFiles(input.defaultBranch)],
       { concurrency: "unbounded" },
     );
 
@@ -349,4 +351,39 @@ export const fetchRepositoryContext = (input: RepositoryContextInput) =>
     };
 
     return context;
+  });
+
+/**
+ * The same context read through GitHub's API. Anything GitHub fails to
+ * return is logged and left out, and a review never fails for want of it.
+ */
+export const fetchRepositoryContext = (input: RepositoryContextInput) =>
+  Effect.gen(function* () {
+    const client = yield* GitHubPullRequestClient;
+
+    const source: RepositorySource = {
+      listFiles: (gitRef) =>
+        client.fetchTree(input.installationToken, input.ref, gitRef).pipe(
+          Effect.map(Option.some),
+          Effect.catchAll((error) =>
+            logError("repository_context_tree_failed", {
+              gitRef,
+              errorCode: error._tag,
+            }).pipe(Effect.as(Option.none<readonly RepositoryTreeEntry[]>())),
+          ),
+        ),
+      readFile: (path, gitRef) =>
+        client
+          .fetchRepositoryFile(input.installationToken, input.ref, path, gitRef)
+          .pipe(
+            Effect.catchAll((error) =>
+              logError("repository_context_file_failed", {
+                path,
+                errorCode: error._tag,
+              }).pipe(Effect.as(Option.none<string>())),
+            ),
+          ),
+    };
+
+    return yield* buildRepositoryContext(source, input);
   });

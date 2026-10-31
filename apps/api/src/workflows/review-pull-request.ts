@@ -117,8 +117,9 @@ interface LaterRetry {
 
 // The model call: a timeout or overload often clears within a minute, so
 // the step runs up to twice more (after 30s, then 60s). Each attempt may
-// take up to the reviewer's timeout (7 minutes) plus the repository
-// context fetch, inside the step's 10 minutes.
+// take up to the reviewer's timeout (7 minutes), its verification pass
+// (2.5 minutes), and the repository context fetch, inside the step's 10
+// minutes.
 const REVIEW_STEP_RETRY: LaterRetry = {
   limit: 2,
   delay: "30 seconds",

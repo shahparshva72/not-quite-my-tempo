@@ -1,6 +1,7 @@
 export {
   buildReviewUserPrompt,
   buildSystemPrompt,
+  buildVerificationSystemPrompt,
   FLETCHER_RUTHLESS_SYSTEM_PROMPT,
   FLETCHER_SYSTEM_PROMPT,
 } from "./prompt.js";
@@ -10,6 +11,7 @@ export type {
   GeminiReviewInput,
   PriorFinding,
   PriorReview,
+  RelatedSnippet,
   RepositoryContext,
   ReviewIntensity,
   ReviewTone,
@@ -23,6 +25,7 @@ export {
   geminiResponseJsonSchema,
   reviewJsonSchema,
   ReviewVerdict,
+  verdictForFindings,
 } from "./schema.js";
 
 export {
@@ -81,8 +84,11 @@ export {
 export type {
   ReviewerConfig,
   ReviewerService,
+  ReviewFanOut,
   ReviewResult,
+  ReviewStrategy,
   ReviewUsage,
+  ReviewVerification,
 } from "./reviewer.js";
 
 export { checkGeminiKey, GeminiKeyCheckError } from "./key-check.js";

@@ -42,20 +42,72 @@ const severityRank: Record<FindingSeverity, number> = {
   suggestion: 1,
 };
 
+export const verdictForFindings = (
+  findings: readonly GeminiFinding[],
+): ReviewVerdict => {
+  if (findings.some((finding) => finding.severity === "critical")) {
+    return "not_my_tempo";
+  }
+
+  return findings.some((finding) => finding.severity === "warning")
+    ? "almost"
+    : "good_job";
+};
+
 /**
- * Drops findings below the configured severity threshold. The verdict and
- * summary are left untouched — the model already weighed everything; the
- * threshold only controls what gets persisted and posted.
+ * Drops findings below the configured severity threshold and derives the
+ * verdict from those kept. The model's summary stays unless no findings
+ * remain, when it would describe allegations nobody can see.
  */
 export const filterReviewBySeverity = (
   review: GeminiReview,
   threshold: FindingSeverity,
-): GeminiReview => ({
-  ...review,
-  findings: review.findings.filter(
+): GeminiReview => {
+  const findings = review.findings.filter(
     (finding) => severityRank[finding.severity] >= severityRank[threshold],
-  ),
+  );
+
+  return {
+    ...review,
+    findings,
+    verdict: verdictForFindings(findings),
+    summary:
+      findings.length === 0 && review.findings.length > 0
+        ? "No findings remain at the configured severity threshold."
+        : review.summary,
+  };
+};
+
+/**
+ * The verifier's answer: which candidates (by index) survived, and a summary
+ * of those alone. Indices rather than copies, so a reworded finding can't
+ * slip through or fail the review.
+ */
+export const CandidateVerification = Schema.Struct({
+  keep: Schema.Array(Schema.Number.pipe(Schema.int(), Schema.nonNegative())),
+  summary: Schema.NonEmptyString,
 });
+
+export type CandidateVerification = typeof CandidateVerification.Type;
+
+export const geminiVerificationJsonSchema = {
+  type: "OBJECT",
+  properties: {
+    keep: { type: "ARRAY", items: { type: "INTEGER" } },
+    summary: { type: "STRING" },
+  },
+  required: ["keep", "summary"],
+} as const;
+
+export const verificationJsonSchema = {
+  type: "object",
+  properties: {
+    keep: { type: "array", items: { type: "integer" } },
+    summary: { type: "string" },
+  },
+  required: ["keep", "summary"],
+  additionalProperties: false,
+} as const;
 
 /**
  * The response schema sent to Gemini's `generationConfig.responseSchema` so
