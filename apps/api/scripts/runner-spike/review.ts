@@ -54,6 +54,8 @@ const usage = `Usage: pnpm --filter @not-quite-my-tempo/api spike:claude-review 
                       (default: a folder under the OS temp directory)
   --no-context        Review the diff alone, without repository context
   --bundle-only       Write the bundle and stop before calling Claude Code
+  --from-output <f>   Skip Claude Code and present this file's review JSON
+                      (claude-code-action's structured_output) instead
 
 Env: GITHUB_TOKEN (falls back to \`gh auth token\`). Claude Code runs on your
 local \`claude\` login; ANTHROPIC_API_KEY is removed from its environment so
@@ -68,6 +70,7 @@ const { values: args } = parseArgs({
     workdir: { type: "string" },
     "no-context": { type: "boolean", default: false },
     "bundle-only": { type: "boolean", default: false },
+    "from-output": { type: "string" },
     help: { type: "boolean", default: false },
   },
 });
@@ -382,8 +385,12 @@ const program = Effect.gen(function* () {
       `ignore=${config.ignore.length} context=${input.context !== null}`,
   );
 
-  checkout(details.headSha);
+  if (args["from-output"] === undefined) {
+    checkout(details.headSha);
+  }
+
   mkdirSync(bundleDir, { recursive: true });
+
   const system = systemPrompt(input);
   const prompt = buildReviewUserPrompt(input);
 
@@ -400,36 +407,15 @@ const program = Effect.gen(function* () {
     return;
   }
 
-  console.log(
-    `Running Claude Code (${args.model}, up to ${maxTurns} turns) in ${workdir}…`,
-  );
-
-  const raw = yield* runClaudeCode(system, prompt);
-
-  writeFileSync(join(bundleDir, "result.json"), raw);
-
-  const result = yield* Schema.decodeUnknown(
-    Schema.parseJson(ClaudeCodeResult),
-  )(raw);
-
-  console.log(
-    `Claude Code: ${result.subtype}, ${result.num_turns ?? "?"} turns, ` +
-      `${((result.duration_ms ?? 0) / 1_000).toFixed(0)}s` +
-      (result.total_cost_usd === undefined
-        ? ""
-        : `, $${result.total_cost_usd.toFixed(4)} API-equivalent`),
-  );
-
-  if (result.is_error || result.structured_output === undefined) {
-    return yield* Effect.fail(
-      new Error(
-        `Claude Code returned no review (${result.subtype}): ${result.result ?? "no message"}`,
-      ),
-    );
-  }
+  const structuredOutput =
+    args["from-output"] === undefined
+      ? yield* reviewWithClaudeCode(system, prompt)
+      : yield* Schema.decodeUnknown(Schema.parseJson())(
+          readFileSync(args["from-output"], "utf8"),
+        );
 
   const review = filterReviewBySeverity(
-    yield* Schema.decodeUnknown(GeminiReview)(result.structured_output),
+    yield* Schema.decodeUnknown(GeminiReview)(structuredOutput),
     config.severityThreshold,
   );
 
@@ -442,6 +428,39 @@ const program = Effect.gen(function* () {
       `Saved to ${join(bundleDir, "review.md")}.`,
   );
 });
+
+const reviewWithClaudeCode = (system: string, prompt: string) =>
+  Effect.gen(function* () {
+    console.log(
+      `Running Claude Code (${args.model}, up to ${maxTurns} turns) in ${workdir}…`,
+    );
+
+    const raw = yield* runClaudeCode(system, prompt);
+
+    writeFileSync(join(bundleDir, "result.json"), raw);
+
+    const result = yield* Schema.decodeUnknown(
+      Schema.parseJson(ClaudeCodeResult),
+    )(raw);
+
+    console.log(
+      `Claude Code: ${result.subtype}, ${result.num_turns ?? "?"} turns, ` +
+        `${((result.duration_ms ?? 0) / 1_000).toFixed(0)}s` +
+        (result.total_cost_usd === undefined
+          ? ""
+          : `, $${result.total_cost_usd.toFixed(4)} API-equivalent`),
+    );
+
+    if (result.is_error || result.structured_output === undefined) {
+      return yield* Effect.fail(
+        new Error(
+          `Claude Code returned no review (${result.subtype}): ${result.result ?? "no message"}`,
+        ),
+      );
+    }
+
+    return result.structured_output;
+  });
 
 await Effect.runPromise(
   program.pipe(Effect.provide(GitHubPullRequestClientLive({}))),
