@@ -52,9 +52,31 @@ On boundary-bytes#62 (54 files, +850/−937), with `intensity: carnegie`,
   file's line numbers (`LeagueContext.tsx:400` in a 196-line file), so no
   finding anchored to the diff. Passing the system prompt with
   `--append-system-prompt` and the pull request prompt on stdin fixed it:
-  findings anchored at real lines. For the workflow, pass the prompt
-  inline through the action's `prompt` input (and the system prompt in
-  `claude_args`). Phase B still has to check GitHub's size limits for a
-  prompt this large (about 290 KB here).
+  findings anchored at real lines.
 - One run took about 30 seconds and 5–12 turns. Claude Code reported $0.24–0.58
   API-equivalent on Sonnet 5.5, which is what the user's plan absorbs.
+
+## In GitHub Actions
+
+[boundary-bytes#64](https://github.com/shahparshva72/boundary-bytes/pull/64)
+(a throwaway draft) runs the same review of #62 in that repository's own
+Actions, on its `CLAUDE_CODE_OAUTH_TOKEN` secret:
+
+- **`anthropics/claude-code-action` can't carry the prompt.** It has no
+  prompt-file input, and an inline `prompt` goes through the environment.
+  The 290 KB prompt failed to start with "Argument list too long", because
+  Linux caps one variable at 128 KiB. A prompt file in the checkout breaks
+  line numbers (see above). So the workflow runs the unmodified CLI
+  (`npm install -g @anthropic-ai/claude-code@<pinned>`), with
+  `--append-system-prompt-file` and the prompt on stdin, and the token in
+  that one step's environment. Anthropic's authentication docs describe
+  exactly this use of `CLAUDE_CODE_OAUTH_TOKEN` in CI.
+- That run passed. The job took 65 s in total: 7 s to install Fletcher, 4 s
+  for the bundle, 49 s for Claude Code including its npm install, and 2 s to
+  present. That bills about one Actions minute per review. The finding
+  anchored inline (`LeagueContext.tsx:110`).
+- Still open: `--setting-sources project` loads the checkout's
+  `.claude/settings.json`, which a pull request can change. Its hooks
+  could then run with the token in the environment. Check whether
+  `--setting-sources` can exclude project settings before shipping, or
+  read them from the default branch.
