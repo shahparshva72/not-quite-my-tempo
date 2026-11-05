@@ -7,6 +7,7 @@ import { GitHubRepositoryRepository } from "../repositories/github-repository-re
 import { MembershipRepository } from "../repositories/membership-repository.js";
 import { PullRequestRepository } from "../repositories/pull-request-repository.js";
 import { ReviewRunRepository } from "../repositories/review-run-repository.js";
+import { RunnerJobRepository } from "../repositories/runner-job-repository.js";
 import { SessionRepository } from "../repositories/session-repository.js";
 import { UserRepository } from "../repositories/user-repository.js";
 import { WorkspaceRepository } from "../repositories/workspace-repository.js";
@@ -20,6 +21,7 @@ export const makeLiveLayer = (database: D1Database) =>
     MembershipRepository.Default,
     PullRequestRepository.Default,
     ReviewRunRepository.Default,
+    RunnerJobRepository.Default,
     SessionRepository.Default,
     UserRepository.Default,
     WorkspaceRepository.Default,

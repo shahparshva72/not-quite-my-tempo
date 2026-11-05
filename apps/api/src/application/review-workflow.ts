@@ -122,7 +122,7 @@ export const isRetryableReviewError = (error: ReviewPipelineError): boolean =>
     Match.orElse(() => false),
   );
 
-const requireReviewRun = (
+export const requireReviewRun = (
   reviewRunId: number,
   reviewRun: Effect.Effect<
     Option.Option<ReviewRun>,
@@ -340,30 +340,35 @@ export const performGeminiReview = (
     };
   });
 
-export const persistReviewFindings = (
+/** The provider recorded for reviews run on the repository's own runner. */
+export const RUNNER_REVIEW_PROVIDER = "claude_actions";
+
+const catalogCostUsdMicros = (result: ReviewResult) =>
+  Option.match(Option.fromNullable(findCatalogModel(result.model)), {
+    onNone: () => null,
+    onSome: (model) =>
+      reviewCostUsdMicros(
+        model,
+        result.usage.inputTokens,
+        result.usage.outputTokens,
+        result.usage.cachedInputTokens ?? null,
+      ),
+  });
+
+const persistReview = (
   reviewRunId: number,
-  result: ReviewResult,
+  result: Omit<ReviewResult, "provider">,
+  provider: string,
+  costUsdMicros: number | null,
 ) =>
   Effect.gen(function* () {
     yield* requireReviewRun(
       reviewRunId,
       ReviewRunRepository.recordReviewResult(reviewRunId, {
         model: result.model,
-        provider: result.provider,
+        provider,
         usage: result.usage,
-        costUsdMicros: Option.match(
-          Option.fromNullable(findCatalogModel(result.model)),
-          {
-            onNone: () => null,
-            onSome: (model) =>
-              reviewCostUsdMicros(
-                model,
-                result.usage.inputTokens,
-                result.usage.outputTokens,
-                result.usage.cachedInputTokens ?? null,
-              ),
-          },
-        ),
+        costUsdMicros,
         verdict: result.review.verdict,
         summary: result.review.summary,
       }),
@@ -384,6 +389,26 @@ export const persistReviewFindings = (
 
     return { findingCount: findings.length };
   });
+
+export const persistReviewFindings = (
+  reviewRunId: number,
+  result: ReviewResult,
+) =>
+  persistReview(
+    reviewRunId,
+    result,
+    result.provider,
+    catalogCostUsdMicros(result),
+  );
+
+/**
+ * Persists a review Claude Code produced on the repository's own runner.
+ * It ran on the owner's Claude subscription, so it cost Fletcher nothing.
+ */
+export const persistRunnerReviewFindings = (
+  reviewRunId: number,
+  result: Omit<ReviewResult, "provider">,
+) => persistReview(reviewRunId, result, RUNNER_REVIEW_PROVIDER, 0);
 
 interface AnchoredFinding {
   readonly finding: Finding;

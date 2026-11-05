@@ -25,7 +25,7 @@ import {
 import type { Finding } from "@not-quite-my-tempo/db";
 import {
   buildReviewUserPrompt,
-  buildSystemPrompt,
+  buildRunnerSystemPrompt,
   filterReviewBySeverity,
   GeminiReview,
   reviewJsonSchema,
@@ -214,19 +214,9 @@ const buildBundle = Effect.gen(function* () {
 });
 
 // Fletcher's system prompt, appended to Claude Code's own so its tool
-// guidance stays, plus where the review runs.
+// guidance stays; the same one the claim endpoint hands a runner.
 const systemPrompt = (input: GeminiReviewInput) =>
-  [
-    buildSystemPrompt(input.intensity, input.tone),
-    "",
-    "## Where you are running",
-    "",
-    "Your working directory is a checkout of this pull request's head commit.",
-    "Use Read, Grep and Glob to check a suspected problem against the code",
-    "before reporting it. Line numbers are always the file's own line",
-    "numbers at this commit, as the diff's new side and Read show them.",
-    "Return only the review object.",
-  ].join("\n");
+  buildRunnerSystemPrompt(input.intensity, input.tone);
 
 const checkout = (headSha: string) => {
   if (!existsSync(join(workdir, ".git"))) {
@@ -260,10 +250,9 @@ const checkout = (headSha: string) => {
   }
 };
 
-// Mirrors the planned workflow step: read-only tools, structured output, no
-// MCP servers, and none of the local user's settings, hooks or plugins (a
-// runner has none). Project settings in the checkout still load, as they
-// would on a runner.
+// Mirrors the workflow's review step: read-only tools, structured output, no
+// MCP servers, and user settings only. Project settings belong to the pull
+// request, whose hooks would run next to the token, so they never load.
 const claudeArgs = (system: string): readonly string[] => [
   "-p",
   "--append-system-prompt",
@@ -283,7 +272,7 @@ const claudeArgs = (system: string): readonly string[] => [
   "--model",
   args.model,
   "--setting-sources",
-  "project",
+  "user",
   "--strict-mcp-config",
   "--no-session-persistence",
 ];

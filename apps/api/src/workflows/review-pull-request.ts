@@ -21,12 +21,16 @@ import {
   mintInstallationToken,
   performGeminiReview,
   persistReviewFindings,
+  persistRunnerReviewFindings,
   postReviewToGitHub,
   repositoryReviewTone,
   reviewToneOf,
   reviewErrorCode,
 } from "../application/review-workflow.js";
-import type { ReviewPipelineError } from "../application/review-workflow.js";
+import type {
+  ReviewablePullRequest,
+  ReviewPipelineError,
+} from "../application/review-workflow.js";
 import {
   chooseReviewKey,
   downgradeNotice,
@@ -44,6 +48,15 @@ import type {
 } from "../application/review-keys.js";
 import { fetchRepositoryContext } from "../application/repository-context.js";
 import { ReviewWorkflowParams } from "../application/review-requests.js";
+import {
+  expireRunnerJob,
+  issueRunnerJob,
+  repositoryReviewRunner,
+  RUNNER_RESULT_EVENT,
+  RUNNER_WAIT_TIMEOUT,
+  RunnerResult,
+  runnerReviewResult,
+} from "../application/runner-jobs.js";
 import { polarConfig } from "../billing/polar-client.js";
 import { GitHubAppAuthLive } from "../github/app-auth.js";
 import { GitHubPullRequestClientLive } from "../github/pull-request-client.js";
@@ -213,6 +226,36 @@ const runStep = <A extends Rpc.Serializable<A>, E extends ReviewPipelineError>(
   );
 };
 
+/**
+ * Waits for the repository's runner to report. A timeout, or a payload
+ * that doesn't decode, fails the run with its own code.
+ */
+const waitForRunnerResult = (step: WorkflowStep) =>
+  Effect.tryPromise({
+    try: () =>
+      step.waitForEvent<RunnerResult>("wait for runner result", {
+        type: RUNNER_RESULT_EVENT,
+        timeout: RUNNER_WAIT_TIMEOUT,
+      }),
+    catch: () =>
+      new ReviewStepFailure({
+        code: "runner_timeout",
+        message: `No result from the repository's GitHub Actions within ${RUNNER_WAIT_TIMEOUT}`,
+      }),
+  }).pipe(
+    Effect.flatMap((event) =>
+      Schema.decodeUnknown(RunnerResult)(event.payload).pipe(
+        Effect.mapError(
+          () =>
+            new ReviewStepFailure({
+              code: "runner_output_invalid",
+              message: "The runner's result couldn't be read",
+            }),
+        ),
+      ),
+    ),
+  );
+
 const failureDetails = (error: WorkflowExecutionError | ReviewStepFailure) =>
   Match.value(error).pipe(
     Match.tag("ReviewStepFailure", (failure) => ({
@@ -285,6 +328,88 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
         workflowInstanceId: event.instanceId,
       };
 
+      // The repository's own GitHub Actions reviews on its owner's Claude
+      // subscription (runner-jobs.ts); no key, credits, or trial involved.
+      const reviewOnRunner = (pullRequest: ReviewablePullRequest) =>
+        Effect.gen(function* () {
+          const { jobId } = yield* runStep(
+            step,
+            "issue runner job",
+            issueRunnerJob(reviewRunId, event.instanceId, request).pipe(
+              Effect.provide(databaseLayer),
+            ),
+          );
+
+          yield* logInfo("review_runner_job_issued", { ...fields, jobId });
+
+          const result = yield* waitForRunnerResult(step).pipe(
+            Effect.tapError(() =>
+              runStep(
+                step,
+                "expire runner job",
+                expireRunnerJob(reviewRunId).pipe(
+                  Effect.provide(databaseLayer),
+                ),
+              ),
+            ),
+          );
+
+          if (result.status === "failed") {
+            return yield* new ReviewStepFailure({
+              code: result.code,
+              message: result.message,
+            });
+          }
+
+          const reviewResult = runnerReviewResult(result, pullRequest);
+
+          const persisted = yield* runStep(
+            step,
+            "persist findings",
+            persistRunnerReviewFindings(reviewRunId, reviewResult).pipe(
+              Effect.provide(databaseLayer),
+            ),
+          );
+
+          const posted = yield* runStep(
+            step,
+            "post github review",
+            withInstallationToken(request.installationId, (token) =>
+              postReviewToGitHub(
+                token,
+                request,
+                reviewRunId,
+                reviewResult.review,
+                pullRequest.diff,
+                reviewToneOf(pullRequest.config),
+              ),
+            ).pipe(
+              Effect.provide(pullRequestLayer),
+              Effect.provide(databaseLayer),
+            ),
+          );
+
+          yield* runStep(
+            step,
+            "mark review run completed",
+            markReviewCompleted(reviewRunId).pipe(
+              Effect.provide(databaseLayer),
+            ),
+          );
+
+          yield* logInfo("review_workflow_completed", {
+            ...fields,
+            runner: "claude_actions",
+            verdict: reviewResult.review.verdict,
+            findingCount: persisted.findingCount,
+            model: reviewResult.model,
+            githubReviewId: posted.reviewId,
+            inlineCommentCount: posted.inlineCommentCount,
+          });
+
+          return reviewResult.review;
+        });
+
       const review = Effect.gen(function* () {
         yield* logInfo("review_workflow_started", fields);
 
@@ -327,6 +452,18 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           "load prior findings",
           loadPriorReview(reviewRunId).pipe(Effect.provide(databaseLayer)),
         );
+
+        const reviewRunner = yield* runStep(
+          step,
+          "choose review runner",
+          repositoryReviewRunner(reviewRunId).pipe(
+            Effect.provide(databaseLayer),
+          ),
+        );
+
+        if (reviewRunner === "claude_actions") {
+          return yield* reviewOnRunner(pullRequest);
+        }
 
         const keyChoice = yield* runStep(
           step,

@@ -9,7 +9,10 @@ import {
   GitHubRepositoryRepository,
   makeLiveLayer,
 } from "@not-quite-my-tempo/db";
-import type { RepositoryReviewTone } from "@not-quite-my-tempo/db";
+import type {
+  RepositoryReviewRunner,
+  RepositoryReviewTone,
+} from "@not-quite-my-tempo/db";
 import { makeServiceInfo } from "@not-quite-my-tempo/core";
 import type { Context } from "hono";
 
@@ -41,6 +44,23 @@ import {
 } from "./application/billing.js";
 import type { BillingLink } from "./application/billing.js";
 import { retryFailedReview } from "./application/review-retry.js";
+import { mintInstallationToken } from "./application/review-workflow.js";
+import {
+  buildRunnerBundle,
+  claimRunnerJob,
+  reportRunnerJob,
+  RunnerClaimRequest,
+  RUNNER_OIDC_AUDIENCE,
+  RunnerReport,
+  RunnerResultSinkLive,
+} from "./application/runner-jobs.js";
+import type {
+  RunnerClaimsRejectedError,
+  RunnerJobNotFoundError,
+  RunnerJobNotReadyError,
+  RunnerJobUnavailableError,
+  RunnerResultDeliveryError,
+} from "./application/runner-jobs.js";
 import { refreshSessionAccess } from "./application/session-access.js";
 import {
   recoverStuckRuns,
@@ -99,6 +119,12 @@ import { accountDeletedPage, accountPage } from "./dashboard/account.js";
 import type { AccountNotice } from "./dashboard/account.js";
 import { privacyPage, termsPage } from "./dashboard/legal.js";
 import {
+  bearerToken,
+  GitHubActionsOidc,
+  GitHubActionsOidcLive,
+} from "./github/actions-oidc.js";
+import type { ActionsOidcError } from "./github/actions-oidc.js";
+import {
   GitHubAppAuthLive,
   GitHubAppInstallationsLive,
 } from "./github/app-auth.js";
@@ -130,6 +156,8 @@ type Bindings = Env & {
   readonly POLAR_PRODUCT_ID?: string;
   readonly POLAR_SERVER?: string;
   readonly REVIEW_PULL_REQUEST_WORKFLOW: Workflow<ReviewWorkflowParams>;
+  // The OIDC audience repository runners request; "fletcher" if unset.
+  readonly RUNNER_OIDC_AUDIENCE?: string;
 };
 
 type AppContext = Context<{ Bindings: Bindings }>;
@@ -174,7 +202,7 @@ app.use(
 
 const errorResponse = (
   c: AppContext,
-  status: 400 | 401 | 403 | 404 | 500,
+  status: 400 | 401 | 403 | 404 | 409 | 500 | 503,
   code: string,
   message: string,
 ) => c.json({ error: { code, message } }, status);
@@ -215,10 +243,15 @@ app.use("*", async (c, next) => {
   }
 });
 
-// Every browser form post must come from this site; GitHub webhooks are
-// authenticated by their signature instead.
+// Every browser form post must come from this site. Webhooks are
+// authenticated by their signature instead, and repository runners by a
+// GitHub Actions OIDC bearer token; neither sends cookies.
 app.use("*", async (c, next) => {
-  if (c.req.method === "POST" && !c.req.path.startsWith("/webhooks/")) {
+  if (
+    c.req.method === "POST" &&
+    !c.req.path.startsWith("/webhooks/") &&
+    !c.req.path.startsWith("/runner/")
+  ) {
     const sameOrigin = c.req.header("origin") === new URL(c.req.url).origin;
     const crossSite = c.req.header("sec-fetch-site") === "cross-site";
 
@@ -299,6 +332,145 @@ app.post("/webhooks/github", (c) => {
     ),
   );
 });
+
+class MissingBearerTokenError extends Data.TaggedError(
+  "MissingBearerTokenError",
+) {}
+
+const readJsonBody = <A, I>(c: AppContext, schema: Schema.Schema<A, I>) =>
+  Effect.tryPromise({
+    try: () => c.req.json<unknown>(),
+    catch: (cause) => new RequestBodyError({ cause }),
+  }).pipe(
+    Effect.flatMap((body) =>
+      Schema.decodeUnknown(schema)(body).pipe(
+        Effect.mapError((cause) => new RequestBodyError({ cause })),
+      ),
+    ),
+  );
+
+// Verifies the GitHub Actions OIDC token a repository runner sends.
+const runnerClaims = (c: AppContext) =>
+  Effect.gen(function* () {
+    const token = yield* Option.match(
+      bearerToken(c.req.header("authorization")),
+      {
+        onNone: () => Effect.fail(new MissingBearerTokenError()),
+        onSome: Effect.succeed,
+      },
+    );
+
+    const oidc = yield* GitHubActionsOidc;
+
+    return yield* oidc.verify(token);
+  }).pipe(
+    Effect.provide(
+      GitHubActionsOidcLive({
+        audience: c.env.RUNNER_OIDC_AUDIENCE ?? RUNNER_OIDC_AUDIENCE,
+      }),
+    ),
+  );
+
+// The runner routes' own failures; anything else is a 500.
+type RunnerRouteError =
+  | MissingBearerTokenError
+  | ActionsOidcError
+  | RequestBodyError
+  | RunnerClaimsRejectedError
+  | RunnerJobNotReadyError
+  | RunnerJobUnavailableError
+  | RunnerJobNotFoundError
+  | RunnerResultDeliveryError
+  | { readonly _tag: string };
+
+const runnerErrorResponse = (c: AppContext, cause: RunnerRouteError) =>
+  Match.value(cause).pipe(
+    Match.tag("MissingBearerTokenError", () =>
+      errorResponse(c, 401, "missing_token", "Send the job's OIDC token"),
+    ),
+    Match.tag("ActionsOidcError", (error) =>
+      errorResponse(c, 401, "invalid_token", `OIDC token ${error.reason}`),
+    ),
+    Match.tag("RequestBodyError", () =>
+      errorResponse(c, 400, "invalid_body", "Request body is invalid"),
+    ),
+    Match.tag("RunnerClaimsRejectedError", (error) =>
+      errorResponse(c, 403, "claims_rejected", error.reason),
+    ),
+    Match.tag("RunnerJobNotReadyError", () =>
+      errorResponse(
+        c,
+        409,
+        "not_ready",
+        "No review is waiting for this commit yet; retry shortly",
+      ),
+    ),
+    Match.tag("RunnerJobUnavailableError", () =>
+      errorResponse(
+        c,
+        409,
+        "unavailable",
+        "This review was claimed by another run, finished, or expired",
+      ),
+    ),
+    Match.tag("RunnerJobNotFoundError", () =>
+      errorResponse(c, 404, "not_found", "No such job"),
+    ),
+    Match.tag("RunnerResultDeliveryError", () =>
+      errorResponse(c, 503, "delivery_failed", "Retry the report"),
+    ),
+    Match.orElse((error) => internalError(c, error)),
+  );
+
+// A repository's fletcher-review.yml claims the review waiting for its pull
+// request's commit and gets the prompt to run Claude Code with.
+app.post("/runner/v1/claim", (c) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const claims = yield* runnerClaims(c);
+      const body = yield* readJsonBody(c, RunnerClaimRequest);
+      const { job, request } = yield* claimRunnerJob(claims, body);
+
+      const installationToken = yield* mintInstallationToken(
+        request.installationId,
+      );
+
+      return yield* buildRunnerBundle(installationToken, job, request);
+    }).pipe(
+      Effect.provide(makeLiveLayer(c.env.DB)),
+      Effect.provide(
+        GitHubAppAuthLive({
+          appId: c.env.GITHUB_APP_ID,
+          privateKey: c.env.GITHUB_APP_PRIVATE_KEY,
+        }),
+      ),
+      Effect.provide(GitHubPullRequestClientLive({})),
+      Effect.match({
+        onFailure: (cause) => runnerErrorResponse(c, cause),
+        onSuccess: (bundle) => c.json(bundle),
+      }),
+    ),
+  ),
+);
+
+// The runner reports how its review went; this resumes the review Workflow.
+app.post("/runner/v1/jobs/:id/result", (c) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const claims = yield* runnerClaims(c);
+      const report = yield* readJsonBody(c, RunnerReport);
+
+      return yield* reportRunnerJob(claims, c.req.param("id"), report);
+    }).pipe(
+      Effect.provide(makeLiveLayer(c.env.DB)),
+      Effect.provide(RunnerResultSinkLive(c.env.REVIEW_PULL_REQUEST_WORKFLOW)),
+      Effect.match({
+        onFailure: (cause) => runnerErrorResponse(c, cause),
+        onSuccess: (result) => c.json(result, 202),
+      }),
+    ),
+  ),
+);
 
 // Polar subscription events. The signature, not the origin, authenticates
 // them. Each one only triggers a re-read of the workspace's subscriptions
@@ -509,6 +681,53 @@ app.post("/dashboard/repositories/:id/review-tone", (c) =>
           GitHubRepositoryRepository.setReviewToneWithAudit(
             visible.repository,
             reviewTone,
+            { workspaceId: visible.workspaceId, actorUserId: session.userId },
+          ),
+        ),
+        Effect.provide(makeLiveLayer(c.env.DB)),
+        Effect.match({
+          onFailure: (cause) =>
+            Match.value(cause).pipe(
+              Match.tag("ResourceNotFoundError", () =>
+                c.html(notFoundPage(session.login), 404),
+              ),
+              Match.tag("ForbiddenError", (error) =>
+                c.html(forbiddenPage(session.login, error.requiredRole), 403),
+              ),
+              Match.orElse((error) => internalError(c, error)),
+            ),
+          onSuccess: () =>
+            c.redirect(`/dashboard/repositories/${repositoryId}`, 303),
+        }),
+      ),
+    );
+  }),
+);
+
+const ReviewRunnerForm = Schema.Struct({
+  runner: Schema.Literal("fletcher", "claude_actions"),
+});
+
+app.post("/dashboard/repositories/:id/review-runner", (c) =>
+  withSessionPage(c, async (session) => {
+    const repositoryId = Number(c.req.param("id"));
+
+    const form = Schema.decodeUnknownOption(ReviewRunnerForm)(
+      await c.req.parseBody(),
+    );
+
+    if (!Number.isInteger(repositoryId) || Option.isNone(form)) {
+      return c.html(notFoundPage(session.login), 404);
+    }
+
+    const reviewRunner: RepositoryReviewRunner = form.value.runner;
+
+    return Effect.runPromise(
+      authorizeRepository(session, repositoryId, "set_review_runner").pipe(
+        Effect.flatMap((visible) =>
+          GitHubRepositoryRepository.setReviewRunnerWithAudit(
+            visible.repository,
+            reviewRunner,
             { workspaceId: visible.workspaceId, actorUserId: session.userId },
           ),
         ),
