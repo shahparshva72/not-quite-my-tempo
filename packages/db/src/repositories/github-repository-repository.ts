@@ -230,17 +230,21 @@ export class GitHubRepositoryRepository extends Effect.Service<GitHubRepositoryR
               }),
             ]),
           ).pipe(Effect.asVoid),
-        /** Sets where reviews run and records who did it, in one batch. */
+        /**
+         * Sets where reviews run, and the runner's Claude model (null for
+         * the default), and records who did it, in one batch.
+         */
         setReviewRunnerWithAudit: (
           repository: GitHubRepository,
           reviewRunner: RepositoryReviewRunner,
+          runnerModel: string | null,
           actor: RepositoryAuditActor,
         ) =>
           databaseEffect("repositories.set_review_runner_with_audit", () =>
             client.batch([
               client
                 .update(repositories)
-                .set({ reviewRunner, updatedAt: new Date() })
+                .set({ reviewRunner, runnerModel, updatedAt: new Date() })
                 .where(eq(repositories.id, repository.id)),
               client.insert(auditEvents).values({
                 workspaceId: actor.workspaceId,
@@ -249,8 +253,9 @@ export class GitHubRepositoryRepository extends Effect.Service<GitHubRepositoryR
                 target: `repository:${repository.id}`,
                 before: JSON.stringify({
                   reviewRunner: repository.reviewRunner,
+                  runnerModel: repository.runnerModel,
                 }),
-                after: JSON.stringify({ reviewRunner }),
+                after: JSON.stringify({ reviewRunner, runnerModel }),
               }),
             ]),
           ).pipe(Effect.asVoid),

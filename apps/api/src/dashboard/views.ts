@@ -16,6 +16,7 @@ import {
   workspaceActionAllowed,
 } from "../application/authorization.js";
 import { hasOpenSubscription, hasPaidPlan } from "../application/billing.js";
+import { RUNNER_MODELS } from "../application/runner-jobs.js";
 import { trialStatus } from "../application/workspace-settings.js";
 import type { TrialStatus } from "../application/workspace-settings.js";
 import type { PlanPrice } from "../billing/polar-client.js";
@@ -1403,6 +1404,24 @@ const reviewRunnerCard = (repository: GitHubRepository, canChange: boolean) => {
                       ${value === current ? "selected" : ""}
                     >
                       ${label}
+                    </option>`,
+                )}
+              </select>
+              <label for="runner-model">Claude model</label>
+              <select id="runner-model" name="model">
+                <option
+                  value=""
+                  ${repository.runnerModel === null ? "selected" : ""}
+                >
+                  Default (${DEFAULT_MODELS.anthropic})
+                </option>
+                ${RUNNER_MODELS.map(
+                  (model) =>
+                    html`<option
+                      value="${model}"
+                      ${model === repository.runnerModel ? "selected" : ""}
+                    >
+                      ${model}
                     </option>`,
                 )}
               </select>

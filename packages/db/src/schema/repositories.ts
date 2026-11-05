@@ -27,6 +27,8 @@ export const repositories = sqliteTable(
     reviewRunner: text("review_runner", { enum: reviewRunners })
       .notNull()
       .default("fletcher"),
+    // The Claude model runner reviews use; null means Fletcher's default.
+    runnerModel: text("runner_model"),
     // Set when the installation loses access to the repository; cleared
     // when an installation sync sees it again.
     removedAt: integer("removed_at", { mode: "timestamp_ms" }),

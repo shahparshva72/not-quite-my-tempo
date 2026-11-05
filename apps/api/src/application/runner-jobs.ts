@@ -4,11 +4,16 @@ import {
   ReviewRunRepository,
   RunnerJobRepository,
 } from "@not-quite-my-tempo/db";
-import type { RepositoryReviewRunner, RunnerJob } from "@not-quite-my-tempo/db";
+import type {
+  GitHubRepository,
+  RepositoryReviewRunner,
+  RunnerJob,
+} from "@not-quite-my-tempo/db";
 import {
   buildReviewUserPrompt,
   buildRunnerSystemPrompt,
   DEFAULT_MODELS,
+  MODEL_CATALOG,
   filterReviewBySeverity,
   GeminiReview,
   reviewJsonSchema,
@@ -50,6 +55,24 @@ export const RUNNER_WORKFLOW_FILE = "fletcher-review.yml";
 
 /** The OIDC audience runners request unless RUNNER_OIDC_AUDIENCE is set. */
 export const RUNNER_OIDC_AUDIENCE = "fletcher";
+
+/**
+ * The Claude models a repository can pick for runner reviews: every Claude
+ * model in the catalog. The plan tiers don't apply, since these reviews run
+ * on the owner's subscription, so Opus is offered here too.
+ */
+export const RUNNER_MODELS: readonly string[] = MODEL_CATALOG.filter(
+  (model) => model.vendor === "anthropic",
+).map((model) => model.id);
+
+/** The model a repository's runner reviews with. */
+export const runnerModelFor = (
+  repository: Pick<GitHubRepository, "runnerModel">,
+) =>
+  repository.runnerModel !== null &&
+  RUNNER_MODELS.includes(repository.runnerModel)
+    ? repository.runnerModel
+    : DEFAULT_MODELS.anthropic;
 
 /** Claude Code's turn cap on the runner. */
 export const RUNNER_MAX_TURNS = 20;
@@ -350,6 +373,11 @@ export const buildRunnerBundle = (
       run.repositoryId,
     );
 
+    const model = Option.match(repository, {
+      onNone: () => DEFAULT_MODELS.anthropic,
+      onSome: runnerModelFor,
+    });
+
     const toneOverride = Option.match(repository, {
       onNone: () => null,
       onSome: (found) => found.reviewTone,
@@ -381,7 +409,7 @@ export const buildRunnerBundle = (
 
     const bundle: RunnerBundle = {
       jobId: job.id,
-      model: DEFAULT_MODELS.anthropic,
+      model,
       maxTurns: RUNNER_MAX_TURNS,
       systemPrompt: buildRunnerSystemPrompt(pullRequest.config.intensity, tone),
       prompt: buildReviewUserPrompt({

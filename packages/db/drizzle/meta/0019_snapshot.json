@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "86b9a0c5-a049-4f27-9d8e-5429cc68ff53",
+  "id": "ad5b21b0-1097-4b8d-ba22-0dcd74a405cf",
   "prevId": "8ed3a63e-d991-44f5-b1dc-0d4de86cfd29",
   "tables": {
     "audit_events": {
@@ -587,6 +587,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'fletcher'"
+        },
+        "runner_model": {
+          "name": "runner_model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "removed_at": {
           "name": "removed_at",

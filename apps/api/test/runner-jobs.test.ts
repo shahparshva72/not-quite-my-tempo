@@ -11,7 +11,9 @@ import {
   issueRunnerJob,
   reportRunnerJob,
   repositoryReviewRunner,
+  RUNNER_MODELS,
   RUNNER_WORKFLOW_FILE,
+  runnerModelFor,
   RunnerResultSink,
   runnerResultOf,
 } from "../src/application/runner-jobs";
@@ -344,6 +346,24 @@ describe("runner jobs", () => {
   });
 });
 
+describe("runnerModelFor", () => {
+  it("offers every Claude model, Opus included", () => {
+    expect(RUNNER_MODELS).toEqual(
+      expect.arrayContaining(["claude-opus-5-5", "claude-sonnet-5-5"]),
+    );
+  });
+
+  it("uses the repository's pick, or the default for none or a retired one", () => {
+    expect(runnerModelFor({ runnerModel: "claude-opus-5-5" })).toBe(
+      "claude-opus-5-5",
+    );
+    expect(runnerModelFor({ runnerModel: null })).toBe("claude-sonnet-5-5");
+    expect(runnerModelFor({ runnerModel: "claude-opus-4" })).toBe(
+      "claude-sonnet-5-5",
+    );
+  });
+});
+
 describe("runnerResultOf", () => {
   const base = { inputTokens: null, outputTokens: null } as const;
 
@@ -545,6 +565,10 @@ describe("runner workflow template", () => {
   it("keeps the pull request's own Claude settings and hooks out", () => {
     expect(yaml).toContain("--setting-sources user");
     expect(yaml).toContain("--strict-mcp-config");
+  });
+
+  it("reports the model Claude Code ran, not just the one asked for", () => {
+    expect(yaml).toContain("(.modelUsage // {} | keys | first) // $model");
   });
 
   it("talks to the Fletcher it was shown on", () => {

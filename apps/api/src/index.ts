@@ -50,6 +50,7 @@ import {
   claimRunnerJob,
   reportRunnerJob,
   RunnerClaimRequest,
+  RUNNER_MODELS,
   RUNNER_OIDC_AUDIENCE,
   RunnerReport,
   RunnerResultSinkLive,
@@ -704,8 +705,10 @@ app.post("/dashboard/repositories/:id/review-tone", (c) =>
   }),
 );
 
+// An empty model keeps Fletcher's default for runner reviews.
 const ReviewRunnerForm = Schema.Struct({
   runner: Schema.Literal("fletcher", "claude_actions"),
+  model: Schema.optionalWith(Schema.String, { default: () => "" }),
 });
 
 app.post("/dashboard/repositories/:id/review-runner", (c) =>
@@ -716,11 +719,16 @@ app.post("/dashboard/repositories/:id/review-runner", (c) =>
       await c.req.parseBody(),
     );
 
-    if (!Number.isInteger(repositoryId) || Option.isNone(form)) {
+    if (
+      !Number.isInteger(repositoryId) ||
+      Option.isNone(form) ||
+      (form.value.model !== "" && !RUNNER_MODELS.includes(form.value.model))
+    ) {
       return c.html(notFoundPage(session.login), 404);
     }
 
     const reviewRunner: RepositoryReviewRunner = form.value.runner;
+    const runnerModel = form.value.model === "" ? null : form.value.model;
 
     return Effect.runPromise(
       authorizeRepository(session, repositoryId, "set_review_runner").pipe(
@@ -728,6 +736,7 @@ app.post("/dashboard/repositories/:id/review-runner", (c) =>
           GitHubRepositoryRepository.setReviewRunnerWithAudit(
             visible.repository,
             reviewRunner,
+            runnerModel,
             { workspaceId: visible.workspaceId, actorUserId: session.userId },
           ),
         ),

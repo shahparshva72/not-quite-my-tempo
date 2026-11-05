@@ -123,7 +123,7 @@ jobs:
             report=$(jq -c --arg model "$MODEL" '{
               outcome: "success",
               structuredOutput: .structured_output,
-              model: $model,
+              model: ((.modelUsage // {} | keys | first) // $model),
               inputTokens: ((.usage.input_tokens // 0) + (.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0)),
               outputTokens: (.usage.output_tokens // null)
             }' "$dir/result.json")

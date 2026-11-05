@@ -19,4 +19,5 @@ CREATE TABLE `runner_jobs` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `runner_jobs_review_run_id_unique` ON `runner_jobs` (`review_run_id`);--> statement-breakpoint
 CREATE INDEX `runner_jobs_lookup_idx` ON `runner_jobs` (`github_repository_id`,`pull_request_number`,`head_sha`);--> statement-breakpoint
-ALTER TABLE `repositories` ADD `review_runner` text DEFAULT 'fletcher' NOT NULL;
+ALTER TABLE `repositories` ADD `review_runner` text DEFAULT 'fletcher' NOT NULL;--> statement-breakpoint
+ALTER TABLE `repositories` ADD `runner_model` text;
