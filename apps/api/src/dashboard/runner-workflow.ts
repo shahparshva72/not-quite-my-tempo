@@ -62,9 +62,10 @@ jobs:
           body=$(jq -n --argjson pr "$PR" --arg sha "$SHA" '{pullRequestNumber: $pr, headSha: $sha}')
           # Fletcher may still be starting this review: wait up to a minute.
           for attempt in 1 2 3 4 5 6 7; do
+            # Fletcher being unreachable is a notice, not a failed check.
             status=$(curl -sS -o "$dir/job.json" -w '%{http_code}' -X POST \\
               "$FLETCHER_URL/runner/v1/claim" -H "Authorization: Bearer $oidc" \\
-              -H 'content-type: application/json' -d "$body")
+              -H 'content-type: application/json' -d "$body") || status=unreachable
             [ "$status" = 200 ] && break
             code=$(jq -r '.error.code // empty' "$dir/job.json" 2>/dev/null || true)
             [ "$status" = 409 ] && [ "$code" = not_ready ] || break

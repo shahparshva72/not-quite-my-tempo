@@ -571,6 +571,10 @@ describe("runner workflow template", () => {
     expect(yaml).toContain("(.modelUsage // {} | keys | first) // $model");
   });
 
+  it("leaves the check green when Fletcher can't be reached", () => {
+    expect(yaml).toContain('-d "$body") || status=unreachable');
+  });
+
   it("talks to the Fletcher it was shown on", () => {
     expect(yaml).toContain("FLETCHER_URL: https://fletcher.test");
     expect(yaml).toContain(`workflows/${RUNNER_WORKFLOW_FILE}`);
