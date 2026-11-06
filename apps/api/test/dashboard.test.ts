@@ -100,9 +100,11 @@ describe("dashboard", () => {
     expect(privacyBody).toContain("support@notmytempo.dev");
     expect(termsBody).toContain("Terms of Service");
 
-    // Only Gemini is enabled (ENABLED_VENDORS); name no other AI provider.
+    // Fletcher calls only Gemini (ENABLED_VENDORS), and a repository's own
+    // runner uses Claude: name no other AI provider.
     for (const body of [privacyBody, termsBody]) {
-      expect(body).not.toMatch(/OpenAI|Anthropic/);
+      expect(body).toContain("Anthropic");
+      expect(body).not.toContain("OpenAI");
     }
   });
 
