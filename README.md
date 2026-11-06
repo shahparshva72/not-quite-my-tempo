@@ -288,6 +288,29 @@ for repositories Fletcher already knows, so dashboard pages can name it. An
 older delivery never overwrites newer details. Pull requests with no delivery
 since this was added show only their number until their next event.
 
+### Reviews on the repository's own runner
+
+A repository whose dashboard setting **Where reviews run** is "Your Claude
+subscription" (`repositories.review_runner = 'claude_actions'`) reviews in
+its own GitHub Actions instead. Fletcher never calls a model or holds a
+Claude credential for these reviews. After loading prior findings, the
+Workflow issues a `runner_jobs` row and waits up to 30 minutes for the
+`runner-result` event. The repository's `.github/workflows/fletcher-review.yml`
+(the template is on `/docs#claude-subscription`) then makes two calls:
+
+- `POST /runner/v1/claim` with `{ pullRequestNumber, headSha }` returns the
+  production system prompt, the pull request prompt, the review JSON schema
+  and the model.
+- `POST /runner/v1/jobs/:id/result` sends Claude Code's `structured_output`
+  and resumes the Workflow, which persists and posts the review as usual,
+  with `provider = 'claude_actions'` and zero cost and credits.
+
+Both calls authenticate with the job's GitHub Actions OIDC token (audience
+`RUNNER_OIDC_AUDIENCE`, default `fletcher`). Only a `pull_request` run of
+that repository's `fletcher-review.yml` can claim, and only the run that
+claimed can report. These runs add the error codes `runner_timeout`,
+`runner_failed`, `runner_cancelled` and `runner_output_invalid`.
+
 ## Per-repository configuration
 
 Repositories may include a `.fletcher.json` at the root, read from the

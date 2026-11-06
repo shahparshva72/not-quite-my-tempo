@@ -16,6 +16,8 @@ export * from "./repositories/pull-request-repository.js";
 
 export * from "./repositories/review-run-repository.js";
 
+export * from "./repositories/runner-job-repository.js";
+
 export * from "./repositories/session-repository.js";
 
 export * from "./repositories/user-repository.js";

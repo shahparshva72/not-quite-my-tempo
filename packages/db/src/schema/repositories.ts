@@ -3,6 +3,8 @@ import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 import { githubInstallations } from "./github-installations.js";
 
+export const reviewRunners = ["fletcher", "claude_actions"] as const;
+
 export const repositories = sqliteTable(
   "repositories",
   {
@@ -19,6 +21,14 @@ export const repositories = sqliteTable(
     // Review tone chosen on the dashboard. Null follows the repository's
     // .fletcher.json (standard when it sets none).
     reviewTone: text("review_tone", { enum: ["standard", "ruthless"] }),
+    // Where reviews run. "claude_actions" hands each review to the
+    // repository's own GitHub Actions, on its owner's Claude subscription,
+    // instead of calling a model from the Worker.
+    reviewRunner: text("review_runner", { enum: reviewRunners })
+      .notNull()
+      .default("fletcher"),
+    // The Claude model runner reviews use; null means Fletcher's default.
+    runnerModel: text("runner_model"),
     // Set when the installation loses access to the repository; cleared
     // when an installation sync sees it again.
     removedAt: integer("removed_at", { mode: "timestamp_ms" }),

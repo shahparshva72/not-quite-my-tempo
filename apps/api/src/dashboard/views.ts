@@ -16,6 +16,7 @@ import {
   workspaceActionAllowed,
 } from "../application/authorization.js";
 import { hasOpenSubscription, hasPaidPlan } from "../application/billing.js";
+import { RUNNER_MODELS } from "../application/runner-jobs.js";
 import { trialStatus } from "../application/workspace-settings.js";
 import type { TrialStatus } from "../application/workspace-settings.js";
 import type { PlanPrice } from "../billing/polar-client.js";
@@ -1372,6 +1373,81 @@ const reviewToneCard = (repository: GitHubRepository, canChange: boolean) => {
   </section>`;
 };
 
+const reviewRunnerChoices = [
+  ["fletcher", "Fletcher: your review key, plan credits, or the free trial"],
+  [
+    "claude_actions",
+    "Your Claude subscription, in this repository's GitHub Actions",
+  ],
+] as const;
+
+/** Where one repository's reviews run; only admins and owners can change it. */
+const reviewRunnerCard = (repository: GitHubRepository, canChange: boolean) => {
+  const current = repository.reviewRunner;
+
+  return html`<section class="card">
+    <div class="card-head"><h2>Where reviews run</h2></div>
+    <div class="card-body">
+      ${
+        canChange
+          ? html`<form
+              class="key-form"
+              method="post"
+              action="/dashboard/repositories/${repository.id}/review-runner"
+            >
+              <label for="review-runner">Reviews for this repository</label>
+              <select id="review-runner" name="runner">
+                ${reviewRunnerChoices.map(
+                  ([value, label]) =>
+                    html`<option
+                      value="${value}"
+                      ${value === current ? "selected" : ""}
+                    >
+                      ${label}
+                    </option>`,
+                )}
+              </select>
+              <label for="runner-model">Claude model</label>
+              <select id="runner-model" name="model">
+                <option
+                  value=""
+                  ${repository.runnerModel === null ? "selected" : ""}
+                >
+                  Default (${DEFAULT_MODELS.anthropic})
+                </option>
+                ${RUNNER_MODELS.map(
+                  (model) =>
+                    html`<option
+                      value="${model}"
+                      ${model === repository.runnerModel ? "selected" : ""}
+                    >
+                      ${model}
+                    </option>`,
+                )}
+              </select>
+              <p class="fine">
+                With your Claude subscription, the repository's
+                <code>.github/workflows/fletcher-review.yml</code> runs Claude
+                Code on its <code>CLAUDE_CODE_OAUTH_TOKEN</code> secret and
+                sends Fletcher the review. Fletcher never sees the token, and
+                these reviews use no credits. See
+                <a href="/docs#claude-subscription">the setup steps</a>.
+              </p>
+              <button class="btn btn-secondary" type="submit">Save</button>
+            </form>`
+          : html`<p>
+                ${
+                  reviewRunnerChoices.find(
+                    ([value]) => value === current,
+                  )?.[1] ?? ""
+                }
+              </p>
+              <p class="fine">Ask an admin to change this.</p>`
+      }
+    </div>
+  </section>`;
+};
+
 export const repositoryRunsPage = (
   login: string,
   repository: GitHubRepository,
@@ -1398,6 +1474,10 @@ export const repositoryRunsPage = (
         ${reviewToneCard(
           repository,
           repositoryActionAllowed(role, "set_review_tone"),
+        )}
+        ${reviewRunnerCard(
+          repository,
+          repositoryActionAllowed(role, "set_review_runner"),
         )}
         ${
           reviews.length === 0

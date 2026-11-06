@@ -20,6 +20,7 @@ import migration0015 from "../../../packages/db/drizzle/0015_low_the_order.sql?r
 import migration0016 from "../../../packages/db/drizzle/0016_violet_marauders.sql?raw";
 import migration0017 from "../../../packages/db/drizzle/0017_legal_blob.sql?raw";
 import migration0018 from "../../../packages/db/drizzle/0018_bizarre_smiling_tiger.sql?raw";
+import migration0019 from "../../../packages/db/drizzle/0019_rainy_slyde.sql?raw";
 
 const migrations = [
   migration0000,
@@ -41,6 +42,7 @@ const migrations = [
   migration0016,
   migration0017,
   migration0018,
+  migration0019,
 ];
 
 beforeAll(async () => {

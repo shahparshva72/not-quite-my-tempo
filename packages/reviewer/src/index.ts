@@ -1,5 +1,6 @@
 export {
   buildReviewUserPrompt,
+  buildRunnerSystemPrompt,
   buildSystemPrompt,
   FLETCHER_RUTHLESS_SYSTEM_PROMPT,
   FLETCHER_SYSTEM_PROMPT,

@@ -263,6 +263,24 @@ export const buildSystemPrompt = (
   tone: ReviewTone,
 ): string => `${personaPrompt(tone)}${intensitySection(intensity, tone)}`;
 
+// Appended for reviews run by Claude Code in the repository's own GitHub
+// Actions, where the model can read the checkout itself.
+const RUNNER_SECTION = `
+
+## Where you are running
+
+Your working directory is a checkout of this pull request's head commit.
+Use Read, Grep and Glob to check a suspected problem against the code
+before reporting it. Line numbers are always the file's own line numbers at
+this commit, as the diff's new side and Read show them. Return only the
+review object.`;
+
+/** The system prompt for a review run by Claude Code on a runner. */
+export const buildRunnerSystemPrompt = (
+  intensity: ReviewIntensity,
+  tone: ReviewTone,
+): string => `${buildSystemPrompt(intensity, tone)}${RUNNER_SECTION}`;
+
 const priorFindingLine = (finding: PriorFinding) => {
   const location =
     finding.line === null

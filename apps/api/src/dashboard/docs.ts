@@ -2,6 +2,7 @@ import { html } from "hono/html";
 
 import { DAILY_REVIEW_RUN_CAP } from "../application/review-requests.js";
 import { layout } from "./components.js";
+import { runnerWorkflowYaml } from "./runner-workflow.js";
 
 // Every claim here mirrors code: the schema in
 // packages/core/src/review-config.ts, the glob rules and built-in ignores in
@@ -71,6 +72,11 @@ export const docsPage = (login: string | null) =>
           <li><a href="#config">.fletcher.json</a></li>
           <li><a href="#ignore">Ignoring files</a></li>
           <li><a href="#context">What Fletcher reads</a></li>
+          <li>
+            <a href="#claude-subscription"
+              >Reviews on your Claude subscription</a
+            >
+          </li>
           <li><a href="#gotchas">Things that catch people out</a></li>
         </ul>
       </nav>
@@ -335,6 +341,53 @@ export const docsPage = (login: string | null) =>
         comments only on lines the pull request adds, and these files don't
         count toward the 300 KB diff limit or your credits.
       </p>
+
+      <h2 id="claude-subscription">Reviews on your Claude subscription</h2>
+      <p>
+        A repository can review on your own Claude Pro, Max or Ultra plan
+        instead of a review key or plan credits. Its GitHub Actions run Claude
+        Code, Anthropic's official CLI, with your token, and send Fletcher the
+        review to post. Fletcher never sees the token, and these reviews use no
+        credits.
+      </p>
+      <ol>
+        <li>
+          On the repository's page in the dashboard, set
+          <strong>Where reviews run</strong> to your Claude subscription.
+        </li>
+        <li>
+          On your machine, run <code>claude setup-token</code> and approve it on
+          claude.ai. It prints a token that lasts a year.
+        </li>
+        <li>
+          Save it as a secret on the repository:
+          <code>gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo owner/name</code>.
+          Paste it into your terminal, not into Fletcher.
+        </li>
+        <li>
+          Commit this workflow to the default branch, under exactly this name:
+        </li>
+      </ol>
+      ${codeBlock(runnerWorkflowYaml())}
+      <ul>
+        <li>
+          <strong>Pull requests from forks aren't reviewed.</strong> GitHub
+          keeps secrets from their runs, and only
+          <code>fletcher-review.yml</code> running on <code>pull_request</code>
+          can fetch a review.
+        </li>
+        <li>
+          <strong>The token is one person's plan.</strong> Anthropic sizes
+          subscription limits for ordinary individual use. For a team, set
+          <code>ANTHROPIC_API_KEY</code> in the review step instead of
+          <code>CLAUDE_CODE_OAUTH_TOKEN</code>.
+        </li>
+        <li>
+          <strong>Each review takes about a minute of Actions time.</strong>
+          If the workflow doesn't report back within 30 minutes, the review
+          fails and the dashboard says why.
+        </li>
+      </ul>
 
       <h2 id="gotchas">Things that catch people out</h2>
       <ul>
