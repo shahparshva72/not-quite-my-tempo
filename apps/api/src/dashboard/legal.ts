@@ -4,7 +4,7 @@ import type { HtmlContent } from "./components.js";
 import { layout } from "./components.js";
 
 // Shown on both pages. Bump it whenever either document changes.
-const EFFECTIVE_DATE = "6 November 2026";
+const EFFECTIVE_DATE = "7 November 2026";
 
 const CONTACT_EMAIL = "support@notmytempo.dev";
 
