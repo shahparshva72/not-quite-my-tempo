@@ -24,6 +24,7 @@ export {
   geminiResponseJsonSchema,
   reviewJsonSchema,
   ReviewVerdict,
+  verdictForFindings,
 } from "./schema.js";
 
 export {

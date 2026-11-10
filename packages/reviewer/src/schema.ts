@@ -44,20 +44,41 @@ const severityRank: Record<FindingSeverity, number> = {
   suggestion: 1,
 };
 
+export const verdictForFindings = (
+  findings: readonly GeminiFinding[],
+): ReviewVerdict => {
+  if (findings.some((finding) => finding.severity === "critical")) {
+    return "not_my_tempo";
+  }
+
+  return findings.some((finding) => finding.severity === "warning")
+    ? "almost"
+    : "good_job";
+};
+
 /**
- * Drops findings below the configured severity threshold. The verdict and
- * summary are left untouched — the model already weighed everything; the
- * threshold only controls what gets persisted and posted.
+ * Drops findings below the configured severity threshold and derives the
+ * verdict from those kept. The model's summary stays unless no findings
+ * remain, when it would describe allegations nobody can see.
  */
 export const filterReviewBySeverity = (
   review: GeminiReview,
   threshold: FindingSeverity,
-): GeminiReview => ({
-  ...review,
-  findings: review.findings.filter(
+): GeminiReview => {
+  const findings = review.findings.filter(
     (finding) => severityRank[finding.severity] >= severityRank[threshold],
-  ),
-});
+  );
+
+  return {
+    ...review,
+    findings,
+    verdict: verdictForFindings(findings),
+    summary:
+      findings.length === 0 && review.findings.length > 0
+        ? "No findings remain at the configured severity threshold."
+        : review.summary,
+  };
+};
 
 /**
  * The response schema sent to Gemini's `generationConfig.responseSchema` so
