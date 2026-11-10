@@ -211,7 +211,7 @@ export const docsPage = (login: string | null) =>
               html`The lowest severity that gets posted.
                 <code>"warning"</code> posts critical and warning findings;
                 <code>"critical"</code> posts only critical ones. The verdict
-                isn't affected.`,
+                follows the findings that are posted.`,
             )}
             ${field(
               "intensity",

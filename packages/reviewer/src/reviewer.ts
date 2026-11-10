@@ -533,6 +533,15 @@ const requestReview = (config: ReviewerConfig, input: GeminiReviewInput) =>
     } satisfies ReviewResult;
   });
 
+const describeFailure = (error: ReviewerError) =>
+  Match.value(error).pipe(
+    Match.tag(
+      "ReviewProviderError",
+      (failure) => `${failure.reason} (${failure.status ?? "no status"})`,
+    ),
+    Match.orElse((failure) => failure._tag),
+  );
+
 /** A Reviewer for one provider, key, and model, built per review run. */
 export const ReviewerLive = (config: ReviewerConfig) => {
   const timeoutMillis =
@@ -552,6 +561,15 @@ export const ReviewerLive = (config: ReviewerConfig) => {
             orElse: () =>
               Effect.fail(new ReviewTimeoutError({ timeoutMillis })),
           }),
+          // Every failed attempt is logged, so a slow or failed review
+          // says what it waited on.
+          Effect.tapError((error) =>
+            Effect.logWarning("model call failed", {
+              provider: config.provider,
+              model: config.model,
+              error: describeFailure(error),
+            }),
+          ),
           // A timed-out attempt is not repeated here: the provider may
           // still bill it, and an immediate retry hits the same load. The
           // Workflow retries the whole step later instead.

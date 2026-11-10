@@ -341,7 +341,8 @@ falls back to defaults and never fails a review:
 - `enabled`: `false` skips the review entirely (the run completes with no
   findings and no comment).
 - `severityThreshold`: minimum severity persisted and posted —
-  `suggestion` (default, everything), `warning`, or `critical`.
+  `suggestion` (default, everything), `warning`, or `critical`. The verdict
+  is derived from the findings that remain.
 - `ignore`: extra glob patterns merged with the built-in generated-file
   ignore list. Globs match the full path; `**` crosses directories, `*` and
   `?` do not.

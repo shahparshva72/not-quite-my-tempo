@@ -830,6 +830,37 @@ describe("buildSystemPrompt", () => {
     expect(prompt).not.toContain("The persona is seasoning");
   });
 
+  it.each(["standard", "ruthless"] as const)(
+    "keeps %s severity tied to evidence rather than repetition",
+    (tone) => {
+      const prompt = buildSystemPrompt("carnegie", tone);
+
+      expect(prompt).toContain("Severity reflects impact");
+      expect(prompt).toContain("Missing context is not evidence of a bug");
+      expect(prompt).toContain("workload assumptions");
+      expect(prompt).not.toContain("raise the severity one level");
+      expect(prompt).not.toContain('"good_job" requires a flawless change');
+    },
+  );
+
+  it("asks for every real defect and keeps likely ones at lower confidence", () => {
+    const prompt = buildSystemPrompt("studio_band", "standard");
+
+    expect(prompt).toContain("Report every distinct real defect, each once.");
+    expect(prompt).toContain("Go through every changed file and hunk");
+    expect(prompt).toContain("report it with lower confidence");
+    expect(prompt).toContain(
+      "Drop only\n  suspicions with no concrete trigger.",
+    );
+    expect(prompt).not.toContain("Prefer a few high-signal findings");
+  });
+
+  it("asks finding messages to state the defect before the persona", () => {
+    expect(FLETCHER_RUTHLESS_SYSTEM_PROMPT).toContain(
+      'Its "message" opens with what\n  is wrong and when it happens',
+    );
+  });
+
   it("keeps the rubric and guardrails intact in the ruthless tone", () => {
     const prompt = buildSystemPrompt("studio_band", "ruthless");
 
@@ -872,6 +903,16 @@ describe("buildRunnerSystemPrompt", () => {
     expect(prompt).toContain("cut off at 40 turns");
     expect(prompt).toContain("Stop investigating by turn 30");
   });
+
+  it("uses the rubric's confidence scale for what it couldn't confirm", () => {
+    const prompt = buildRunnerSystemPrompt("studio_band", "standard", 40);
+
+    expect(prompt).toContain("below 0.6 means plausible but unconfirmed");
+    expect(prompt).toContain(
+      "is reported below 0.6 confidence with what would confirm it",
+    );
+    expect(prompt).not.toContain("below 0.5");
+  });
 });
 
 describe("filterReviewBySeverity", () => {
@@ -900,7 +941,7 @@ describe("filterReviewBySeverity", () => {
     );
   });
 
-  it("drops below-threshold findings without touching the verdict", () => {
+  it("drops below-threshold findings and derives the verdict from those kept", () => {
     const filtered = filterReviewBySeverity(review, "warning");
 
     expect(filtered.findings.map((finding) => finding.severity)).toEqual([
@@ -910,6 +951,46 @@ describe("filterReviewBySeverity", () => {
     expect(filtered.verdict).toBe("not_my_tempo");
 
     expect(filterReviewBySeverity(review, "critical").findings).toHaveLength(1);
+  });
+
+  it("keeps the model's summary while any finding remains", () => {
+    expect(filterReviewBySeverity(review, "critical").summary).toBe("Sloppy.");
+  });
+
+  it("lowers the verdict when the findings behind it are hidden", () => {
+    const warned: GeminiReview = {
+      verdict: "almost",
+      summary: "It drags.",
+      findings: [{ ...baseFinding, severity: "warning" }],
+    };
+
+    expect(filterReviewBySeverity(warned, "critical")).toEqual({
+      verdict: "good_job",
+      summary: "No findings remain at the configured severity threshold.",
+      findings: [],
+    });
+  });
+
+  it("leaves a review without findings as the model wrote it", () => {
+    const clean: GeminiReview = {
+      verdict: "good_job",
+      summary: "Tight.",
+      findings: [],
+    };
+
+    expect(filterReviewBySeverity(clean, "warning")).toEqual(clean);
+  });
+
+  it("corrects a verdict the findings don't support", () => {
+    const overstated: GeminiReview = {
+      verdict: "not_my_tempo",
+      summary: "Dragging.",
+      findings: [{ ...baseFinding, severity: "suggestion" }],
+    };
+
+    expect(filterReviewBySeverity(overstated, "suggestion").verdict).toBe(
+      "good_job",
+    );
   });
 });
 
