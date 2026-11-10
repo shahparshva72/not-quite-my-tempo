@@ -49,7 +49,7 @@ const usage = `Usage: pnpm --filter @not-quite-my-tempo/api spike:claude-review 
   --config <path>     Use this local .fletcher.json instead of the one on the
                       repository's default branch
   --model <id>        Claude model for Claude Code (default claude-sonnet-5-5)
-  --max-turns <n>     Claude Code turn cap (default 20)
+  --max-turns <n>     Claude Code turn cap (default 40)
   --workdir <dir>     Where to check out the pull request head
                       (default: a folder under the OS temp directory)
   --no-context        Review the diff alone, without repository context
@@ -66,7 +66,7 @@ const { values: args } = parseArgs({
     pr: { type: "string" },
     config: { type: "string" },
     model: { type: "string", default: "claude-sonnet-5-5" },
-    "max-turns": { type: "string", default: "20" },
+    "max-turns": { type: "string", default: "40" },
     workdir: { type: "string" },
     "no-context": { type: "boolean", default: false },
     "bundle-only": { type: "boolean", default: false },
@@ -196,6 +196,7 @@ const buildBundle = Effect.gen(function* () {
         headSha: details.headSha,
         diff,
         guidelines: config.guidelines,
+        includeChangedFiles: false,
       });
 
   const input: GeminiReviewInput = {
@@ -216,7 +217,7 @@ const buildBundle = Effect.gen(function* () {
 // Fletcher's system prompt, appended to Claude Code's own so its tool
 // guidance stays; the same one the claim endpoint hands a runner.
 const systemPrompt = (input: GeminiReviewInput) =>
-  buildRunnerSystemPrompt(input.intensity, input.tone);
+  buildRunnerSystemPrompt(input.intensity, input.tone, maxTurns);
 
 const checkout = (headSha: string) => {
   if (!existsSync(join(workdir, ".git"))) {

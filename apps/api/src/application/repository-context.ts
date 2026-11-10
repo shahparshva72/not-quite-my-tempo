@@ -67,6 +67,11 @@ export interface RepositoryContextInput {
   readonly diff: string;
   /** `.fletcher.json` `guidelines`; null for the usual locations. */
   readonly guidelines: readonly string[] | null;
+  /**
+   * False leaves the changed files' content out, for a reviewer that reads
+   * the checkout itself. Defaults to true.
+   */
+  readonly includeChangedFiles?: boolean;
 }
 
 const encoder = new TextEncoder();
@@ -300,8 +305,10 @@ export const fetchRepositoryContext = (input: RepositoryContextInput) =>
 
     const changedPaths = changedFiles.map((file) => file.path);
 
+    const includeChangedFiles = input.includeChangedFiles ?? true;
+
     const { selected, omitted } = selectFiles(
-      changedFiles
+      (includeChangedFiles ? changedFiles : [])
         .filter((file) => file.status !== "added")
         .map((file) => ({
           path: file.path,

@@ -74,8 +74,12 @@ export const runnerModelFor = (
     ? repository.runnerModel
     : DEFAULT_MODELS.anthropic;
 
-/** Claude Code's turn cap on the runner. */
-export const RUNNER_MAX_TURNS = 20;
+/**
+ * Claude Code's turn cap on the runner: room to read the changed files,
+ * follow callers and tests, and check each finding against the code. The
+ * system prompt tells the model the cap (buildRunnerSystemPrompt).
+ */
+export const RUNNER_MAX_TURNS = 40;
 
 // What is stored on the run when a runner review doesn't produce one.
 export const RunnerFailureCode = Schema.Literal(
@@ -356,7 +360,8 @@ export interface RunnerBundle {
 /**
  * Builds the review prompt for a claimed job, the way the Workflow builds
  * it for a model call: the repository's .fletcher.json (or the dashboard
- * tone), its filtered diff, its context, and the prior review.
+ * tone), its filtered diff, its guidelines and manifests, and the prior
+ * review. The changed files are left for Claude Code to read.
  */
 export const buildRunnerBundle = (
   installationToken: string,
@@ -403,6 +408,9 @@ export const buildRunnerBundle = (
       headSha: pullRequest.details.headSha,
       diff: pullRequest.diff,
       guidelines: pullRequest.config.guidelines ?? null,
+      // Claude Code reads the changed files from its checkout, where they
+      // carry line numbers; repeating them here only invites it not to.
+      includeChangedFiles: false,
     });
 
     const tone = reviewToneOf(pullRequest.config);
@@ -411,7 +419,11 @@ export const buildRunnerBundle = (
       jobId: job.id,
       model,
       maxTurns: RUNNER_MAX_TURNS,
-      systemPrompt: buildRunnerSystemPrompt(pullRequest.config.intensity, tone),
+      systemPrompt: buildRunnerSystemPrompt(
+        pullRequest.config.intensity,
+        tone,
+        RUNNER_MAX_TURNS,
+      ),
       prompt: buildReviewUserPrompt({
         repository: `${request.owner}/${request.repo}`,
         pullRequestNumber: request.pullRequestNumber,
