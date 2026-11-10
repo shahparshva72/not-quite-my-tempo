@@ -53,9 +53,10 @@ export interface GitHubInstallationClientService {
   >;
 }
 
-export class GitHubInstallationClient extends Context.Tag(
-  "@not-quite-my-tempo/api/GitHubInstallationClient",
-)<GitHubInstallationClient, GitHubInstallationClientService>() {}
+export class GitHubInstallationClient extends Context.Service<
+  GitHubInstallationClient,
+  GitHubInstallationClientService
+>()("@not-quite-my-tempo/api/GitHubInstallationClient") {}
 
 export interface GitHubInstallationClientConfig {
   readonly baseUrl?: string;
@@ -104,8 +105,8 @@ const fetchRepositoryPage = (
       });
     }
 
-    const decoded = yield* Schema.decodeUnknown(
-      Schema.parseJson(InstallationRepositoriesResponse),
+    const decoded = yield* Schema.decodeUnknownEffect(
+      Schema.fromJsonString(InstallationRepositoriesResponse),
     )(body).pipe(
       Effect.mapError(
         (cause) => new InstallationRepositoriesRequestError({ cause }),

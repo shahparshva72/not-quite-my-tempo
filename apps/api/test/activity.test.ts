@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
-import { Effect, TestClock, TestContext } from "effect";
+import { Effect } from "effect";
+import { TestClock } from "effect/testing";
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeLiveLayer } from "@not-quite-my-tempo/db";
 
@@ -61,7 +62,7 @@ describe("active days", () => {
         yield* pruneActiveDays;
       }).pipe(
         Effect.provide(makeLiveLayer(env.DB)),
-        Effect.provide(TestContext.TestContext),
+        Effect.provide(TestClock.layer()),
       ),
     );
 

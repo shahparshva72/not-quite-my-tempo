@@ -23,7 +23,7 @@ const ChatRequest = Schema.Struct({
   model: Schema.String,
   messages: Schema.Array(
     Schema.Struct({
-      role: Schema.Literal("system", "user", "assistant"),
+      role: Schema.Literals(["system", "user", "assistant"]),
       content: Schema.String,
     }),
   ),
@@ -57,7 +57,7 @@ const VertexReply = Schema.Struct({
   ),
 });
 
-const ThinkingLevel = Schema.Literal("minimal", "low", "medium", "high");
+const ThinkingLevel = Schema.Literals(["minimal", "low", "medium", "high"]);
 
 const apiKey = process.env["VERTEX_API_KEY"];
 
@@ -161,7 +161,7 @@ const handleCompletion = async (
   request: IncomingMessage,
   response: ServerResponse,
 ) => {
-  const chat = Schema.decodeUnknownSync(Schema.parseJson(ChatRequest))(
+  const chat = Schema.decodeUnknownSync(Schema.fromJsonString(ChatRequest))(
     await readBody(request),
   );
 
@@ -189,7 +189,10 @@ const handleCompletion = async (
     return;
   }
 
-  const reply = Schema.decodeUnknownSync(Schema.parseJson(VertexReply))(text);
+  const reply = Schema.decodeUnknownSync(Schema.fromJsonString(VertexReply))(
+    text,
+  );
+
   const candidate = reply.candidates?.[0];
 
   const content = (candidate?.content?.parts ?? [])

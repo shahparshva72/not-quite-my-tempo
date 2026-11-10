@@ -17,7 +17,9 @@ export const workspaceMembers = (access: SessionAccess, workspaceId: number) =>
       "view_members",
     );
 
-    const members = yield* MembershipRepository.listForWorkspace(workspaceId);
+    const members = yield* MembershipRepository.use((store) =>
+      store.listForWorkspace(workspaceId),
+    );
 
     return {
       workspace: viewer.workspace,
@@ -41,9 +43,8 @@ export const changeAdminRole = (
   Effect.gen(function* () {
     yield* authorizeWorkspace(access, workspaceId, "manage_roles");
 
-    const target = yield* MembershipRepository.findForUser(
-      workspaceId,
-      targetUserId,
+    const target = yield* MembershipRepository.use((store) =>
+      store.findForUser(workspaceId, targetUserId),
     );
 
     if (Option.isNone(target)) {
@@ -60,13 +61,15 @@ export const changeAdminRole = (
       return;
     }
 
-    yield* MembershipRepository.setAppRoleWithAudit({
-      workspaceId,
-      targetUserId,
-      actorUserId: access.userId,
-      from,
-      to,
-    });
+    yield* MembershipRepository.use((store) =>
+      store.setAppRoleWithAudit({
+        workspaceId,
+        targetUserId,
+        actorUserId: access.userId,
+        from,
+        to,
+      }),
+    );
 
     yield* logInfo("role_changed", {
       workspaceId,

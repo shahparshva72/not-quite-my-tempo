@@ -10,13 +10,13 @@ const PullRequestDetailsWebhook = Schema.Struct({
   pull_request: Schema.Struct({
     title: Schema.String,
     user: Schema.Struct({ login: Schema.NonEmptyString }),
-    state: Schema.Literal("open", "closed"),
+    state: Schema.Literals(["open", "closed"]),
     merged_at: Schema.NullOr(Schema.String),
     draft: Schema.optional(Schema.Boolean),
     head: Schema.Struct({ ref: Schema.String }),
     base: Schema.Struct({ ref: Schema.String }),
-    // Schema.Date rejects an unparsable date, which would store NaN.
-    updated_at: Schema.Date,
+    // Schema.DateFromString rejects an unparsable date, which would store NaN.
+    updated_at: Schema.DateFromString,
   }),
   repository: Schema.Struct({ id: GitHubId }),
 });
@@ -29,7 +29,7 @@ const PullRequestDetailsWebhook = Schema.Struct({
 export const decodePullRequestSnapshot = (
   rawBody: ArrayBuffer,
 ): Effect.Effect<Option.Option<PullRequestSnapshot>> =>
-  Schema.decodeUnknown(Schema.parseJson(PullRequestDetailsWebhook))(
+  Schema.decodeUnknownEffect(Schema.fromJsonString(PullRequestDetailsWebhook))(
     new TextDecoder().decode(rawBody),
   ).pipe(
     Effect.map(

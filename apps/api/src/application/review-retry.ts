@@ -23,9 +23,9 @@ const orNotFound = <A>(found: Option.Option<A>) =>
  */
 export const retryFailedReview = (access: SessionAccess, reviewRunId: number) =>
   Effect.gen(function* () {
-    const run = yield* ReviewRunRepository.findById(reviewRunId).pipe(
-      Effect.flatMap(orNotFound),
-    );
+    const run = yield* ReviewRunRepository.use((store) =>
+      store.findById(reviewRunId),
+    ).pipe(Effect.flatMap(orNotFound));
 
     const { repository } = yield* authorizeRepository(
       access,
@@ -37,8 +37,8 @@ export const retryFailedReview = (access: SessionAccess, reviewRunId: number) =>
       return { status: "not_failed" as const, reviewRunId: run.id };
     }
 
-    const installation = yield* GitHubInstallationRepository.findById(
-      repository.installationId,
+    const installation = yield* GitHubInstallationRepository.use((store) =>
+      store.findById(repository.installationId),
     ).pipe(Effect.flatMap(orNotFound));
 
     yield* logInfo("dashboard_retry_requested", {

@@ -23,7 +23,7 @@ const AccessTokenResponse = Schema.Struct({
   error: Schema.optional(Schema.NonEmptyString),
 });
 
-const GitHubId = Schema.Number.pipe(Schema.int(), Schema.positive());
+const GitHubId = Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0));
 
 const UserResponse = Schema.Struct({
   id: GitHubId,
@@ -101,9 +101,10 @@ export interface GitHubOAuthService {
   ) => Effect.Effect<void, GitHubOAuthError>;
 }
 
-export class GitHubOAuth extends Context.Tag(
-  "@not-quite-my-tempo/api/GitHubOAuth",
-)<GitHubOAuth, GitHubOAuthService>() {}
+export class GitHubOAuth extends Context.Service<
+  GitHubOAuth,
+  GitHubOAuthService
+>()("@not-quite-my-tempo/api/GitHubOAuth") {}
 
 export interface GitHubOAuthConfig {
   readonly clientId: string;
@@ -150,8 +151,8 @@ const oauthRequest = (
     return { body, status: response.status };
   });
 
-const decodeBody = <A, I>(schema: Schema.Schema<A, I>, body: string) =>
-  Schema.decodeUnknown(Schema.parseJson(schema))(body).pipe(
+const decodeBody = <A, I>(schema: Schema.Codec<A, I>, body: string) =>
+  Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(body).pipe(
     Effect.mapError(
       () =>
         new OAuthRequestError({ message: "GitHub OAuth response was invalid" }),

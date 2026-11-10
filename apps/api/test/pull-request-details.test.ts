@@ -120,13 +120,15 @@ const page = async (path: string) => {
 
 const seedRun = () =>
   Effect.runPromise(
-    ReviewRunRepository.create({
-      repositoryId: 1,
-      pullRequestNumber: 42,
-      // Not the delivered head, whose run the webhook already created.
-      headSha: "seed456",
-      trigger: "synchronize",
-    }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+    ReviewRunRepository.use((store) =>
+      store.create({
+        repositoryId: 1,
+        pullRequestNumber: 42,
+        // Not the delivered head, whose run the webhook already created.
+        headSha: "seed456",
+        trigger: "synchronize",
+      }),
+    ).pipe(Effect.provide(makeLiveLayer(env.DB))),
   );
 
 describe("pull request details", () => {
@@ -224,9 +226,9 @@ describe("pull request details", () => {
     const owner = await testAccess([3001], "owner");
 
     await Effect.runPromise(
-      WorkspaceRepository.deleteDataWithAudit(1, owner.userId).pipe(
-        Effect.provide(makeLiveLayer(env.DB)),
-      ),
+      WorkspaceRepository.use((store) =>
+        store.deleteDataWithAudit(1, owner.userId),
+      ).pipe(Effect.provide(makeLiveLayer(env.DB))),
     );
 
     expect(await storedPullRequests()).toEqual([]);

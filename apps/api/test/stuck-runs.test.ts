@@ -19,12 +19,14 @@ const longAgo = () => Date.now() - STUCK_AFTER_MILLIS - 60_000;
 
 const seedRun = async (headSha: string, status: string, updatedAt: number) => {
   const run = await Effect.runPromise(
-    ReviewRunRepository.create({
-      repositoryId: 1,
-      pullRequestNumber: 42,
-      headSha,
-      trigger: "opened",
-    }).pipe(Effect.provide(db())),
+    ReviewRunRepository.use((store) =>
+      store.create({
+        repositoryId: 1,
+        pullRequestNumber: 42,
+        headSha,
+        trigger: "opened",
+      }),
+    ).pipe(Effect.provide(db())),
   );
 
   await env.DB.prepare(
@@ -57,7 +59,7 @@ const recover = (
           ReviewWorkflowStatus,
           ReviewWorkflowStatus.of({
             status: (instanceId) =>
-              Effect.succeed(Option.fromNullable(statuses[instanceId])),
+              Effect.succeed(Option.fromNullishOr(statuses[instanceId])),
             terminate: (instanceId) =>
               Effect.sync(() => {
                 terminated.push(instanceId);
@@ -215,10 +217,12 @@ describe("stuck review recovery", () => {
       .run();
 
     const changed = await Effect.runPromise(
-      ReviewRunRepository.markStuckFailed(
-        id,
-        new Date(Date.now() - STUCK_AFTER_MILLIS),
-        "late",
+      ReviewRunRepository.use((store) =>
+        store.markStuckFailed(
+          id,
+          new Date(Date.now() - STUCK_AFTER_MILLIS),
+          "late",
+        ),
       ).pipe(Effect.provide(db())),
     );
 

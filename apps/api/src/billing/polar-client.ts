@@ -37,7 +37,7 @@ const Subscription = Schema.Struct({
   current_period_start: Schema.optional(Schema.NullOr(Schema.DateFromString)),
   current_period_end: Schema.NullOr(Schema.DateFromString),
   cancel_at_period_end: Schema.Boolean,
-  metadata: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  metadata: Schema.Record(Schema.String, Schema.Unknown),
 });
 
 const SubscriptionList = Schema.Struct({ items: Schema.Array(Subscription) });
@@ -70,15 +70,15 @@ export interface PlanPrice {
 const planPriceFromProduct = (
   product: typeof Product.Type,
 ): Option.Option<PlanPrice> =>
-  Option.fromNullable(
+  Option.fromNullishOr(
     product.prices.find(
       (price) => !price.is_archived && price.amount_type === "fixed",
     ),
   ).pipe(
     Option.flatMap((price) =>
       Option.all({
-        amount: Option.fromNullable(price.price_amount),
-        currency: Option.fromNullable(price.price_currency),
+        amount: Option.fromNullishOr(price.price_amount),
+        currency: Option.fromNullishOr(price.price_currency),
       }),
     ),
     Option.map(({ amount, currency }) => ({
@@ -119,9 +119,10 @@ export interface PolarClientService {
   >;
 }
 
-export class PolarClient extends Context.Tag(
-  "@not-quite-my-tempo/api/PolarClient",
-)<PolarClient, PolarClientService>() {}
+export class PolarClient extends Context.Service<
+  PolarClient,
+  PolarClientService
+>()("@not-quite-my-tempo/api/PolarClient") {}
 
 export interface PolarConfig {
   readonly accessToken: string;
@@ -131,7 +132,7 @@ export interface PolarConfig {
 }
 
 const present = (value: string | undefined) =>
-  Option.fromNullable(value).pipe(Option.filter((set) => set !== ""));
+  Option.fromNullishOr(value).pipe(Option.filter((set) => set !== ""));
 
 /**
  * Billing is on only when the access token, product, and webhook secret
@@ -187,7 +188,7 @@ interface PolarRequest {
 const polarRequest = <A, I>(
   config: PolarConfig,
   request: PolarRequest,
-  schema: Schema.Schema<A, I>,
+  schema: Schema.Codec<A, I>,
 ) =>
   Effect.gen(function* () {
     const { operation } = request;
@@ -221,7 +222,9 @@ const polarRequest = <A, I>(
         new PolarRequestError({ operation, status: response.status }),
     });
 
-    return yield* Schema.decodeUnknown(Schema.parseJson(schema))(text).pipe(
+    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(
+      text,
+    ).pipe(
       Effect.mapError(
         () => new PolarRequestError({ operation, status: response.status }),
       ),

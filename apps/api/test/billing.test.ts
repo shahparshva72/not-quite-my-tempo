@@ -356,18 +356,20 @@ describe("Polar webhook", () => {
   it("never lets an older read overwrite a newer one", async () => {
     const apply = (status: string, syncedAt: Date) =>
       Effect.runPromise(
-        WorkspaceRepository.applySubscription(
-          {
-            workspaceId: 1,
-            customerId: "cus_1",
-            subscriptionId: "sub_1",
-            status,
-            periodStart: null,
-            periodEnd: null,
-            cancelAtPeriodEnd: false,
-            syncedAt,
-          },
-          null,
+        WorkspaceRepository.use((store) =>
+          store.applySubscription(
+            {
+              workspaceId: 1,
+              customerId: "cus_1",
+              subscriptionId: "sub_1",
+              status,
+              periodStart: null,
+              periodEnd: null,
+              cancelAtPeriodEnd: false,
+              syncedAt,
+            },
+            null,
+          ),
         ).pipe(Effect.provide(makeLiveLayer(env.DB))),
       );
 
@@ -386,12 +388,14 @@ describe("paid plan reviews", () => {
     await setPlan(status, periodEnd);
 
     const run = await Effect.runPromise(
-      ReviewRunRepository.create({
-        repositoryId: 1,
-        pullRequestNumber: 42,
-        headSha: `paid-${status}-${String(periodEnd)}`,
-        trigger: "opened",
-      }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+      ReviewRunRepository.use((store) =>
+        store.create({
+          repositoryId: 1,
+          pullRequestNumber: 42,
+          headSha: `paid-${status}-${String(periodEnd)}`,
+          trigger: "opened",
+        }),
+      ).pipe(Effect.provide(makeLiveLayer(env.DB))),
     );
 
     return Effect.runPromise(
@@ -407,7 +411,7 @@ describe("paid plan reviews", () => {
     const choice = await choose("active", Date.now() + DAY_MS);
 
     const [usage] = await Effect.runPromise(
-      ReviewRunRepository.trialReviewsUsed([1]).pipe(
+      ReviewRunRepository.use((store) => store.trialReviewsUsed([1])).pipe(
         Effect.provide(makeLiveLayer(env.DB)),
       ),
     );

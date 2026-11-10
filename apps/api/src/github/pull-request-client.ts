@@ -113,9 +113,9 @@ const ReviewCommentsResponse = Schema.Array(
   Schema.Struct({
     id: Schema.Number,
     path: Schema.String,
-    line: Schema.optionalWith(Schema.NullOr(Schema.Number), {
-      default: () => null,
-    }),
+    line: Schema.NullOr(Schema.Number).pipe(
+      Schema.withDecodingDefault(Effect.succeed(null)),
+    ),
     body: Schema.String,
   }),
 );
@@ -185,9 +185,10 @@ export interface GitHubPullRequestClientService {
   >;
 }
 
-export class GitHubPullRequestClient extends Context.Tag(
-  "@not-quite-my-tempo/api/GitHubPullRequestClient",
-)<GitHubPullRequestClient, GitHubPullRequestClientService>() {}
+export class GitHubPullRequestClient extends Context.Service<
+  GitHubPullRequestClient,
+  GitHubPullRequestClientService
+>()("@not-quite-my-tempo/api/GitHubPullRequestClient") {}
 
 export interface GitHubPullRequestClientConfig {
   readonly baseUrl?: string;
@@ -365,8 +366,8 @@ export const GitHubPullRequestClientLive = (
             "application/vnd.github+json",
           );
 
-          const decoded = yield* Schema.decodeUnknown(
-            Schema.parseJson(PullRequestDetailsResponse),
+          const decoded = yield* Schema.decodeUnknownEffect(
+            Schema.fromJsonString(PullRequestDetailsResponse),
           )(body).pipe(
             Effect.mapError((cause) => new PullRequestRequestError({ cause })),
           );
@@ -401,8 +402,8 @@ export const GitHubPullRequestClientLive = (
             },
           );
 
-          const decoded = yield* Schema.decodeUnknown(
-            Schema.parseJson(CreatedReviewResponse),
+          const decoded = yield* Schema.decodeUnknownEffect(
+            Schema.fromJsonString(CreatedReviewResponse),
           )(body).pipe(
             Effect.mapError((cause) => new ReviewSubmitRequestError({ cause })),
           );
@@ -461,8 +462,8 @@ export const GitHubPullRequestClientLive = (
             });
           }
 
-          const decoded = yield* Schema.decodeUnknown(
-            Schema.parseJson(RepositoryTreeResponse),
+          const decoded = yield* Schema.decodeUnknownEffect(
+            Schema.fromJsonString(RepositoryTreeResponse),
           )(response.body).pipe(
             Effect.mapError((cause) => new PullRequestRequestError({ cause })),
           );
@@ -482,8 +483,8 @@ export const GitHubPullRequestClientLive = (
             { method: "GET" },
           );
 
-          return yield* Schema.decodeUnknown(
-            Schema.parseJson(ReviewCommentsResponse),
+          return yield* Schema.decodeUnknownEffect(
+            Schema.fromJsonString(ReviewCommentsResponse),
           )(body).pipe(
             Effect.mapError((cause) => new ReviewSubmitRequestError({ cause })),
           );

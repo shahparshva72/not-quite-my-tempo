@@ -1,5 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Context, Layer } from "effect";
 
 import { databaseEffect } from "../errors.js";
 import { pullRequests, pullRequestStates } from "../schema/pull-requests.js";
@@ -30,23 +30,19 @@ export interface ReviewRunPullRequest {
   readonly pullRequest: PullRequest;
 }
 
-export class PullRequestRepository extends Effect.Service<PullRequestRepository>()(
-  "@not-quite-my-tempo/db/PullRequestRepository",
-  {
-    accessors: true,
-    effect: Effect.gen(function* () {
-      const { client } = yield* Database;
+const make = Effect.gen(function* () {
+  const { client } = yield* Database;
 
-      return {
-        /**
-         * Stores the snapshot for a repository Fletcher already knows,
-         * unless a newer one is stored. Unknown repositories store nothing.
-         * Returns whether a row was written.
-         */
-        record: (snapshot: PullRequestSnapshot) =>
-          databaseEffect("pull_requests.record", () =>
-            client.run(
-              sql`insert into ${pullRequests} (
+  return {
+    /**
+     * Stores the snapshot for a repository Fletcher already knows,
+     * unless a newer one is stored. Unknown repositories store nothing.
+     * Returns whether a row was written.
+     */
+    record: (snapshot: PullRequestSnapshot) =>
+      databaseEffect("pull_requests.record", () =>
+        client.run(
+          sql`insert into ${pullRequests} (
                   repository_id, number, title, author_login, head_ref,
                   base_ref, state, draft, github_updated_at
                 )
@@ -66,32 +62,37 @@ export class PullRequestRepository extends Effect.Service<PullRequestRepository>
                   github_updated_at = excluded.github_updated_at,
                   updated_at = unixepoch() * 1000
                 where excluded.github_updated_at >= ${pullRequests}.github_updated_at`,
-            ),
-          ).pipe(Effect.map((result) => result.meta.changes > 0)),
-        /** The pull requests of these review runs, where known. */
-        listForReviewRuns: (reviewRunIds: readonly number[]) =>
-          reviewRunIds.length === 0
-            ? Effect.succeed<readonly ReviewRunPullRequest[]>([])
-            : databaseEffect("pull_requests.list_for_review_runs", () =>
-                client
-                  .select({
-                    reviewRunId: reviewRuns.id,
-                    pullRequest: pullRequests,
-                  })
-                  .from(reviewRuns)
-                  .innerJoin(
-                    pullRequests,
-                    and(
-                      eq(pullRequests.repositoryId, reviewRuns.repositoryId),
-                      eq(pullRequests.number, reviewRuns.pullRequestNumber),
-                    ),
-                  )
-                  .where(
-                    sql`${reviewRuns.id} in (select value from json_each(${JSON.stringify(reviewRunIds)}))`,
-                  )
-                  .all(),
-              ),
-      };
-    }),
-  },
-) {}
+        ),
+      ).pipe(Effect.map((result) => result.meta.changes > 0)),
+    /** The pull requests of these review runs, where known. */
+    listForReviewRuns: (reviewRunIds: readonly number[]) =>
+      reviewRunIds.length === 0
+        ? Effect.succeed<readonly ReviewRunPullRequest[]>([])
+        : databaseEffect("pull_requests.list_for_review_runs", () =>
+            client
+              .select({
+                reviewRunId: reviewRuns.id,
+                pullRequest: pullRequests,
+              })
+              .from(reviewRuns)
+              .innerJoin(
+                pullRequests,
+                and(
+                  eq(pullRequests.repositoryId, reviewRuns.repositoryId),
+                  eq(pullRequests.number, reviewRuns.pullRequestNumber),
+                ),
+              )
+              .where(
+                sql`${reviewRuns.id} in (select value from json_each(${JSON.stringify(reviewRunIds)}))`,
+              )
+              .all(),
+          ),
+  };
+});
+
+export class PullRequestRepository extends Context.Service<
+  PullRequestRepository,
+  Effect.Success<typeof make>
+>()("@not-quite-my-tempo/db/PullRequestRepository") {
+  static readonly layer = Layer.effect(PullRequestRepository, make);
+}

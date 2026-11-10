@@ -11,7 +11,7 @@ import {
   sql,
 } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
-import { Array, Data, Effect, Option } from "effect";
+import { Array, Data, Effect, Option, Context, Layer } from "effect";
 
 import { databaseEffect, DatabaseError } from "../errors.js";
 import {
@@ -152,316 +152,306 @@ const insertValues = (input: CreateReviewRunInput) => ({
   model: input.model ?? null,
 });
 
-export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
-  "@not-quite-my-tempo/db/ReviewRunRepository",
-  {
-    accessors: true,
-    effect: Effect.gen(function* () {
-      const { client } = yield* Database;
+const make = Effect.gen(function* () {
+  const { client } = yield* Database;
 
-      const findByPullRequestCommit = (
-        repositoryId: number,
-        pullRequestNumber: number,
-        headSha: string,
-      ) =>
-        databaseEffect("review_runs.find_by_pull_request_commit", () =>
-          client
-            .select()
-            .from(reviewRuns)
-            .where(
-              and(
-                eq(reviewRuns.repositoryId, repositoryId),
-                eq(reviewRuns.pullRequestNumber, pullRequestNumber),
-                eq(reviewRuns.headSha, headSha),
-              ),
-            )
-            .get(),
-        ).pipe(Effect.map(Option.fromNullable));
-
-      return {
-        create: (input: CreateReviewRunInput) =>
-          databaseEffect("review_runs.create", () =>
-            client
-              .insert(reviewRuns)
-              .values(insertValues(input))
-              .returning()
-              .get(),
+  const findByPullRequestCommit = (
+    repositoryId: number,
+    pullRequestNumber: number,
+    headSha: string,
+  ) =>
+    databaseEffect("review_runs.find_by_pull_request_commit", () =>
+      client
+        .select()
+        .from(reviewRuns)
+        .where(
+          and(
+            eq(reviewRuns.repositoryId, repositoryId),
+            eq(reviewRuns.pullRequestNumber, pullRequestNumber),
+            eq(reviewRuns.headSha, headSha),
           ),
-        createOrFind: (input: CreateReviewRunInput) =>
-          databaseEffect("review_runs.create_or_find", () =>
+        )
+        .get(),
+    ).pipe(Effect.map(Option.fromNullishOr));
+
+  return {
+    create: (input: CreateReviewRunInput) =>
+      databaseEffect("review_runs.create", () =>
+        client.insert(reviewRuns).values(insertValues(input)).returning().get(),
+      ),
+    createOrFind: (input: CreateReviewRunInput) =>
+      databaseEffect("review_runs.create_or_find", () =>
+        client
+          .insert(reviewRuns)
+          .values(insertValues(input))
+          .onConflictDoNothing({
+            target: [
+              reviewRuns.repositoryId,
+              reviewRuns.pullRequestNumber,
+              reviewRuns.headSha,
+            ],
+          })
+          .returning()
+          .all(),
+      ).pipe(
+        Effect.map(Array.head),
+        Effect.flatMap(
+          (inserted): Effect.Effect<CreateReviewRunResult, DatabaseError> =>
+            Option.match(inserted, {
+              onSome: (reviewRun) =>
+                Effect.succeed(ReviewRunCreation.Created({ reviewRun })),
+              onNone: () =>
+                findByPullRequestCommit(
+                  input.repositoryId,
+                  input.pullRequestNumber,
+                  input.headSha,
+                ).pipe(
+                  Effect.flatMap(Effect.fromOption),
+                  Effect.catchTag(
+                    "NoSuchElementError",
+                    (cause) =>
+                      new DatabaseError({
+                        operation: "review_runs.find_after_conflict",
+                        cause,
+                      }),
+                  ),
+                  Effect.map((reviewRun) =>
+                    ReviewRunCreation.Existing({ reviewRun }),
+                  ),
+                ),
+            }),
+        ),
+      ),
+    findById: (id: number) =>
+      databaseEffect("review_runs.find_by_id", () =>
+        client.select().from(reviewRuns).where(eq(reviewRuns.id, id)).get(),
+      ).pipe(Effect.map(Option.fromNullishOr)),
+    findByPullRequestCommit,
+    findLatestCompletedForPullRequest: (
+      repositoryId: number,
+      pullRequestNumber: number,
+      excludeReviewRunId: number,
+    ) =>
+      databaseEffect("review_runs.find_latest_completed_for_pull_request", () =>
+        client
+          .select()
+          .from(reviewRuns)
+          .where(
+            and(
+              eq(reviewRuns.repositoryId, repositoryId),
+              eq(reviewRuns.pullRequestNumber, pullRequestNumber),
+              eq(reviewRuns.status, "completed"),
+              ne(reviewRuns.id, excludeReviewRunId),
+            ),
+          )
+          .orderBy(desc(reviewRuns.createdAt), desc(reviewRuns.id))
+          .limit(1)
+          .get(),
+      ).pipe(Effect.map(Option.fromNullishOr)),
+    markRunning: (id: number) =>
+      databaseEffect("review_runs.mark_running", () =>
+        client
+          .update(reviewRuns)
+          .set({ status: "running", startedAt: new Date() })
+          .where(eq(reviewRuns.id, id))
+          .returning()
+          .get(),
+      ).pipe(Effect.map(Option.fromNullishOr)),
+    recordReviewResult: (id: number, result: ReviewRunResult) =>
+      databaseEffect("review_runs.record_review_result", () =>
+        client
+          .update(reviewRuns)
+          .set({
+            model: result.model,
+            provider: result.provider,
+            costUsdMicros: result.costUsdMicros,
+            verdict: result.verdict,
+            summary: result.summary,
+            inputTokens: result.usage.inputTokens,
+            outputTokens: result.usage.outputTokens,
+            totalTokens: result.usage.totalTokens,
+          })
+          .where(eq(reviewRuns.id, id))
+          .returning()
+          .get(),
+      ).pipe(Effect.map(Option.fromNullishOr)),
+    /**
+     * Claims one of a workspace's free trial reviews for this run, in a
+     * single statement: the run is marked 'platform' only if it has no
+     * key source yet, the workspace has fewer than `limit` counted
+     * trial runs, and fewer than `dailyCap.limit` trial reviews started
+     * platform-wide since `dailyCap.since`. The run itself records the
+     * claim, so retrying this is harmless. Returns whether the claim
+     * succeeded.
+     */
+    claimTrialReview: (
+      id: number,
+      workspaceId: number,
+      limit: number,
+      dailyCap: TrialDailyCap,
+    ) =>
+      databaseEffect("review_runs.claim_trial_review", () =>
+        client
+          .update(reviewRuns)
+          .set({ keySource: "platform", trialWorkspaceId: workspaceId })
+          .where(
+            and(
+              eq(reviewRuns.id, id),
+              isNull(reviewRuns.keySource),
+              sql`(${trialReviewsUsedBy(workspaceId)}) < ${limit}`,
+              sql`(${trialRunsSince(dailyCap.since)}) < ${dailyCap.limit}`,
+            ),
+          )
+          .returning({ id: reviewRuns.id })
+          .get(),
+      ).pipe(Effect.map((row) => row !== undefined)),
+    /** Free trial reviews each workspace has used (see trialReviewsUsedBy). */
+    trialReviewsUsed: (workspaceIds: readonly number[]) =>
+      workspaceIds.length === 0
+        ? Effect.succeed<readonly TrialUsage[]>([])
+        : databaseEffect("review_runs.trial_reviews_used", () =>
             client
-              .insert(reviewRuns)
-              .values(insertValues(input))
-              .onConflictDoNothing({
-                target: [
-                  reviewRuns.repositoryId,
-                  reviewRuns.pullRequestNumber,
-                  reviewRuns.headSha,
-                ],
+              .select({
+                workspaceId: workspaces.id,
+                used: sql<number>`${trialReviewsUsedBy(sql`${workspaces.id}`)}`,
               })
-              .returning()
+              .from(workspaces)
+              .where(
+                sql`${workspaces.id} in (select value from json_each(${JSON.stringify(workspaceIds)}))`,
+              )
               .all(),
           ).pipe(
-            Effect.map(Array.head),
-            Effect.flatMap(
-              (inserted): Effect.Effect<CreateReviewRunResult, DatabaseError> =>
-                Option.match(inserted, {
-                  onSome: (reviewRun) =>
-                    Effect.succeed(ReviewRunCreation.Created({ reviewRun })),
-                  onNone: () =>
-                    findByPullRequestCommit(
-                      input.repositoryId,
-                      input.pullRequestNumber,
-                      input.headSha,
-                    ).pipe(
-                      Effect.flatten,
-                      Effect.catchTag(
-                        "NoSuchElementException",
-                        (cause) =>
-                          new DatabaseError({
-                            operation: "review_runs.find_after_conflict",
-                            cause,
-                          }),
-                      ),
-                      Effect.map((reviewRun) =>
-                        ReviewRunCreation.Existing({ reviewRun }),
-                      ),
-                    ),
-                }),
+            Effect.map((rows) =>
+              workspaceIds.map((workspaceId): TrialUsage => ({
+                workspaceId,
+                used:
+                  rows.find((row) => row.workspaceId === workspaceId)?.used ??
+                  0,
+              })),
             ),
           ),
-        findById: (id: number) =>
-          databaseEffect("review_runs.find_by_id", () =>
-            client.select().from(reviewRuns).where(eq(reviewRuns.id, id)).get(),
-          ).pipe(Effect.map(Option.fromNullable)),
-        findByPullRequestCommit,
-        findLatestCompletedForPullRequest: (
-          repositoryId: number,
-          pullRequestNumber: number,
-          excludeReviewRunId: number,
-        ) =>
-          databaseEffect(
-            "review_runs.find_latest_completed_for_pull_request",
-            () =>
-              client
-                .select()
-                .from(reviewRuns)
-                .where(
-                  and(
-                    eq(reviewRuns.repositoryId, repositoryId),
-                    eq(reviewRuns.pullRequestNumber, pullRequestNumber),
-                    eq(reviewRuns.status, "completed"),
-                    ne(reviewRuns.id, excludeReviewRunId),
-                  ),
-                )
-                .orderBy(desc(reviewRuns.createdAt), desc(reviewRuns.id))
-                .limit(1)
-                .get(),
-          ).pipe(Effect.map(Option.fromNullable)),
-        markRunning: (id: number) =>
-          databaseEffect("review_runs.mark_running", () =>
-            client
-              .update(reviewRuns)
-              .set({ status: "running", startedAt: new Date() })
-              .where(eq(reviewRuns.id, id))
-              .returning()
-              .get(),
-          ).pipe(Effect.map(Option.fromNullable)),
-        recordReviewResult: (id: number, result: ReviewRunResult) =>
-          databaseEffect("review_runs.record_review_result", () =>
-            client
-              .update(reviewRuns)
-              .set({
-                model: result.model,
-                provider: result.provider,
-                costUsdMicros: result.costUsdMicros,
-                verdict: result.verdict,
-                summary: result.summary,
-                inputTokens: result.usage.inputTokens,
-                outputTokens: result.usage.outputTokens,
-                totalTokens: result.usage.totalTokens,
-              })
-              .where(eq(reviewRuns.id, id))
-              .returning()
-              .get(),
-          ).pipe(Effect.map(Option.fromNullable)),
-        /**
-         * Claims one of a workspace's free trial reviews for this run, in a
-         * single statement: the run is marked 'platform' only if it has no
-         * key source yet, the workspace has fewer than `limit` counted
-         * trial runs, and fewer than `dailyCap.limit` trial reviews started
-         * platform-wide since `dailyCap.since`. The run itself records the
-         * claim, so retrying this is harmless. Returns whether the claim
-         * succeeded.
-         */
-        claimTrialReview: (
-          id: number,
-          workspaceId: number,
-          limit: number,
-          dailyCap: TrialDailyCap,
-        ) =>
-          databaseEffect("review_runs.claim_trial_review", () =>
-            client
-              .update(reviewRuns)
-              .set({ keySource: "platform", trialWorkspaceId: workspaceId })
-              .where(
-                and(
-                  eq(reviewRuns.id, id),
-                  isNull(reviewRuns.keySource),
-                  sql`(${trialReviewsUsedBy(workspaceId)}) < ${limit}`,
-                  sql`(${trialRunsSince(dailyCap.since)}) < ${dailyCap.limit}`,
-                ),
-              )
-              .returning({ id: reviewRuns.id })
-              .get(),
-          ).pipe(Effect.map((row) => row !== undefined)),
-        /** Free trial reviews each workspace has used (see trialReviewsUsedBy). */
-        trialReviewsUsed: (workspaceIds: readonly number[]) =>
-          workspaceIds.length === 0
-            ? Effect.succeed<readonly TrialUsage[]>([])
-            : databaseEffect("review_runs.trial_reviews_used", () =>
-                client
-                  .select({
-                    workspaceId: workspaces.id,
-                    used: sql<number>`${trialReviewsUsedBy(sql`${workspaces.id}`)}`,
-                  })
-                  .from(workspaces)
-                  .where(
-                    sql`${workspaces.id} in (select value from json_each(${JSON.stringify(workspaceIds)}))`,
-                  )
-                  .all(),
-              ).pipe(
-                Effect.map((rows) =>
-                  workspaceIds.map((workspaceId): TrialUsage => ({
-                    workspaceId,
-                    used:
-                      rows.find((row) => row.workspaceId === workspaceId)
-                        ?.used ?? 0,
-                  })),
-                ),
-              ),
-        /**
-         * Claims paid-plan credits for this run in one statement: it's
-         * marked 'subscription' only if it has no key source yet and the
-         * workspace's period total stays within the allowance. Retrying is
-         * harmless. Returns whether the claim succeeded.
-         */
-        claimPlanCredits: (id: number, claim: PlanCreditClaim) =>
-          databaseEffect("review_runs.claim_plan_credits", () =>
-            client
-              .update(reviewRuns)
-              .set({
-                keySource: "subscription",
-                creditsX100: claim.creditsX100,
-                creditsWorkspaceId: claim.workspaceId,
-                creditsPeriodStart: claim.periodStart,
-                model: claim.model,
-                provider: claim.provider,
-                requestedModel: claim.requestedModel,
-              })
-              .where(
-                and(
-                  eq(reviewRuns.id, id),
-                  isNull(reviewRuns.keySource),
-                  sql`(${creditsUsedSql(claim.workspaceId, claim.periodStart)}) + ${claim.creditsX100} <= ${claim.allowanceX100}`,
-                ),
-              )
-              .returning({ id: reviewRuns.id })
-              .get(),
-          ).pipe(Effect.map((row) => row !== undefined)),
-        /** Paid-plan credits (× 100) a workspace has used in a period. */
-        creditsUsedX100: (workspaceId: number, periodStart: Date) =>
-          databaseEffect("review_runs.credits_used", () =>
-            client.get<{ readonly used: number }>(
-              sql`select (${creditsUsedSql(workspaceId, periodStart)}) as used`,
+    /**
+     * Claims paid-plan credits for this run in one statement: it's
+     * marked 'subscription' only if it has no key source yet and the
+     * workspace's period total stays within the allowance. Retrying is
+     * harmless. Returns whether the claim succeeded.
+     */
+    claimPlanCredits: (id: number, claim: PlanCreditClaim) =>
+      databaseEffect("review_runs.claim_plan_credits", () =>
+        client
+          .update(reviewRuns)
+          .set({
+            keySource: "subscription",
+            creditsX100: claim.creditsX100,
+            creditsWorkspaceId: claim.workspaceId,
+            creditsPeriodStart: claim.periodStart,
+            model: claim.model,
+            provider: claim.provider,
+            requestedModel: claim.requestedModel,
+          })
+          .where(
+            and(
+              eq(reviewRuns.id, id),
+              isNull(reviewRuns.keySource),
+              sql`(${creditsUsedSql(claim.workspaceId, claim.periodStart)}) + ${claim.creditsX100} <= ${claim.allowanceX100}`,
             ),
-          ).pipe(Effect.map((row) => Number(row?.used ?? 0))),
-        setKeySource: (id: number, keySource: ReviewKeySource) =>
-          databaseEffect("review_runs.set_key_source", () =>
-            client
-              .update(reviewRuns)
-              .set({ keySource })
-              .where(eq(reviewRuns.id, id))
-              .run(),
-          ).pipe(Effect.asVoid),
-        /**
-         * Whether another run of this pull request was already blocked with
-         * this error code, so the explanation is posted only once.
-         */
-        hasEarlierBlockedRun: (
-          repositoryId: number,
-          pullRequestNumber: number,
-          excludeRunId: number,
-          errorCode: string,
-          // Only runs created since then count (e.g. this credit period).
-          since: Date | null = null,
-        ) =>
-          databaseEffect("review_runs.has_earlier_blocked_run", () =>
-            client
-              .select({ id: reviewRuns.id })
-              .from(reviewRuns)
-              .where(
-                and(
-                  eq(reviewRuns.repositoryId, repositoryId),
-                  eq(reviewRuns.pullRequestNumber, pullRequestNumber),
-                  eq(reviewRuns.errorCode, errorCode),
-                  ne(reviewRuns.id, excludeRunId),
-                  since === null ? undefined : gte(reviewRuns.createdAt, since),
-                ),
-              )
-              .get(),
-          ).pipe(Effect.map((row) => row !== undefined)),
-        listByRepository: (repositoryId: number, limit: number) =>
-          databaseEffect("review_runs.list_by_repository", () =>
+          )
+          .returning({ id: reviewRuns.id })
+          .get(),
+      ).pipe(Effect.map((row) => row !== undefined)),
+    /** Paid-plan credits (× 100) a workspace has used in a period. */
+    creditsUsedX100: (workspaceId: number, periodStart: Date) =>
+      databaseEffect("review_runs.credits_used", () =>
+        client.get<{ readonly used: number }>(
+          sql`select (${creditsUsedSql(workspaceId, periodStart)}) as used`,
+        ),
+      ).pipe(Effect.map((row) => Number(row?.used ?? 0))),
+    setKeySource: (id: number, keySource: ReviewKeySource) =>
+      databaseEffect("review_runs.set_key_source", () =>
+        client
+          .update(reviewRuns)
+          .set({ keySource })
+          .where(eq(reviewRuns.id, id))
+          .run(),
+      ).pipe(Effect.asVoid),
+    /**
+     * Whether another run of this pull request was already blocked with
+     * this error code, so the explanation is posted only once.
+     */
+    hasEarlierBlockedRun: (
+      repositoryId: number,
+      pullRequestNumber: number,
+      excludeRunId: number,
+      errorCode: string,
+      // Only runs created since then count (e.g. this credit period).
+      since: Date | null = null,
+    ) =>
+      databaseEffect("review_runs.has_earlier_blocked_run", () =>
+        client
+          .select({ id: reviewRuns.id })
+          .from(reviewRuns)
+          .where(
+            and(
+              eq(reviewRuns.repositoryId, repositoryId),
+              eq(reviewRuns.pullRequestNumber, pullRequestNumber),
+              eq(reviewRuns.errorCode, errorCode),
+              ne(reviewRuns.id, excludeRunId),
+              since === null ? undefined : gte(reviewRuns.createdAt, since),
+            ),
+          )
+          .get(),
+      ).pipe(Effect.map((row) => row !== undefined)),
+    listByRepository: (repositoryId: number, limit: number) =>
+      databaseEffect("review_runs.list_by_repository", () =>
+        client
+          .select()
+          .from(reviewRuns)
+          .where(eq(reviewRuns.repositoryId, repositoryId))
+          .orderBy(desc(reviewRuns.createdAt), desc(reviewRuns.id))
+          .limit(limit)
+          .all(),
+      ),
+    /** The most recent run of each listed repository that has one. */
+    latestByRepositoryIds: (repositoryIds: readonly number[]) =>
+      repositoryIds.length === 0
+        ? Effect.succeed<readonly ReviewRun[]>([])
+        : databaseEffect("review_runs.latest_by_repository_ids", () =>
             client
               .select()
               .from(reviewRuns)
-              .where(eq(reviewRuns.repositoryId, repositoryId))
-              .orderBy(desc(reviewRuns.createdAt), desc(reviewRuns.id))
-              .limit(limit)
+              .where(
+                sql`${reviewRuns.id} in (select max(id) from review_runs where repository_id in (select value from json_each(${JSON.stringify(repositoryIds)})) group by repository_id)`,
+              )
               .all(),
           ),
-        /** The most recent run of each listed repository that has one. */
-        latestByRepositoryIds: (repositoryIds: readonly number[]) =>
-          repositoryIds.length === 0
-            ? Effect.succeed<readonly ReviewRun[]>([])
-            : databaseEffect("review_runs.latest_by_repository_ids", () =>
-                client
-                  .select()
-                  .from(reviewRuns)
-                  .where(
-                    sql`${reviewRuns.id} in (select max(id) from review_runs where repository_id in (select value from json_each(${JSON.stringify(repositoryIds)})) group by repository_id)`,
-                  )
-                  .all(),
-              ),
-        usageByRepositoryIds: (repositoryIds: readonly number[]) =>
-          repositoryIds.length === 0
-            ? Effect.succeed<readonly RepositoryUsageSummary[]>([])
-            : databaseEffect("review_runs.usage_by_repository_ids", () =>
-                client
-                  .select({
-                    repositoryId: reviewRuns.repositoryId,
-                    runCount: count(),
-                    inputTokens: sql<number>`coalesce(sum(${reviewRuns.inputTokens}), 0)`,
-                    outputTokens: sql<number>`coalesce(sum(${reviewRuns.outputTokens}), 0)`,
-                    totalTokens: sql<number>`coalesce(sum(${reviewRuns.totalTokens}), 0)`,
-                  })
-                  .from(reviewRuns)
-                  .where(
-                    sql`${reviewRuns.repositoryId} in (select value from json_each(${JSON.stringify(repositoryIds)}))`,
-                  )
-                  .groupBy(reviewRuns.repositoryId)
-                  .all(),
-              ),
-        /**
-         * Review attempts started for an installation since `since`: runs
-         * created plus "/fletcher again" retries, which reuse their run's
-         * row. Feeds the daily cost cap.
-         */
-        countForInstallationSince: (installationId: number, since: Date) =>
-          databaseEffect("review_runs.count_for_installation_since", () =>
-            client.get<{ total: number }>(
-              sql`select (
+    usageByRepositoryIds: (repositoryIds: readonly number[]) =>
+      repositoryIds.length === 0
+        ? Effect.succeed<readonly RepositoryUsageSummary[]>([])
+        : databaseEffect("review_runs.usage_by_repository_ids", () =>
+            client
+              .select({
+                repositoryId: reviewRuns.repositoryId,
+                runCount: count(),
+                inputTokens: sql<number>`coalesce(sum(${reviewRuns.inputTokens}), 0)`,
+                outputTokens: sql<number>`coalesce(sum(${reviewRuns.outputTokens}), 0)`,
+                totalTokens: sql<number>`coalesce(sum(${reviewRuns.totalTokens}), 0)`,
+              })
+              .from(reviewRuns)
+              .where(
+                sql`${reviewRuns.repositoryId} in (select value from json_each(${JSON.stringify(repositoryIds)}))`,
+              )
+              .groupBy(reviewRuns.repositoryId)
+              .all(),
+          ),
+    /**
+     * Review attempts started for an installation since `since`: runs
+     * created plus "/fletcher again" retries, which reuse their run's
+     * row. Feeds the daily cost cap.
+     */
+    countForInstallationSince: (installationId: number, since: Date) =>
+      databaseEffect("review_runs.count_for_installation_since", () =>
+        client.get<{ total: number }>(
+          sql`select (
                 select count(*) from ${reviewRuns}
                 join ${repositories} on ${repositories.id} = ${reviewRuns.repositoryId}
                 where ${repositories.installationId} = ${installationId}
@@ -473,143 +463,146 @@ export class ReviewRunRepository extends Effect.Service<ReviewRunRepository>()(
                 where ${repositories.installationId} = ${installationId}
                   and ${reviewRunRetries.createdAt} >= ${since.getTime()}
               ) as total`,
-            ),
-          ).pipe(Effect.map((row) => row?.total ?? 0)),
-        markCompleted: (id: number) =>
-          databaseEffect("review_runs.mark_completed", () =>
+        ),
+      ).pipe(Effect.map((row) => row?.total ?? 0)),
+    markCompleted: (id: number) =>
+      databaseEffect("review_runs.mark_completed", () =>
+        client
+          .update(reviewRuns)
+          .set({
+            status: "completed",
+            completedAt: new Date(),
+            errorCode: null,
+            errorMessage: null,
+          })
+          .where(eq(reviewRuns.id, id))
+          .returning()
+          .get(),
+      ).pipe(Effect.map(Option.fromNullishOr)),
+    /**
+     * Re-queues a failed run for "/fletcher again" on the same commit:
+     * only while it is still failed (so concurrent retries start one),
+     * bumping `attempt` and clearing the failed attempt's results and
+     * findings, in one batch. Returns the re-queued run, or None when
+     * it wasn't failed.
+     */
+    requeueFailed: (id: number) =>
+      databaseEffect("review_runs.requeue_failed", () =>
+        client.batch([
+          client
+            .update(reviewRuns)
+            .set({
+              status: "queued",
+              trigger: "manual",
+              attempt: sql`${reviewRuns.attempt} + 1`,
+              keySource: null,
+              trialWorkspaceId: null,
+              creditsX100: null,
+              creditsWorkspaceId: null,
+              creditsPeriodStart: null,
+              requestedModel: null,
+              provider: null,
+              costUsdMicros: null,
+              model: null,
+              verdict: null,
+              summary: null,
+              errorCode: null,
+              errorMessage: null,
+              inputTokens: null,
+              outputTokens: null,
+              totalTokens: null,
+              startedAt: null,
+              completedAt: null,
+            })
+            .where(and(eq(reviewRuns.id, id), eq(reviewRuns.status, "failed")))
+            .returning(),
+          // Recorded only when the update above changed the run, so two
+          // concurrent retries record one retry; counted by the daily cap.
+          client.insert(reviewRunRetries).select(
             client
-              .update(reviewRuns)
-              .set({
-                status: "completed",
-                completedAt: new Date(),
-                errorCode: null,
-                errorMessage: null,
+              // All columns in table order, as insert-select requires;
+              // a NULL id lets SQLite assign the next one.
+              .select({
+                id: sql<number>`null`.as("id"),
+                reviewRunId: reviewRuns.id,
+                createdAt: sql<Date>`(unixepoch() * 1000)`.as("created_at"),
               })
-              .where(eq(reviewRuns.id, id))
-              .returning()
-              .get(),
-          ).pipe(Effect.map(Option.fromNullable)),
-        /**
-         * Re-queues a failed run for "/fletcher again" on the same commit:
-         * only while it is still failed (so concurrent retries start one),
-         * bumping `attempt` and clearing the failed attempt's results and
-         * findings, in one batch. Returns the re-queued run, or None when
-         * it wasn't failed.
-         */
-        requeueFailed: (id: number) =>
-          databaseEffect("review_runs.requeue_failed", () =>
-            client.batch([
-              client
-                .update(reviewRuns)
-                .set({
-                  status: "queued",
-                  trigger: "manual",
-                  attempt: sql`${reviewRuns.attempt} + 1`,
-                  keySource: null,
-                  trialWorkspaceId: null,
-                  creditsX100: null,
-                  creditsWorkspaceId: null,
-                  creditsPeriodStart: null,
-                  requestedModel: null,
-                  provider: null,
-                  costUsdMicros: null,
-                  model: null,
-                  verdict: null,
-                  summary: null,
-                  errorCode: null,
-                  errorMessage: null,
-                  inputTokens: null,
-                  outputTokens: null,
-                  totalTokens: null,
-                  startedAt: null,
-                  completedAt: null,
-                })
-                .where(
-                  and(eq(reviewRuns.id, id), eq(reviewRuns.status, "failed")),
-                )
-                .returning(),
-              // Recorded only when the update above changed the run, so two
-              // concurrent retries record one retry; counted by the daily cap.
-              client.insert(reviewRunRetries).select(
-                client
-                  // All columns in table order, as insert-select requires;
-                  // a NULL id lets SQLite assign the next one.
-                  .select({
-                    id: sql<number>`null`.as("id"),
-                    reviewRunId: reviewRuns.id,
-                    createdAt: sql<Date>`(unixepoch() * 1000)`.as("created_at"),
-                  })
-                  .from(reviewRuns)
-                  .where(and(eq(reviewRuns.id, id), sql`changes() > 0`)),
-              ),
-              // Deletes only after the update above re-queued the run (now
-              // queued and not started); any other run keeps its findings.
-              client
-                .delete(findings)
-                .where(
-                  and(
-                    eq(findings.reviewRunId, id),
-                    sql`exists (select 1 from ${reviewRuns} where ${reviewRuns.id} = ${id} and ${reviewRuns.status} = 'queued' and ${reviewRuns.startedAt} is null)`,
-                  ),
-                ),
-            ]),
-          ).pipe(Effect.map(([rows]) => Array.head(rows))),
-        /** Runs still queued or running that haven't changed since `before`. */
-        listStuck: (before: Date, limit: number) =>
-          databaseEffect("review_runs.list_stuck", () =>
-            client
-              .select()
               .from(reviewRuns)
-              .where(
-                and(
-                  inArray(reviewRuns.status, ["queued", "running"]),
-                  lt(reviewRuns.updatedAt, before),
-                ),
-              )
-              .orderBy(reviewRuns.id)
-              .limit(limit)
-              .all(),
+              .where(and(eq(reviewRuns.id, id), sql`changes() > 0`)),
           ),
-        /**
-         * Fails a run only if it is still queued or running and unchanged
-         * since `before`, so recovery can't overwrite a review that finished
-         * in the meantime. Returns whether it changed the run.
-         */
-        markStuckFailed: (id: number, before: Date, errorMessage: string) =>
-          databaseEffect("review_runs.mark_stuck_failed", () =>
-            client
-              .update(reviewRuns)
-              .set({
-                status: "failed",
-                completedAt: new Date(),
-                errorCode: "stuck",
-                errorMessage,
-              })
-              .where(
-                and(
-                  eq(reviewRuns.id, id),
-                  inArray(reviewRuns.status, ["queued", "running"]),
-                  lt(reviewRuns.updatedAt, before),
-                ),
-              )
-              .returning({ id: reviewRuns.id })
-              .get(),
-          ).pipe(Effect.map((row) => row !== undefined)),
-        markFailed: (id: number, errorCode: string, errorMessage: string) =>
-          databaseEffect("review_runs.mark_failed", () =>
-            client
-              .update(reviewRuns)
-              .set({
-                status: "failed",
-                completedAt: new Date(),
-                errorCode,
-                errorMessage,
-              })
-              .where(eq(reviewRuns.id, id))
-              .returning()
-              .get(),
-          ).pipe(Effect.map(Option.fromNullable)),
-      };
-    }),
-  },
-) {}
+          // Deletes only after the update above re-queued the run (now
+          // queued and not started); any other run keeps its findings.
+          client
+            .delete(findings)
+            .where(
+              and(
+                eq(findings.reviewRunId, id),
+                sql`exists (select 1 from ${reviewRuns} where ${reviewRuns.id} = ${id} and ${reviewRuns.status} = 'queued' and ${reviewRuns.startedAt} is null)`,
+              ),
+            ),
+        ]),
+      ).pipe(Effect.map(([rows]) => Array.head(rows))),
+    /** Runs still queued or running that haven't changed since `before`. */
+    listStuck: (before: Date, limit: number) =>
+      databaseEffect("review_runs.list_stuck", () =>
+        client
+          .select()
+          .from(reviewRuns)
+          .where(
+            and(
+              inArray(reviewRuns.status, ["queued", "running"]),
+              lt(reviewRuns.updatedAt, before),
+            ),
+          )
+          .orderBy(reviewRuns.id)
+          .limit(limit)
+          .all(),
+      ),
+    /**
+     * Fails a run only if it is still queued or running and unchanged
+     * since `before`, so recovery can't overwrite a review that finished
+     * in the meantime. Returns whether it changed the run.
+     */
+    markStuckFailed: (id: number, before: Date, errorMessage: string) =>
+      databaseEffect("review_runs.mark_stuck_failed", () =>
+        client
+          .update(reviewRuns)
+          .set({
+            status: "failed",
+            completedAt: new Date(),
+            errorCode: "stuck",
+            errorMessage,
+          })
+          .where(
+            and(
+              eq(reviewRuns.id, id),
+              inArray(reviewRuns.status, ["queued", "running"]),
+              lt(reviewRuns.updatedAt, before),
+            ),
+          )
+          .returning({ id: reviewRuns.id })
+          .get(),
+      ).pipe(Effect.map((row) => row !== undefined)),
+    markFailed: (id: number, errorCode: string, errorMessage: string) =>
+      databaseEffect("review_runs.mark_failed", () =>
+        client
+          .update(reviewRuns)
+          .set({
+            status: "failed",
+            completedAt: new Date(),
+            errorCode,
+            errorMessage,
+          })
+          .where(eq(reviewRuns.id, id))
+          .returning()
+          .get(),
+      ).pipe(Effect.map(Option.fromNullishOr)),
+  };
+});
+
+export class ReviewRunRepository extends Context.Service<
+  ReviewRunRepository,
+  Effect.Success<typeof make>
+>()("@not-quite-my-tempo/db/ReviewRunRepository") {
+  static readonly layer = Layer.effect(ReviewRunRepository, make);
+}

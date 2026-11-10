@@ -81,7 +81,7 @@ const fakeClient = (repository: FakeRepository, reads: string[] = []) =>
         }
 
         return Effect.succeed(
-          Option.fromNullable(repository.files[`${gitRef}:${path}`]),
+          Option.fromNullishOr(repository.files[`${gitRef}:${path}`]),
         );
       },
       fetchTree: (_token, _ref, gitRef) =>

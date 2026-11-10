@@ -19,9 +19,9 @@ const utcDay = (millis: number) => new Date(millis).toISOString().slice(0, 10);
 export const recordActiveDay = (userId: number) =>
   Clock.currentTimeMillis.pipe(
     Effect.flatMap((now) =>
-      UserRepository.recordActiveDay(userId, utcDay(now)),
+      UserRepository.use((store) => store.recordActiveDay(userId, utcDay(now))),
     ),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       logError("active_day_record_failed", {
         userId,
         error: Inspectable.toStringUnknown(error.cause),
@@ -32,6 +32,8 @@ export const recordActiveDay = (userId: number) =>
 /** Forgets active days older than the retention window. */
 export const pruneActiveDays = Clock.currentTimeMillis.pipe(
   Effect.map((now) => utcDay(now - ACTIVE_DAY_RETENTION_DAYS * DAY_MILLIS)),
-  Effect.tap((before) => UserRepository.pruneActiveDaysBefore(before)),
+  Effect.tap((before) =>
+    UserRepository.use((store) => store.pruneActiveDaysBefore(before)),
+  ),
   Effect.flatMap((before) => logInfo("active_days_pruned", { before })),
 );

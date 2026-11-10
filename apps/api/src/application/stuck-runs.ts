@@ -1,4 +1,4 @@
-import { Clock, Context, Data, Effect, Either, Layer, Option } from "effect";
+import { Clock, Context, Data, Effect, Result, Layer, Option } from "effect";
 import { ReviewRunRepository } from "@not-quite-my-tempo/db";
 
 import { logInfo } from "../logging.js";
@@ -54,9 +54,10 @@ export interface ReviewWorkflowStatusService {
 const isInstanceNotFound = (cause: unknown) =>
   cause instanceof Error && cause.message.includes("instance.not_found");
 
-export class ReviewWorkflowStatus extends Context.Tag(
-  "@not-quite-my-tempo/api/ReviewWorkflowStatus",
-)<ReviewWorkflowStatus, ReviewWorkflowStatusService>() {}
+export class ReviewWorkflowStatus extends Context.Service<
+  ReviewWorkflowStatus,
+  ReviewWorkflowStatusService
+>()("@not-quite-my-tempo/api/ReviewWorkflowStatus") {}
 
 export const ReviewWorkflowStatusLive = (
   workflow: Workflow<ReviewWorkflowParams>,
@@ -73,7 +74,7 @@ export const ReviewWorkflowStatusLive = (
           },
           catch: (cause) => cause,
         }).pipe(
-          Effect.catchAll((cause) =>
+          Effect.catch((cause) =>
             isInstanceNotFound(cause)
               ? Effect.succeed(Option.none<string>())
               : new WorkflowStatusUnavailableError({ cause }),
@@ -88,7 +89,7 @@ export const ReviewWorkflowStatusLive = (
           },
           catch: (cause) => cause,
         }).pipe(
-          Effect.catchAll((cause) =>
+          Effect.catch((cause) =>
             isInstanceNotFound(cause)
               ? Effect.void
               : new WorkflowStatusUnavailableError({ cause }),
@@ -111,7 +112,9 @@ export const recoverStuckRuns = Effect.gen(function* () {
   const abandonedBefore = now - ABANDONED_AFTER_MILLIS;
   const workflows = yield* ReviewWorkflowStatus;
 
-  const candidates = yield* ReviewRunRepository.listStuck(before, BATCH_SIZE);
+  const candidates = yield* ReviewRunRepository.use((store) =>
+    store.listStuck(before, BATCH_SIZE),
+  );
 
   let recovered = 0;
   let terminated = 0;
@@ -119,15 +122,15 @@ export const recoverStuckRuns = Effect.gen(function* () {
 
   for (const run of candidates) {
     const instanceId = workflowInstanceId(run.id, run.attempt);
-    const status = yield* workflows.status(instanceId).pipe(Effect.either);
+    const status = yield* workflows.status(instanceId).pipe(Effect.result);
 
     // Unknown is not dead: leave the run for the next check.
-    if (Either.isLeft(status)) {
+    if (Result.isFailure(status)) {
       skipped += 1;
       continue;
     }
 
-    const workflowStatus = Option.getOrElse(status.right, () => "missing");
+    const workflowStatus = Option.getOrElse(status.success, () => "missing");
     let errorMessage = `Workflow ${workflowStatus} without finishing the run`;
 
     if (liveStatuses.has(workflowStatus)) {
@@ -139,9 +142,9 @@ export const recoverStuckRuns = Effect.gen(function* () {
       // would leave both, so a failed terminate leaves the run as it is.
       const stopped = yield* workflows
         .terminate(instanceId)
-        .pipe(Effect.either);
+        .pipe(Effect.result);
 
-      if (Either.isLeft(stopped)) {
+      if (Result.isFailure(stopped)) {
         skipped += 1;
         continue;
       }
@@ -156,10 +159,8 @@ export const recoverStuckRuns = Effect.gen(function* () {
       });
     }
 
-    const changed = yield* ReviewRunRepository.markStuckFailed(
-      run.id,
-      before,
-      errorMessage,
+    const changed = yield* ReviewRunRepository.use((store) =>
+      store.markStuckFailed(run.id, before, errorMessage),
     );
 
     if (changed) {

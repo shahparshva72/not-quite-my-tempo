@@ -52,7 +52,7 @@ export const detectVertexProject = (
   }).pipe(
     Effect.timeout("10 seconds"),
     Effect.map((body) =>
-      Option.fromNullable(PROJECT_IN_MESSAGE.exec(body)?.[1]),
+      Option.fromNullishOr(PROJECT_IN_MESSAGE.exec(body)?.[1]),
     ),
     Effect.orElseSucceed(() => Option.none<string>()),
   );

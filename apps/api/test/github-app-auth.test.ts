@@ -81,7 +81,7 @@ describe("createAppJwt", () => {
 
     expect(header).toEqual({ alg: "RS256", typ: "JWT" });
 
-    const payload = Schema.decodeUnknownSync(Schema.parseJson(JwtPayload))(
+    const payload = Schema.decodeUnknownSync(Schema.fromJsonString(JwtPayload))(
       new TextDecoder().decode(base64UrlDecode(payloadSegment ?? "")),
     );
 

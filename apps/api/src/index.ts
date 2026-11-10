@@ -338,13 +338,13 @@ class MissingBearerTokenError extends Data.TaggedError(
   "MissingBearerTokenError",
 ) {}
 
-const readJsonBody = <A, I>(c: AppContext, schema: Schema.Schema<A, I>) =>
+const readJsonBody = <A, I>(c: AppContext, schema: Schema.Codec<A, I>) =>
   Effect.tryPromise({
     try: () => c.req.json<unknown>(),
     catch: (cause) => new RequestBodyError({ cause }),
   }).pipe(
     Effect.flatMap((body) =>
-      Schema.decodeUnknown(schema)(body).pipe(
+      Schema.decodeUnknownEffect(schema)(body).pipe(
         Effect.mapError((cause) => new RequestBodyError({ cause })),
       ),
     ),
@@ -517,7 +517,7 @@ app.post("/webhooks/polar", async (c): Promise<Response> => {
       ),
       Effect.provide(makeLiveLayer(c.env.DB)),
       Effect.provide(PolarClientLive(config.value)),
-      Effect.catchAll((error) => Effect.succeed(internalError(c, error))),
+      Effect.catch((error) => Effect.succeed(internalError(c, error))),
     ),
   );
 });
@@ -658,7 +658,7 @@ app.get("/dashboard/repositories/:id", (c) =>
 
 // An empty choice clears the override, so .fletcher.json decides again.
 const ReviewToneForm = Schema.Struct({
-  tone: Schema.Literal("", "standard", "ruthless"),
+  tone: Schema.Literals(["", "standard", "ruthless"]),
 });
 
 app.post("/dashboard/repositories/:id/review-tone", (c) =>
@@ -679,10 +679,11 @@ app.post("/dashboard/repositories/:id/review-tone", (c) =>
     return Effect.runPromise(
       authorizeRepository(session, repositoryId, "set_review_tone").pipe(
         Effect.flatMap((visible) =>
-          GitHubRepositoryRepository.setReviewToneWithAudit(
-            visible.repository,
-            reviewTone,
-            { workspaceId: visible.workspaceId, actorUserId: session.userId },
+          GitHubRepositoryRepository.use((store) =>
+            store.setReviewToneWithAudit(visible.repository, reviewTone, {
+              workspaceId: visible.workspaceId,
+              actorUserId: session.userId,
+            }),
           ),
         ),
         Effect.provide(makeLiveLayer(c.env.DB)),
@@ -707,8 +708,8 @@ app.post("/dashboard/repositories/:id/review-tone", (c) =>
 
 // An empty model keeps Fletcher's default for runner reviews.
 const ReviewRunnerForm = Schema.Struct({
-  runner: Schema.Literal("fletcher", "claude_actions"),
-  model: Schema.optionalWith(Schema.String, { default: () => "" }),
+  runner: Schema.Literals(["fletcher", "claude_actions"]),
+  model: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
 });
 
 app.post("/dashboard/repositories/:id/review-runner", (c) =>
@@ -733,11 +734,13 @@ app.post("/dashboard/repositories/:id/review-runner", (c) =>
     return Effect.runPromise(
       authorizeRepository(session, repositoryId, "set_review_runner").pipe(
         Effect.flatMap((visible) =>
-          GitHubRepositoryRepository.setReviewRunnerWithAudit(
-            visible.repository,
-            reviewRunner,
-            runnerModel,
-            { workspaceId: visible.workspaceId, actorUserId: session.userId },
+          GitHubRepositoryRepository.use((store) =>
+            store.setReviewRunnerWithAudit(
+              visible.repository,
+              reviewRunner,
+              runnerModel,
+              { workspaceId: visible.workspaceId, actorUserId: session.userId },
+            ),
           ),
         ),
         Effect.provide(makeLiveLayer(c.env.DB)),
@@ -1021,10 +1024,11 @@ app.post("/onboarding/repositories/:id", (c) =>
     return Effect.runPromise(
       authorizeRepository(session, repositoryId, "toggle_reviews").pipe(
         Effect.flatMap((visible) =>
-          GitHubRepositoryRepository.setEnabledWithAudit(
-            visible.repository,
-            enabled === "true",
-            { workspaceId: visible.workspaceId, actorUserId: session.userId },
+          GitHubRepositoryRepository.use((store) =>
+            store.setEnabledWithAudit(visible.repository, enabled === "true", {
+              workspaceId: visible.workspaceId,
+              actorUserId: session.userId,
+            }),
           ),
         ),
         Effect.provide(makeLiveLayer(c.env.DB)),
@@ -1112,7 +1116,7 @@ app.post("/workspaces/:id/members/:userId/role", (c) =>
 );
 
 const ReviewKeyForm = Schema.Struct({
-  vendor: Schema.Literal("google", "openai", "anthropic"),
+  vendor: Schema.Literals(["google", "openai", "anthropic"]),
   api_key: Schema.String,
 });
 
@@ -1854,7 +1858,7 @@ const scheduled = (
         Effect.provide(
           ReviewWorkflowStatusLive(env.REVIEW_PULL_REQUEST_WORKFLOW),
         ),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           logError("stuck_runs_check_failed", {
             error: Inspectable.toStringUnknown(error),
           }),
@@ -1867,7 +1871,7 @@ const scheduled = (
     Effect.runPromise(
       pruneActiveDays.pipe(
         Effect.provide(makeLiveLayer(env.DB)),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           logError("active_days_prune_failed", {
             error: Inspectable.toStringUnknown(error),
           }),

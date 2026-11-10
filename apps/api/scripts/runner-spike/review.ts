@@ -143,14 +143,16 @@ const loadConfig = (content: Option.Option<string>, source: string) =>
         return defaultReviewConfig;
       }),
     onSome: (json) =>
-      Schema.decodeUnknown(Schema.parseJson(ReviewConfig))(json).pipe(
+      Schema.decodeUnknownEffect(Schema.fromJsonString(ReviewConfig))(
+        json,
+      ).pipe(
         Effect.tap(() =>
           Effect.sync(() =>
             console.log(`Using ${REVIEW_CONFIG_PATH} from ${source}.`),
           ),
         ),
         // Production logs and falls back the same way.
-        Effect.catchTag("ParseError", (error) =>
+        Effect.catchTag("SchemaError", (error) =>
           Effect.sync(() => {
             console.warn(
               `${REVIEW_CONFIG_PATH} from ${source} is invalid; using defaults.\n${error.message}`,
@@ -283,7 +285,7 @@ const claudeArgs = (system: string): readonly string[] => [
 // checkout for Claude Code to Read; findings then cited that file's line
 // numbers instead of the source's, so none could anchor to the diff.
 const runClaudeCode = (system: string, prompt: string) =>
-  Effect.async<string, Error>((resume) => {
+  Effect.callback<string, Error>((resume) => {
     // An API key outranks the subscription login, so it must not leak in.
     const { ANTHROPIC_API_KEY: _apiKey, ...inherited } = process.env;
 
@@ -400,12 +402,12 @@ const program = Effect.gen(function* () {
   const structuredOutput =
     args["from-output"] === undefined
       ? yield* reviewWithClaudeCode(system, prompt)
-      : yield* Schema.decodeUnknown(Schema.parseJson())(
-          readFileSync(args["from-output"], "utf8"),
-        );
+      : yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(Schema.Unknown),
+        )(readFileSync(args["from-output"], "utf8"));
 
   const review = filterReviewBySeverity(
-    yield* Schema.decodeUnknown(GeminiReview)(structuredOutput),
+    yield* Schema.decodeUnknownEffect(GeminiReview)(structuredOutput),
     config.severityThreshold,
   );
 
@@ -429,8 +431,8 @@ const reviewWithClaudeCode = (system: string, prompt: string) =>
 
     writeFileSync(join(bundleDir, "result.json"), raw);
 
-    const result = yield* Schema.decodeUnknown(
-      Schema.parseJson(ClaudeCodeResult),
+    const result = yield* Schema.decodeUnknownEffect(
+      Schema.fromJsonString(ClaudeCodeResult),
     )(raw);
 
     console.log(

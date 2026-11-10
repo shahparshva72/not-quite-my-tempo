@@ -86,10 +86,10 @@ export const verifyPolarWebhook = (
     return results.some(Boolean);
   });
 
-const WorkspaceIdFromMetadata = Schema.Union(
+const WorkspaceIdFromMetadata = Schema.Union([
   Schema.NumberFromString,
   Schema.Number,
-).pipe(Schema.int(), Schema.positive());
+]).check(Schema.isInt(), Schema.isGreaterThan(0));
 
 const PolarEvent = Schema.Struct({
   type: Schema.String,
@@ -98,7 +98,7 @@ const PolarEvent = Schema.Struct({
 
 const SubscriptionPayload = Schema.Struct({
   id: Schema.String,
-  metadata: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  metadata: Schema.Record(Schema.String, Schema.Unknown),
 });
 
 /**
@@ -124,27 +124,33 @@ export type PolarWebhookEvent = Data.TaggedEnum<{
 export const PolarWebhookEvent = Data.taggedEnum<PolarWebhookEvent>();
 
 export const decodePolarWebhookEvent = (body: string): PolarWebhookEvent =>
-  Option.match(Schema.decodeUnknownOption(Schema.parseJson(PolarEvent))(body), {
-    onNone: () => PolarWebhookEvent.Malformed({ eventType: "unknown" }),
-    onSome: ({ type: eventType, data }) =>
-      !eventType.startsWith("subscription.")
-        ? PolarWebhookEvent.Ignore({ eventType })
-        : Option.match(Schema.decodeUnknownOption(SubscriptionPayload)(data), {
-            onNone: () => PolarWebhookEvent.Malformed({ eventType }),
-            onSome: (subscription) =>
-              Option.match(
-                Schema.decodeUnknownOption(WorkspaceIdFromMetadata)(
-                  subscription.metadata["workspace_id"],
-                ),
-                {
-                  onNone: () => PolarWebhookEvent.Ignore({ eventType }),
-                  onSome: (workspaceId) =>
-                    PolarWebhookEvent.SyncWorkspace({
-                      workspaceId,
-                      eventType,
-                      subscriptionId: subscription.id,
-                    }),
-                },
-              ),
-          }),
-  });
+  Option.match(
+    Schema.decodeUnknownOption(Schema.fromJsonString(PolarEvent))(body),
+    {
+      onNone: () => PolarWebhookEvent.Malformed({ eventType: "unknown" }),
+      onSome: ({ type: eventType, data }) =>
+        !eventType.startsWith("subscription.")
+          ? PolarWebhookEvent.Ignore({ eventType })
+          : Option.match(
+              Schema.decodeUnknownOption(SubscriptionPayload)(data),
+              {
+                onNone: () => PolarWebhookEvent.Malformed({ eventType }),
+                onSome: (subscription) =>
+                  Option.match(
+                    Schema.decodeUnknownOption(WorkspaceIdFromMetadata)(
+                      subscription.metadata["workspace_id"],
+                    ),
+                    {
+                      onNone: () => PolarWebhookEvent.Ignore({ eventType }),
+                      onSome: (workspaceId) =>
+                        PolarWebhookEvent.SyncWorkspace({
+                          workspaceId,
+                          eventType,
+                          subscriptionId: subscription.id,
+                        }),
+                    },
+                  ),
+              },
+            ),
+    },
+  );

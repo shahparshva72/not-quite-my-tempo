@@ -40,7 +40,7 @@ export const cachedPlanPrice = (config: PolarConfig) =>
   Effect.gen(function* () {
     const key = `${config.server}:${config.productId}`;
     const now = yield* Clock.currentTimeMillis;
-    const cached = Option.fromNullable(cache.get(key));
+    const cached = Option.fromNullishOr(cache.get(key));
 
     if (Option.isSome(cached) && cached.value.expiresAt > now) {
       return cached.value.price;

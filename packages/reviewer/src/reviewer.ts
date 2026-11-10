@@ -97,9 +97,9 @@ export interface ReviewerService {
   ) => Effect.Effect<ReviewResult, ReviewerError>;
 }
 
-export class Reviewer extends Context.Tag(
+export class Reviewer extends Context.Service<Reviewer, ReviewerService>()(
   "@not-quite-my-tempo/reviewer/Reviewer",
-)<Reviewer, ReviewerService>() {}
+) {}
 
 export interface ReviewerConfig {
   readonly provider: ReviewProvider;
@@ -248,9 +248,9 @@ const invalidOutput = (provider: ReviewProvider, detail: string) =>
   new ReviewOutputInvalidError({ provider, detail: truncateDetail(detail) });
 
 const decodeEnvelope =
-  <A, I>(provider: ReviewProvider, schema: Schema.Schema<A, I>) =>
+  <A, I>(provider: ReviewProvider, schema: Schema.Codec<A, I>) =>
   (body: string) =>
-    Schema.decodeUnknown(Schema.parseJson(schema))(body).pipe(
+    Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(body).pipe(
       Effect.mapError((cause) => invalidOutput(provider, cause.message)),
     );
 
@@ -286,8 +286,8 @@ const readGeminiStream = (provider: ReviewProvider, body: string) =>
     let usage: GeminiUsage = undefined;
 
     for (const data of events) {
-      const streamError = yield* Schema.decodeUnknown(
-        Schema.parseJson(GeminiStreamError),
+      const streamError = yield* Schema.decodeUnknownEffect(
+        Schema.fromJsonString(GeminiStreamError),
       )(data).pipe(Effect.option);
 
       if (Option.isSome(streamError)) {
@@ -519,9 +519,9 @@ const requestReview = (config: ReviewerConfig, input: GeminiReviewInput) =>
 
     const reply = yield* request.read(body);
 
-    const review = yield* Schema.decodeUnknown(Schema.parseJson(GeminiReview))(
-      reply.reviewJson,
-    ).pipe(
+    const review = yield* Schema.decodeUnknownEffect(
+      Schema.fromJsonString(GeminiReview),
+    )(reply.reviewJson).pipe(
       Effect.mapError((cause) => invalidOutput(config.provider, cause.message)),
     );
 
@@ -540,27 +540,24 @@ export const ReviewerLive = (config: ReviewerConfig) => {
 
   const retrySchedule = Schedule.exponential(
     Duration.millis(config.retryBaseMillis ?? DEFAULT_RETRY_BASE_MILLIS),
-  ).pipe(
-    Schedule.jittered,
-    Schedule.intersect(
-      Schedule.recurs(config.maxRetries ?? DEFAULT_MAX_RETRIES),
-    ),
-  );
+  ).pipe(Schedule.jittered);
 
   return Layer.succeed(
     Reviewer,
     Reviewer.of({
       review: (input) =>
         requestReview(config, input).pipe(
-          Effect.timeoutFail({
+          Effect.timeoutOrElse({
             duration: Duration.millis(timeoutMillis),
-            onTimeout: () => new ReviewTimeoutError({ timeoutMillis }),
+            orElse: () =>
+              Effect.fail(new ReviewTimeoutError({ timeoutMillis })),
           }),
           // A timed-out attempt is not repeated here: the provider may
           // still bill it, and an immediate retry hits the same load. The
           // Workflow retries the whole step later instead.
           Effect.retry({
             schedule: retrySchedule,
+            times: config.maxRetries ?? DEFAULT_MAX_RETRIES,
             while: (error) =>
               !Predicate.isTagged(error, "ReviewTimeoutError") &&
               isRetryableReviewerError(error),

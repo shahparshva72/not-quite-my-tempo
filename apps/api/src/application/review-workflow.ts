@@ -131,18 +131,24 @@ export const requireReviewRun = (
   >,
 ) =>
   reviewRun.pipe(
-    Effect.flatten,
+    Effect.flatMap(Effect.fromOption),
     Effect.catchTag(
-      "NoSuchElementException",
+      "NoSuchElementError",
       () => new ReviewRunNotFoundError({ reviewRunId }),
     ),
   );
 
 export const markReviewRunning = (reviewRunId: number) =>
-  requireReviewRun(reviewRunId, ReviewRunRepository.markRunning(reviewRunId));
+  requireReviewRun(
+    reviewRunId,
+    ReviewRunRepository.use((store) => store.markRunning(reviewRunId)),
+  );
 
 export const markReviewCompleted = (reviewRunId: number) =>
-  requireReviewRun(reviewRunId, ReviewRunRepository.markCompleted(reviewRunId));
+  requireReviewRun(
+    reviewRunId,
+    ReviewRunRepository.use((store) => store.markCompleted(reviewRunId)),
+  );
 
 export const markReviewFailed = (
   reviewRunId: number,
@@ -151,7 +157,9 @@ export const markReviewFailed = (
 ) =>
   requireReviewRun(
     reviewRunId,
-    ReviewRunRepository.markFailed(reviewRunId, errorCode, errorMessage),
+    ReviewRunRepository.use((store) =>
+      store.markFailed(reviewRunId, errorCode, errorMessage),
+    ),
   );
 
 export const mintInstallationToken = (installationId: number) =>
@@ -185,8 +193,10 @@ const resolveReviewConfig = (content: Option.Option<string>) =>
   Option.match(content, {
     onNone: () => Effect.succeed(defaultReviewConfig),
     onSome: (json) =>
-      Schema.decodeUnknown(Schema.parseJson(ReviewConfig))(json).pipe(
-        Effect.catchTag("ParseError", (error) =>
+      Schema.decodeUnknownEffect(Schema.fromJsonString(ReviewConfig))(
+        json,
+      ).pipe(
+        Effect.catchTag("SchemaError", (error) =>
           logError("invalid_review_config", {
             path: REVIEW_CONFIG_PATH,
             error: error.message,
@@ -203,15 +213,15 @@ export const repositoryReviewTone = (reviewRunId: number) =>
   Effect.gen(function* () {
     const run = yield* requireReviewRun(
       reviewRunId,
-      ReviewRunRepository.findById(reviewRunId),
+      ReviewRunRepository.use((store) => store.findById(reviewRunId)),
     );
 
-    const repository = yield* GitHubRepositoryRepository.findById(
-      run.repositoryId,
+    const repository = yield* GitHubRepositoryRepository.use((store) =>
+      store.findById(run.repositoryId),
     );
 
     return repository.pipe(
-      Option.flatMapNullable((found) => found.reviewTone),
+      Option.flatMapNullishOr((found) => found.reviewTone),
       Option.getOrNull,
     );
   });
@@ -278,20 +288,21 @@ export const loadPriorReview = (
   Effect.gen(function* () {
     const currentRun = yield* requireReviewRun(
       reviewRunId,
-      ReviewRunRepository.findById(reviewRunId),
+      ReviewRunRepository.use((store) => store.findById(reviewRunId)),
     );
 
-    const priorRun =
-      yield* ReviewRunRepository.findLatestCompletedForPullRequest(
+    const priorRun = yield* ReviewRunRepository.use((store) =>
+      store.findLatestCompletedForPullRequest(
         currentRun.repositoryId,
         currentRun.pullRequestNumber,
         reviewRunId,
-      );
+      ),
+    );
 
     return yield* Option.match(priorRun, {
       onNone: () => Effect.succeed(null),
       onSome: (run) =>
-        FindingRepository.listByReviewRun(run.id).pipe(
+        FindingRepository.use((store) => store.listByReviewRun(run.id)).pipe(
           Effect.map((findings): PriorReview => ({
             headSha: run.headSha,
             findings: findings.map((finding) => ({
@@ -344,7 +355,7 @@ export const performGeminiReview = (
 export const RUNNER_REVIEW_PROVIDER = "claude_actions";
 
 const catalogCostUsdMicros = (result: ReviewResult) =>
-  Option.match(Option.fromNullable(findCatalogModel(result.model)), {
+  Option.match(Option.fromNullishOr(findCatalogModel(result.model)), {
     onNone: () => null,
     onSome: (model) =>
       reviewCostUsdMicros(
@@ -364,27 +375,31 @@ const persistReview = (
   Effect.gen(function* () {
     yield* requireReviewRun(
       reviewRunId,
-      ReviewRunRepository.recordReviewResult(reviewRunId, {
-        model: result.model,
-        provider,
-        usage: result.usage,
-        costUsdMicros,
-        verdict: result.review.verdict,
-        summary: result.review.summary,
-      }),
+      ReviewRunRepository.use((store) =>
+        store.recordReviewResult(reviewRunId, {
+          model: result.model,
+          provider,
+          usage: result.usage,
+          costUsdMicros,
+          verdict: result.review.verdict,
+          summary: result.review.summary,
+        }),
+      ),
     );
 
-    const findings = yield* FindingRepository.insertMany(
-      reviewRunId,
-      result.review.findings.map((finding) => ({
-        filePath: finding.filePath,
-        line: finding.line,
-        severity: finding.severity,
-        category: finding.category,
-        confidence: finding.confidence,
-        title: finding.title,
-        message: finding.message,
-      })),
+    const findings = yield* FindingRepository.use((store) =>
+      store.insertMany(
+        reviewRunId,
+        result.review.findings.map((finding) => ({
+          filePath: finding.filePath,
+          line: finding.line,
+          severity: finding.severity,
+          category: finding.category,
+          confidence: finding.confidence,
+          title: finding.title,
+          message: finding.message,
+        })),
+      ),
     );
 
     return { findingCount: findings.length };
@@ -457,7 +472,10 @@ export const postReviewToGitHub = (
 ) =>
   Effect.gen(function* () {
     const client = yield* GitHubPullRequestClient;
-    const findings = yield* FindingRepository.listByReviewRun(reviewRunId);
+
+    const findings = yield* FindingRepository.use((store) =>
+      store.listByReviewRun(reviewRunId),
+    );
 
     const { anchored, unanchored } = splitByAnchorability(
       findings,
@@ -517,7 +535,9 @@ export const postReviewToGitHub = (
 
         return match === undefined
           ? Effect.void
-          : FindingRepository.setGithubCommentId(match.finding.id, comment.id);
+          : FindingRepository.use((store) =>
+              store.setGithubCommentId(match.finding.id, comment.id),
+            );
       },
       { discard: true },
     );

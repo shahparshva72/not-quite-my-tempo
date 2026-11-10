@@ -177,7 +177,7 @@ const runStep = <A extends Rpc.Serializable<A>, E extends ReviewPipelineError>(
     Effect.runPromise(
       effect.pipe(
         Effect.map((value): StepOutcome<A> => ({ status: "ok", value })),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           isRetryableReviewError(error) ||
           (laterRetry !== undefined &&
             laterRetry.retryable(error) &&
@@ -187,7 +187,7 @@ const runStep = <A extends Rpc.Serializable<A>, E extends ReviewPipelineError>(
                 attempt: ctx.attempt,
                 error: error._tag,
                 ...retryDetails(error),
-              }).pipe(Effect.zipRight(Effect.fail(error)))
+              }).pipe(Effect.andThen(Effect.fail(error)))
             : Effect.succeed<StepOutcome<A>>({
                 status: "error",
                 code: reviewErrorCode(error),
@@ -244,7 +244,7 @@ const waitForRunnerResult = (step: WorkflowStep) =>
       }),
   }).pipe(
     Effect.flatMap((event) =>
-      Schema.decodeUnknown(RunnerResult)(event.payload).pipe(
+      Schema.decodeUnknownEffect(RunnerResult)(event.payload).pipe(
         Effect.mapError(
           () =>
             new ReviewStepFailure({
@@ -316,9 +316,8 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
       );
 
     const program = Effect.gen(function* () {
-      const { request, reviewRunId, appOrigin } = yield* Schema.decodeUnknown(
-        ReviewWorkflowParams,
-      )(event.payload);
+      const { request, reviewRunId, appOrigin } =
+        yield* Schema.decodeUnknownEffect(ReviewWorkflowParams)(event.payload);
 
       const fields = {
         repository: `${request.owner}/${request.repo}`,
@@ -511,7 +510,7 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
               Effect.provide(pullRequestLayer),
               Effect.provide(databaseLayer),
               // The run is marked blocked whether or not GitHub hears why.
-              Effect.catchAll((error) =>
+              Effect.catch((error) =>
                 logError("blocked_review_comment_failed", {
                   reviewRunId,
                   errorCode: error._tag,

@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   DatabaseError,
@@ -31,11 +31,11 @@ describe("ReviewRunRepository", () => {
 
         const byId = yield* repository
           .findById(created.id)
-          .pipe(Effect.flatten);
+          .pipe(Effect.flatMap(Effect.fromOption));
 
         const byCommit = yield* repository
           .findByPullRequestCommit(1, 42, "abc123")
-          .pipe(Effect.flatten);
+          .pipe(Effect.flatMap(Effect.fromOption));
 
         return { created, byId, byCommit };
       }),
@@ -54,11 +54,11 @@ describe("ReviewRunRepository", () => {
 
         const running = yield* repository
           .markRunning(completedRun.id)
-          .pipe(Effect.flatten);
+          .pipe(Effect.flatMap(Effect.fromOption));
 
         const completed = yield* repository
           .markCompleted(completedRun.id)
-          .pipe(Effect.flatten);
+          .pipe(Effect.flatMap(Effect.fromOption));
 
         const failedRun = yield* repository.create({
           ...input,
@@ -67,7 +67,7 @@ describe("ReviewRunRepository", () => {
 
         const failed = yield* repository
           .markFailed(failedRun.id, "model_error", "Model request failed")
-          .pipe(Effect.flatten);
+          .pipe(Effect.flatMap(Effect.fromOption));
 
         return { running, completed, failed };
       }),
@@ -100,7 +100,7 @@ describe("ReviewRunRepository", () => {
 
         return yield* reviewRuns
           .markCompleted(reviewRun.id)
-          .pipe(Effect.flatten);
+          .pipe(Effect.flatMap(Effect.fromOption));
       }),
     );
 
@@ -117,15 +117,15 @@ describe("ReviewRunRepository", () => {
         const repository = yield* ReviewRunRepository;
         yield* repository.create(input);
 
-        return yield* repository.create(input).pipe(Effect.either);
+        return yield* repository.create(input).pipe(Effect.result);
       }),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
 
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(DatabaseError);
-      expect(result.left.operation).toBe("review_runs.create");
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(DatabaseError);
+      expect(result.failure.operation).toBe("review_runs.create");
     }
   });
 

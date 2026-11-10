@@ -67,19 +67,19 @@ export const hasOpenSubscription = (workspace: Workspace) =>
  * can still recover, then the newest (Polar lists newest first).
  */
 const decidingSubscription = (subscriptions: readonly PolarSubscription[]) =>
-  Option.fromNullable(
+  Option.fromNullishOr(
     subscriptions.find((subscription) =>
       statusIn(paidSubscriptionStatuses, subscription.status),
     ),
   ).pipe(
     Option.orElse(() =>
-      Option.fromNullable(
+      Option.fromNullishOr(
         subscriptions.find((subscription) =>
           statusIn(openSubscriptionStatuses, subscription.status),
         ),
       ),
     ),
-    Option.orElse(() => Option.fromNullable(subscriptions[0])),
+    Option.orElse(() => Option.fromNullishOr(subscriptions[0])),
   );
 
 /**
@@ -106,18 +106,20 @@ const recordPlan = (
 
     const deciding = Option.getOrNull(decidingSubscription(subscriptions));
 
-    const applied = yield* WorkspaceRepository.applySubscription(
-      {
-        workspaceId: workspace.id,
-        customerId: deciding?.customer_id ?? workspace.polarCustomerId,
-        subscriptionId: deciding?.id ?? null,
-        status: deciding?.status ?? null,
-        periodStart: deciding?.current_period_start ?? null,
-        periodEnd: deciding?.current_period_end ?? null,
-        cancelAtPeriodEnd: deciding?.cancel_at_period_end ?? false,
-        syncedAt,
-      },
-      workspace.subscriptionStatus,
+    const applied = yield* WorkspaceRepository.use((store) =>
+      store.applySubscription(
+        {
+          workspaceId: workspace.id,
+          customerId: deciding?.customer_id ?? workspace.polarCustomerId,
+          subscriptionId: deciding?.id ?? null,
+          status: deciding?.status ?? null,
+          periodStart: deciding?.current_period_start ?? null,
+          periodEnd: deciding?.current_period_end ?? null,
+          cancelAtPeriodEnd: deciding?.cancel_at_period_end ?? false,
+          syncedAt,
+        },
+        workspace.subscriptionStatus,
+      ),
     );
 
     yield* logInfo(
@@ -129,7 +131,9 @@ const recordPlan = (
 /** Re-reads the workspace's subscriptions from Polar and stores them. */
 export const syncWorkspacePlan = (workspaceId: number) =>
   Effect.gen(function* () {
-    const workspace = yield* WorkspaceRepository.findById(workspaceId);
+    const workspace = yield* WorkspaceRepository.use((store) =>
+      store.findById(workspaceId),
+    );
 
     if (Option.isNone(workspace)) {
       yield* logInfo("billing_event_ignored", {
@@ -199,7 +203,7 @@ export const handlePolarWebhook = (event: PolarWebhookEvent) =>
         workspaceId,
         eventType,
         subscriptionId,
-      }).pipe(Effect.zipRight(syncWorkspacePlan(workspaceId))),
+      }).pipe(Effect.andThen(syncWorkspacePlan(workspaceId))),
     Ignore: () => Effect.succeed(false),
     Malformed: ({ eventType }) =>
       logError("billing_event_malformed", { eventType }).pipe(Effect.as(false)),
@@ -295,6 +299,6 @@ export type BillingLink = (
   origin: string,
 ) => Effect.Effect<
   string,
-  Effect.Effect.Error<BillingLinkEffect>,
-  Effect.Effect.Context<BillingLinkEffect>
+  Effect.Error<BillingLinkEffect>,
+  Effect.Services<BillingLinkEffect>
 >;

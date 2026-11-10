@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { Effect, Either, Layer, Option } from "effect";
+import { Effect, Result, Layer, Option } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeLiveLayer, ReviewRunRepository } from "@not-quite-my-tempo/db";
 import type { WorkspaceRole } from "@not-quite-my-tempo/db";
@@ -23,23 +23,23 @@ const live = makeLiveLayer(env.DB);
 const seedRun = (status: "failed" | "running" | "completed") =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const run = yield* ReviewRunRepository.create({
-        repositoryId: 1,
-        pullRequestNumber: 42,
-        headSha: "failed123",
-        trigger: "opened",
-      });
+      const run = yield* ReviewRunRepository.use((store) =>
+        store.create({
+          repositoryId: 1,
+          pullRequestNumber: 42,
+          headSha: "failed123",
+          trigger: "opened",
+        }),
+      );
 
       if (status === "failed") {
-        yield* ReviewRunRepository.markFailed(
-          run.id,
-          "review_error",
-          "provider down",
+        yield* ReviewRunRepository.use((store) =>
+          store.markFailed(run.id, "review_error", "provider down"),
         );
       } else if (status === "running") {
-        yield* ReviewRunRepository.markRunning(run.id);
+        yield* ReviewRunRepository.use((store) => store.markRunning(run.id));
       } else {
-        yield* ReviewRunRepository.markCompleted(run.id);
+        yield* ReviewRunRepository.use((store) => store.markCompleted(run.id));
       }
 
       return run;
@@ -48,7 +48,7 @@ const seedRun = (status: "failed" | "running" | "completed") =>
 
 const findRun = (id: number) =>
   Effect.runPromise(
-    ReviewRunRepository.findById(id).pipe(
+    ReviewRunRepository.use((store) => store.findById(id)).pipe(
       Effect.map(Option.getOrNull),
       Effect.provide(live),
     ),
@@ -105,7 +105,7 @@ const retry = async (
 
   const outcome = await Effect.runPromise(
     retryFailedReview(access, reviewRunId).pipe(
-      Effect.either,
+      Effect.result,
       Effect.provide(live),
       Effect.provide(stubs),
     ),
@@ -139,7 +139,7 @@ describe("retrying a failed review", () => {
     const { outcome, started } = await retry(run.id, "admin");
 
     expect(outcome).toEqual(
-      Either.right({ status: "queued", reviewRunId: run.id }),
+      Result.succeed({ status: "queued", reviewRunId: run.id }),
     );
     expect(await findRun(run.id)).toMatchObject({
       status: "queued",
@@ -156,7 +156,7 @@ describe("retrying a failed review", () => {
 
     const { outcome, started } = await retry(run.id, "admin", "newer789");
 
-    expect(Either.getOrThrow(outcome)).toMatchObject({ status: "queued" });
+    expect(Result.getOrThrow(outcome)).toMatchObject({ status: "queued" });
     expect(started[0]?.request).toMatchObject({ headSha: "newer789" });
     expect(await findRun(run.id)).toMatchObject({ status: "failed" });
   });
@@ -167,7 +167,7 @@ describe("retrying a failed review", () => {
     const { outcome, started } = await retry(run.id, "admin");
 
     expect(outcome).toEqual(
-      Either.right({ status: "not_failed", reviewRunId: run.id }),
+      Result.succeed({ status: "not_failed", reviewRunId: run.id }),
     );
     expect(started).toEqual([]);
   });
@@ -177,7 +177,7 @@ describe("retrying a failed review", () => {
 
     const { outcome, started } = await retry(run.id, "member");
 
-    const error = Option.getOrNull(Either.getLeft(outcome));
+    const error = Option.getOrNull(Result.getFailure(outcome));
 
     expect(error).toBeInstanceOf(ForbiddenError);
     expect(error).toMatchObject({ requiredRole: "admin" });

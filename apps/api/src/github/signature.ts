@@ -1,13 +1,16 @@
-import { Data, Effect, Option, Schema } from "effect";
+import { Data, Effect, Option, Schema, SchemaTransformation } from "effect";
 
-const GitHubSignatureHex = Schema.String.pipe(
-  Schema.pattern(/^sha256=[0-9a-f]{64}$/i),
-  Schema.transform(Schema.String, {
-    strict: true,
-    decode: (signature) => signature.slice("sha256=".length),
-    encode: (hex) => `sha256=${hex}`,
-  }),
-  Schema.compose(Schema.Uint8ArrayFromHex),
+const GitHubSignatureHex = Schema.String.check(
+  Schema.isPattern(/^sha256=[0-9a-f]{64}$/i),
+).pipe(
+  Schema.decodeTo(
+    Schema.String,
+    SchemaTransformation.transform({
+      decode: (signature) => signature.slice("sha256=".length),
+      encode: (hex) => `sha256=${hex}`,
+    }),
+  ),
+  Schema.decodeTo(Schema.Uint8ArrayFromHex),
 );
 
 export class SignatureVerificationError extends Data.TaggedError(
@@ -22,13 +25,13 @@ export const verifyGitHubWebhookSignature = (
   secret: string,
 ): Effect.Effect<boolean, SignatureVerificationError> =>
   Effect.gen(function* () {
-    const signature = yield* Schema.decodeUnknown(GitHubSignatureHex)(
+    const signature = yield* Schema.decodeUnknownEffect(GitHubSignatureHex)(
       signatureHeader,
     ).pipe(Effect.option);
 
-    const webhookSecret = yield* Schema.decodeUnknown(Schema.NonEmptyString)(
-      secret,
-    ).pipe(Effect.option);
+    const webhookSecret = yield* Schema.decodeUnknownEffect(
+      Schema.NonEmptyString,
+    )(secret).pipe(Effect.option);
 
     return yield* Option.match(Option.all({ signature, webhookSecret }), {
       onNone: () => Effect.succeed(false),

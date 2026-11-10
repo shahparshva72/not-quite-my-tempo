@@ -20,7 +20,7 @@ The workspace pins the versions researched on September 11, 2026:
 | Package                     | Version   |
 | --------------------------- | --------- |
 | Hono                        | `4.13.7`  |
-| Effect                      | `3.22.2`  |
+| Effect                      | `4.1.3`   |
 | Wrangler                    | `4.131.0` |
 | TypeScript                  | `7.0.2`   |
 | Vite                        | `8.3.0`   |

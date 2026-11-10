@@ -43,9 +43,9 @@ export const decodeAccessRevocation = (
   const json = new TextDecoder().decode(rawBody);
 
   return githubEvent === "github_app_authorization"
-    ? Schema.decodeUnknown(Schema.parseJson(AppAuthorizationWebhook))(
-        json,
-      ).pipe(
+    ? Schema.decodeUnknownEffect(
+        Schema.fromJsonString(AppAuthorizationWebhook),
+      )(json).pipe(
         Effect.mapError(invalidPayload),
         Effect.map((webhook) =>
           webhook.action === "revoked"
@@ -56,7 +56,9 @@ export const decodeAccessRevocation = (
             : Option.none(),
         ),
       )
-    : Schema.decodeUnknown(Schema.parseJson(OrganizationWebhook))(json).pipe(
+    : Schema.decodeUnknownEffect(Schema.fromJsonString(OrganizationWebhook))(
+        json,
+      ).pipe(
         Effect.mapError(invalidPayload),
         Effect.map((webhook) =>
           webhook.action === "member_removed" &&

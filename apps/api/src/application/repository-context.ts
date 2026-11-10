@@ -247,7 +247,7 @@ export const fetchRepositoryContext = (input: RepositoryContextInput) =>
                   },
             ),
           ),
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             logError("repository_context_file_failed", {
               path,
               errorCode: error._tag,
@@ -267,7 +267,7 @@ export const fetchRepositoryContext = (input: RepositoryContextInput) =>
     const listFiles = (gitRef: string) =>
       client.fetchTree(input.installationToken, input.ref, gitRef).pipe(
         Effect.map(Option.some),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           logError("repository_context_tree_failed", {
             gitRef,
             errorCode: error._tag,

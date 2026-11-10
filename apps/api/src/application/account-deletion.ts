@@ -26,7 +26,7 @@ const confirms = (typed: string, expected: string) =>
 
 /** The workspaces the account page lists, with the user's role in each. */
 export const accountWorkspaces = (access: SessionAccess) =>
-  MembershipRepository.listForUser(access.userId);
+  MembershipRepository.use((store) => store.listForUser(access.userId));
 
 /**
  * Deletes the signed-in user's account: the user, their sessions, and their
@@ -55,7 +55,7 @@ export const deleteAccount = (
             tokenContext(session.userId),
           ).pipe(Effect.option);
 
-    yield* UserRepository.deleteById(session.userId);
+    yield* UserRepository.use((store) => store.deleteById(session.userId));
 
     yield* logInfo("account_deleted", { userId: session.userId });
 
@@ -66,10 +66,10 @@ export const deleteAccount = (
     const oauth = yield* GitHubOAuth;
 
     yield* oauth.revokeGrant(githubToken.value).pipe(
-      Effect.zipRight(
+      Effect.andThen(
         logInfo("github_grant_revoked", { userId: session.userId }),
       ),
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         logError("github_grant_revoke_failed", {
           userId: session.userId,
           errorCode: error._tag,
@@ -107,8 +107,9 @@ export const deleteWorkspace = (
 
     const github = yield* GitHubAppInstallations;
 
-    const installations =
-      yield* GitHubInstallationRepository.listForWorkspace(workspaceId);
+    const installations = yield* GitHubInstallationRepository.use(
+      (repository) => repository.listForWorkspace(workspaceId),
+    );
 
     yield* Effect.forEach(
       installations,
@@ -119,7 +120,9 @@ export const deleteWorkspace = (
       { discard: true },
     );
 
-    yield* WorkspaceRepository.deleteDataWithAudit(workspaceId, access.userId);
+    yield* WorkspaceRepository.use((store) =>
+      store.deleteDataWithAudit(workspaceId, access.userId),
+    );
 
     yield* logInfo("workspace_data_deleted", {
       workspaceId,

@@ -209,15 +209,17 @@ const claimPlanReview = (
 
       const requestedModel = candidate.id === chosen.id ? null : chosen.id;
 
-      const claimed = yield* ReviewRunRepository.claimPlanCredits(reviewRunId, {
-        workspaceId: workspace.id,
-        periodStart,
-        creditsX100,
-        allowanceX100: plan.allowanceX100,
-        model: candidate.id,
-        provider: platformProviderFor(candidate, plan.geminiProvider),
-        requestedModel,
-      });
+      const claimed = yield* ReviewRunRepository.use((store) =>
+        store.claimPlanCredits(reviewRunId, {
+          workspaceId: workspace.id,
+          periodStart,
+          creditsX100,
+          allowanceX100: plan.allowanceX100,
+          model: candidate.id,
+          provider: platformProviderFor(candidate, plan.geminiProvider),
+          requestedModel,
+        }),
+      );
 
       if (claimed) {
         if (requestedModel !== null) {
@@ -262,7 +264,9 @@ export const chooseReviewKey = (
   trialDailyCap: number = DEFAULT_TRIAL_DAILY_REVIEW_CAP,
 ) =>
   Effect.gen(function* () {
-    const run = yield* ReviewRunRepository.findById(reviewRunId).pipe(
+    const run = yield* ReviewRunRepository.use((store) =>
+      store.findById(reviewRunId),
+    ).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => new ReviewRunNotFoundError({ reviewRunId }),
@@ -271,8 +275,8 @@ export const chooseReviewKey = (
       ),
     );
 
-    const workspace = yield* WorkspaceRepository.findByRepositoryId(
-      run.repositoryId,
+    const workspace = yield* WorkspaceRepository.use((store) =>
+      store.findByRepositoryId(run.repositoryId),
     );
 
     const choice = (
@@ -333,28 +337,34 @@ export const chooseReviewKey = (
         return choice("credits_exhausted");
       }
 
-      yield* ReviewRunRepository.setKeySource(reviewRunId, "workspace");
+      yield* ReviewRunRepository.use((store) =>
+        store.setKeySource(reviewRunId, "workspace"),
+      );
 
       return choice("workspace");
     }
 
     if (hasOwnKey) {
-      yield* ReviewRunRepository.setKeySource(reviewRunId, "workspace");
+      yield* ReviewRunRepository.use((store) =>
+        store.setKeySource(reviewRunId, "workspace"),
+      );
 
       return choice("workspace");
     }
 
-    const claimed = yield* ReviewRunRepository.claimTrialReview(
-      reviewRunId,
-      workspace.value.id,
-      FREE_TRIAL_REVIEWS,
-      { limit: trialDailyCap, since: new Date(now - DAY_MILLIS) },
+    const claimed = yield* ReviewRunRepository.use((store) =>
+      store.claimTrialReview(
+        reviewRunId,
+        workspace.value.id,
+        FREE_TRIAL_REVIEWS,
+        { limit: trialDailyCap, since: new Date(now - DAY_MILLIS) },
+      ),
     );
 
     if (!claimed) {
-      const [usage] = yield* ReviewRunRepository.trialReviewsUsed([
-        workspace.value.id,
-      ]);
+      const [usage] = yield* ReviewRunRepository.use((store) =>
+        store.trialReviewsUsed([workspace.value.id]),
+      );
 
       // Free reviews left means the platform-wide cap refused the claim.
       if ((usage?.used ?? 0) < FREE_TRIAL_REVIEWS) {
@@ -447,7 +457,9 @@ export const resolveReviewKey = (
       : Effect.succeed({ apiKey, provider: model.vendor, model: model.id });
   }
 
-  return WorkspaceRepository.findByRepositoryId(choice.repositoryId).pipe(
+  return WorkspaceRepository.use((store) =>
+    store.findByRepositoryId(choice.repositoryId),
+  ).pipe(
     Effect.flatMap((workspace) =>
       Option.match(workspace, {
         onNone: () => Effect.fail(new GeminiKeyUnreadableError()),
@@ -550,18 +562,22 @@ export const explainBlockedReview = (
     const workspace =
       workspaceId === null
         ? Option.none()
-        : yield* WorkspaceRepository.findById(workspaceId);
+        : yield* WorkspaceRepository.use((store) =>
+            store.findById(workspaceId),
+          );
 
     const periodStart = Option.getOrNull(
-      Option.flatMapNullable(workspace, creditPeriodStart),
+      Option.flatMapNullishOr(workspace, creditPeriodStart),
     );
 
-    const alreadyExplained = yield* ReviewRunRepository.hasEarlierBlockedRun(
-      repositoryId,
-      request.pullRequestNumber,
-      reviewRunId,
-      reason,
-      reason === "credits_exhausted" ? periodStart : null,
+    const alreadyExplained = yield* ReviewRunRepository.use((store) =>
+      store.hasEarlierBlockedRun(
+        repositoryId,
+        request.pullRequestNumber,
+        reviewRunId,
+        reason,
+        reason === "credits_exhausted" ? periodStart : null,
+      ),
     );
 
     if (alreadyExplained) {
@@ -598,7 +614,7 @@ export const explainBlockedReview = (
       body,
     );
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       logError("blocked_review_comment_failed", {
         reviewRunId,
         errorCode: error._tag,

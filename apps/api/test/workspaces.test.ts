@@ -41,12 +41,14 @@ const upsert = (
   githubAccountLogin: string,
 ) =>
   Effect.runPromise(
-    GitHubInstallationRepository.upsert({
-      githubInstallationId,
-      githubAccountId,
-      githubAccountLogin,
-      accountType: "Organization",
-    }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+    GitHubInstallationRepository.use((store) =>
+      store.upsert({
+        githubInstallationId,
+        githubAccountId,
+        githubAccountLogin,
+        accountType: "Organization",
+      }),
+    ).pipe(Effect.provide(makeLiveLayer(env.DB))),
   );
 
 describe("workspace backfill migration", () => {
