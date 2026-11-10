@@ -55,9 +55,8 @@ export const listRepositoryRuns = (
   Effect.gen(function* () {
     const repository = yield* requireAccessibleRepository(access, repositoryId);
 
-    const runs = yield* ReviewRunRepository.listByRepository(
-      repository.id,
-      RUNS_PAGE_SIZE,
+    const runs = yield* ReviewRunRepository.use((store) =>
+      store.listByRepository(repository.id, RUNS_PAGE_SIZE),
     );
 
     return { repository, runs };
@@ -65,7 +64,9 @@ export const listRepositoryRuns = (
 
 export const listRunFindings = (access: SessionAccess, reviewRunId: number) =>
   Effect.gen(function* () {
-    const run = yield* ReviewRunRepository.findById(reviewRunId).pipe(
+    const run = yield* ReviewRunRepository.use((store) =>
+      store.findById(reviewRunId),
+    ).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => new ResourceNotFoundError(),
@@ -76,7 +77,9 @@ export const listRunFindings = (access: SessionAccess, reviewRunId: number) =>
 
     yield* requireAccessibleRepository(access, run.repositoryId);
 
-    const findings = yield* FindingRepository.listByReviewRun(run.id);
+    const findings = yield* FindingRepository.use((store) =>
+      store.listByReviewRun(run.id),
+    );
 
     return { run, findings };
   });
@@ -85,8 +88,10 @@ export const usageSummary = (access: SessionAccess) =>
   Effect.gen(function* () {
     const repositories = yield* listAccessibleRepositories(access);
 
-    const usage = yield* ReviewRunRepository.usageByRepositoryIds(
-      repositories.map((repository) => repository.id),
+    const usage = yield* ReviewRunRepository.use((store) =>
+      store.usageByRepositoryIds(
+        repositories.map((repository) => repository.id),
+      ),
     );
 
     return repositories.map((repository) => {
@@ -153,8 +158,14 @@ const summarize = (
 const summarizeRuns = (runs: readonly ReviewRun[]) =>
   Effect.gen(function* () {
     const ids = runs.map((run) => run.id);
-    const counts = yield* FindingRepository.severityCountsByReviewRunIds(ids);
-    const pullRequests = yield* PullRequestRepository.listForReviewRuns(ids);
+
+    const counts = yield* FindingRepository.use((store) =>
+      store.severityCountsByReviewRunIds(ids),
+    );
+
+    const pullRequests = yield* PullRequestRepository.use((store) =>
+      store.listForReviewRuns(ids),
+    );
 
     return summarize(runs, counts, pullRequests);
   });
@@ -178,16 +189,27 @@ export interface WorkspaceOverview {
  */
 export const dashboardOverview = (access: SessionAccess) =>
   Effect.gen(function* () {
-    const memberships = yield* MembershipRepository.listForUser(access.userId);
+    const memberships = yield* MembershipRepository.use((store) =>
+      store.listForUser(access.userId),
+    );
+
     const visible = yield* visibleRepositories(access);
     const ids = visible.map((entry) => entry.repository.id);
 
-    const latestRuns = yield* ReviewRunRepository.latestByRepositoryIds(ids);
-    const latest = yield* summarizeRuns(latestRuns);
-    const usage = yield* ReviewRunRepository.usageByRepositoryIds(ids);
+    const latestRuns = yield* ReviewRunRepository.use((store) =>
+      store.latestByRepositoryIds(ids),
+    );
 
-    const trialUsage = yield* ReviewRunRepository.trialReviewsUsed(
-      memberships.map((membership) => membership.workspace.id),
+    const latest = yield* summarizeRuns(latestRuns);
+
+    const usage = yield* ReviewRunRepository.use((store) =>
+      store.usageByRepositoryIds(ids),
+    );
+
+    const trialUsage = yield* ReviewRunRepository.use((store) =>
+      store.trialReviewsUsed(
+        memberships.map((membership) => membership.workspace.id),
+      ),
     );
 
     const workspaces: readonly WorkspaceOverview[] = memberships.map(
@@ -227,9 +249,8 @@ export const repositoryReviewHistory = (
   Effect.gen(function* () {
     const visible = yield* authorizeRepository(access, repositoryId, "view");
 
-    const runs = yield* ReviewRunRepository.listByRepository(
-      visible.repository.id,
-      RUNS_PAGE_SIZE,
+    const runs = yield* ReviewRunRepository.use((store) =>
+      store.listByRepository(visible.repository.id, RUNS_PAGE_SIZE),
     );
 
     const reviews = yield* summarizeRuns(runs);
@@ -260,9 +281,9 @@ export const reviewDetail = (access: SessionAccess, reviewRunId: number) =>
         (left.line ?? 0) - (right.line ?? 0),
     );
 
-    const [pullRequest] = yield* PullRequestRepository.listForReviewRuns([
-      run.id,
-    ]);
+    const [pullRequest] = yield* PullRequestRepository.use((store) =>
+      store.listForReviewRuns([run.id]),
+    );
 
     return {
       repository,

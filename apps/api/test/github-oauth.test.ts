@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -276,7 +276,7 @@ describe("GitHubOAuth", () => {
       },
     ) =>
       Effect.runPromise(
-        Effect.either(
+        Effect.result(
           withOAuth(
             () =>
               Promise.resolve(new Response(JSON.stringify(body), { status })),
@@ -286,23 +286,23 @@ describe("GitHubOAuth", () => {
       );
 
     expect(await answer(200, { state: "active", role: "admin" })).toEqual(
-      Either.right(true),
+      Result.succeed(true),
     );
     expect(await answer(200, { state: "active", role: "member" })).toEqual(
-      Either.right(false),
+      Result.succeed(false),
     );
     expect(await answer(200, { state: "pending", role: "admin" })).toEqual(
-      Either.right(false),
+      Result.succeed(false),
     );
     expect(await answer(403, { message: "Resource not accessible" })).toEqual(
-      Either.right(false),
+      Result.succeed(false),
     );
     expect(await answer(404, { message: "Not Found" })).toEqual(
-      Either.right(false),
+      Result.succeed(false),
     );
-    expect(Either.isLeft(await answer(502, { message: "Bad gateway" }))).toBe(
-      true,
-    );
+    expect(
+      Result.isFailure(await answer(502, { message: "Bad gateway" })),
+    ).toBe(true);
   });
 
   it("sanitizes a failed exchange response", async () => {

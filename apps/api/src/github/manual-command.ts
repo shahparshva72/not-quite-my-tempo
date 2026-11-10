@@ -54,8 +54,8 @@ export const decodeIssueCommentBody = (
   Effect.gen(function* () {
     const json = new TextDecoder().decode(rawBody);
 
-    const webhook = yield* Schema.decodeUnknown(
-      Schema.parseJson(IssueCommentWebhook),
+    const webhook = yield* Schema.decodeUnknownEffect(
+      Schema.fromJsonString(IssueCommentWebhook),
     )(json).pipe(Effect.option);
 
     return Option.flatMap(webhook, (payload) =>

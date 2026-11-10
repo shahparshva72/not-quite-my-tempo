@@ -79,7 +79,9 @@ const listRequest = (
 const modelIds = (provider: ReviewProvider, body: string) =>
   Match.value(provider).pipe(
     Match.when("gemini_api", () =>
-      Schema.decodeUnknown(Schema.parseJson(GeminiModelList))(body).pipe(
+      Schema.decodeUnknownEffect(Schema.fromJsonString(GeminiModelList))(
+        body,
+      ).pipe(
         Effect.map((list) =>
           list.models.flatMap((model) =>
             model.supportedGenerationMethods?.includes("generateContent") ===
@@ -91,7 +93,7 @@ const modelIds = (provider: ReviewProvider, body: string) =>
       ),
     ),
     Match.orElse(() =>
-      Schema.decodeUnknown(Schema.parseJson(IdList))(body).pipe(
+      Schema.decodeUnknownEffect(Schema.fromJsonString(IdList))(body).pipe(
         Effect.map((list) => list.data.map((model) => model.id)),
       ),
     ),
@@ -137,9 +139,9 @@ export const listReviewModels = (
       try: () => fetchImpl(request.url, { headers: request.headers }),
       catch: () => unavailable(null),
     }).pipe(
-      Effect.timeoutFail({
+      Effect.timeoutOrElse({
         duration: "10 seconds",
-        onTimeout: () => unavailable(null),
+        orElse: () => Effect.fail(unavailable(null)),
       }),
     );
 

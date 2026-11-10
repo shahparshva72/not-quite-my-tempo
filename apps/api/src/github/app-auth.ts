@@ -37,7 +37,7 @@ export type GitHubAppAuthError =
 
 const InstallationTokenResponse = Schema.Struct({
   token: Schema.NonEmptyString,
-  expires_at: Schema.Date,
+  expires_at: Schema.DateFromString,
 });
 
 export interface InstallationToken {
@@ -51,9 +51,10 @@ export interface GitHubAppAuthService {
   ) => Effect.Effect<InstallationToken, GitHubAppAuthError>;
 }
 
-export class GitHubAppAuth extends Context.Tag(
-  "@not-quite-my-tempo/api/GitHubAppAuth",
-)<GitHubAppAuth, GitHubAppAuthService>() {}
+export class GitHubAppAuth extends Context.Service<
+  GitHubAppAuth,
+  GitHubAppAuthService
+>()("@not-quite-my-tempo/api/GitHubAppAuth") {}
 
 export interface GitHubAppAuthConfig {
   readonly appId: string;
@@ -217,8 +218,8 @@ const mintInstallationToken = (
       });
     }
 
-    const decoded = yield* Schema.decodeUnknown(
-      Schema.parseJson(InstallationTokenResponse),
+    const decoded = yield* Schema.decodeUnknownEffect(
+      Schema.fromJsonString(InstallationTokenResponse),
     )(body).pipe(
       Effect.mapError((cause) => new GitHubApiRequestError({ cause })),
     );
@@ -254,9 +255,10 @@ export interface GitHubAppInstallationsService {
   >;
 }
 
-export class GitHubAppInstallations extends Context.Tag(
-  "@not-quite-my-tempo/api/GitHubAppInstallations",
-)<GitHubAppInstallations, GitHubAppInstallationsService>() {}
+export class GitHubAppInstallations extends Context.Service<
+  GitHubAppInstallations,
+  GitHubAppInstallationsService
+>()("@not-quite-my-tempo/api/GitHubAppInstallations") {}
 
 const uninstall = (config: GitHubAppAuthConfig, installationId: number) =>
   Effect.gen(function* () {

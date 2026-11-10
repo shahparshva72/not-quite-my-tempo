@@ -25,14 +25,16 @@ import { logError, logInfo } from "../logging.js";
 import type { ManualReviewCommand } from "../github/manual-command.js";
 
 export const ReviewWorkflowParams = Schema.Struct({
-  reviewRunId: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  reviewRunId: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
   request: ReviewRequest,
   // Public origin of this Worker (from the webhook request), for links in
   // comments Fletcher posts. Optional so in-flight runs still decode.
   appOrigin: Schema.optional(Schema.String),
   // 1 for a first review; higher for "/fletcher again" retries of a failed
   // run on the same commit. Optional so in-flight runs still decode.
-  attempt: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())),
+  attempt: Schema.optional(
+    Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+  ),
 });
 
 export type ReviewWorkflowParams = typeof ReviewWorkflowParams.Type;
@@ -56,9 +58,10 @@ export interface ReviewWorkflowService {
   ) => Effect.Effect<string, WorkflowStartError>;
 }
 
-export class ReviewWorkflow extends Context.Tag(
-  "@not-quite-my-tempo/api/ReviewWorkflow",
-)<ReviewWorkflow, ReviewWorkflowService>() {}
+export class ReviewWorkflow extends Context.Service<
+  ReviewWorkflow,
+  ReviewWorkflowService
+>()("@not-quite-my-tempo/api/ReviewWorkflow") {}
 
 export const ReviewWorkflowLive = (
   workflow: Workflow<ReviewWorkflowParams>,
@@ -175,7 +178,7 @@ export const handleManualReviewCommand = ({
 
     yield* answer.pipe(
       Effect.timeout("5 seconds"),
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         logError("manual_review_answer_failed", {
           ...fields,
           commentId,
@@ -193,20 +196,24 @@ export const handleReviewRequest = (
   dailyRunCap: number = DAILY_REVIEW_RUN_CAP,
 ) =>
   Effect.gen(function* () {
-    const installation = yield* GitHubInstallationRepository.upsert({
-      githubInstallationId: request.installationId,
-      githubAccountId: request.installationAccountId,
-      githubAccountLogin: request.owner,
-      accountType: request.installationAccountType,
-    });
+    const installation = yield* GitHubInstallationRepository.use((store) =>
+      store.upsert({
+        githubInstallationId: request.installationId,
+        githubAccountId: request.installationAccountId,
+        githubAccountLogin: request.owner,
+        accountType: request.installationAccountType,
+      }),
+    );
 
-    const repository = yield* GitHubRepositoryRepository.upsert({
-      installationId: installation.id,
-      githubRepositoryId: request.githubRepositoryId,
-      owner: request.owner,
-      name: request.repo,
-      defaultBranch: request.defaultBranch,
-    });
+    const repository = yield* GitHubRepositoryRepository.use((store) =>
+      store.upsert({
+        installationId: installation.id,
+        githubRepositoryId: request.githubRepositoryId,
+        owner: request.owner,
+        name: request.repo,
+        defaultBranch: request.defaultBranch,
+      }),
+    );
 
     const fields = {
       githubEvent: `pull_request.${request.trigger}`,
@@ -232,9 +239,11 @@ export const handleReviewRequest = (
 
     const nowMillis = yield* Clock.currentTimeMillis;
 
-    const recentRunCount = yield* ReviewRunRepository.countForInstallationSince(
-      installation.id,
-      new Date(nowMillis - DAY_MILLIS),
+    const recentRunCount = yield* ReviewRunRepository.use((store) =>
+      store.countForInstallationSince(
+        installation.id,
+        new Date(nowMillis - DAY_MILLIS),
+      ),
     );
 
     if (recentRunCount >= dailyRunCap) {
@@ -247,12 +256,14 @@ export const handleReviewRequest = (
       return { status: "rate_limited" as const };
     }
 
-    const result = yield* ReviewRunRepository.createOrFind({
-      repositoryId: repository.id,
-      pullRequestNumber: request.pullRequestNumber,
-      headSha: request.headSha,
-      trigger: request.trigger,
-    });
+    const result = yield* ReviewRunRepository.use((store) =>
+      store.createOrFind({
+        repositoryId: repository.id,
+        pullRequestNumber: request.pullRequestNumber,
+        headSha: request.headSha,
+        trigger: request.trigger,
+      }),
+    );
 
     const startWorkflow = (
       reviewRunId: number,
@@ -298,7 +309,9 @@ export const handleReviewRequest = (
       // delivery for the same commit is a duplicate.
       Existing: ({ reviewRun }) =>
         request.trigger === "manual" && reviewRun.status === "failed"
-          ? ReviewRunRepository.requeueFailed(reviewRun.id).pipe(
+          ? ReviewRunRepository.use((store) =>
+              store.requeueFailed(reviewRun.id),
+            ).pipe(
               Effect.flatMap(
                 Option.match({
                   // A concurrent "/fletcher again" requeued it first.

@@ -1,18 +1,18 @@
-import { Schema } from "effect";
+import { Schema, Effect } from "effect";
 
-export const ReviewSeverityThreshold = Schema.Literal(
+export const ReviewSeverityThreshold = Schema.Literals([
   "critical",
   "warning",
   "suggestion",
-);
+]);
 
 export type ReviewSeverityThreshold = typeof ReviewSeverityThreshold.Type;
 
-export const ReviewIntensity = Schema.Literal(
+export const ReviewIntensity = Schema.Literals([
   "sectional",
   "studio_band",
   "carnegie",
-);
+]);
 
 export type ReviewIntensity = typeof ReviewIntensity.Type;
 
@@ -21,7 +21,7 @@ export type ReviewIntensity = typeof ReviewIntensity.Type;
  * tone changes the wording only, never which findings are raised or how
  * severe they are.
  */
-export const ReviewTone = Schema.Literal("standard", "ruthless");
+export const ReviewTone = Schema.Literals(["standard", "ruthless"]);
 
 export type ReviewTone = typeof ReviewTone.Type;
 
@@ -32,27 +32,29 @@ export type ReviewTone = typeof ReviewTone.Type;
  * must resolve to {@link defaultReviewConfig}, never fail a review.
  */
 export const ReviewConfig = Schema.Struct({
-  enabled: Schema.optionalWith(Schema.Boolean, { default: () => true }),
-  severityThreshold: Schema.optionalWith(ReviewSeverityThreshold, {
-    default: () => "suggestion" as const,
-  }),
-  ignore: Schema.optionalWith(Schema.Array(Schema.String), {
-    default: (): readonly string[] => [],
-  }),
-  intensity: Schema.optionalWith(ReviewIntensity, {
-    default: () => "studio_band" as const,
-  }),
-  tone: Schema.optionalWith(ReviewTone, {
-    default: () => "standard" as const,
-  }),
+  enabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
+  severityThreshold: ReviewSeverityThreshold.pipe(
+    Schema.withDecodingDefault(Effect.succeed("suggestion" as const)),
+  ),
+  ignore: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  intensity: ReviewIntensity.pipe(
+    Schema.withDecodingDefault(Effect.succeed("studio_band" as const)),
+  ),
+  tone: ReviewTone.pipe(
+    Schema.withDecodingDefault(Effect.succeed("standard" as const)),
+  ),
   /**
    * Paths or globs of the files that hold the repository's review
    * guidelines, read from the default branch. Null means the usual
    * locations (AGENTS.md, CLAUDE.md, CONTRIBUTING.md, …).
    */
-  guidelines: Schema.optionalWith(Schema.NullOr(Schema.Array(Schema.String)), {
-    default: () => null,
-  }),
+  guidelines: Schema.NullOr(Schema.Array(Schema.String)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
 });
 
 export type ReviewConfig = typeof ReviewConfig.Type;

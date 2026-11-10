@@ -190,7 +190,7 @@ describe("dashboard", () => {
     const run = await seedRun();
 
     await Effect.runPromise(
-      ReviewRunRepository.markCompleted(run.id).pipe(
+      ReviewRunRepository.use((store) => store.markCompleted(run.id)).pipe(
         Effect.provide(makeLiveLayer(env.DB)),
       ),
     );

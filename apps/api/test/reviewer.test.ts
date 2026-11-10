@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   buildReviewUserPrompt,
+  buildRunnerSystemPrompt,
   buildSystemPrompt,
   filterReviewBySeverity,
   FLETCHER_RUTHLESS_SYSTEM_PROMPT,
@@ -851,6 +852,25 @@ describe("buildSystemPrompt", () => {
     expect(buildSystemPrompt("carnegie", "ruthless")).toContain(
       "INTENSITY: Carnegie",
     );
+  });
+});
+
+describe("buildRunnerSystemPrompt", () => {
+  it("adds the investigation procedure to the production prompt", () => {
+    const prompt = buildRunnerSystemPrompt("carnegie", "ruthless", 40);
+
+    expect(prompt.startsWith(buildSystemPrompt("carnegie", "ruthless"))).toBe(
+      true,
+    );
+    expect(prompt).toContain("## How to review");
+    expect(prompt).toContain("try to refute each one");
+  });
+
+  it("tells the model its turn cap and when to stop investigating", () => {
+    const prompt = buildRunnerSystemPrompt("studio_band", "standard", 40);
+
+    expect(prompt).toContain("cut off at 40 turns");
+    expect(prompt).toContain("Stop investigating by turn 30");
   });
 });
 

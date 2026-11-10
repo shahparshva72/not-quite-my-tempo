@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { Effect, Either, Layer } from "effect";
+import { Effect, Result, Layer } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeLiveLayer, RunnerJobRepository } from "@not-quite-my-tempo/db";
 import type { GeminiReview } from "@not-quite-my-tempo/reviewer";
@@ -105,7 +105,7 @@ const run = <A, E>(
     effect.pipe(
       Effect.provide(makeLiveLayer(env.DB)),
       Effect.provide(SinkTest),
-      Effect.either,
+      Effect.result,
     ),
   );
 
@@ -154,18 +154,18 @@ describe("runner jobs", () => {
       claimRunnerJob(claims(), { pullRequestNumber: 7, headSha: HEAD_SHA }),
     );
 
-    expect(Either.isRight(claimed)).toBe(true);
+    expect(Result.isSuccess(claimed)).toBe(true);
 
-    if (Either.isRight(claimed)) {
-      expect(claimed.right.request).toEqual(request);
-      expect(claimed.right.job.status).toBe("claimed");
+    if (Result.isSuccess(claimed)) {
+      expect(claimed.success.request).toEqual(request);
+      expect(claimed.success.job.status).toBe("claimed");
     }
 
     const again = await run(
       claimRunnerJob(claims(), { pullRequestNumber: 7, headSha: HEAD_SHA }),
     );
 
-    expect(Either.isRight(again)).toBe(true);
+    expect(Result.isSuccess(again)).toBe(true);
 
     const other = await run(
       claimRunnerJob(claims({ run_id: "556" }), {
@@ -174,7 +174,7 @@ describe("runner jobs", () => {
       }),
     );
 
-    expect(Either.isLeft(other) && other.left._tag).toBe(
+    expect(Result.isFailure(other) && other.failure._tag).toBe(
       "RunnerJobUnavailableError",
     );
   });
@@ -184,7 +184,7 @@ describe("runner jobs", () => {
       claimRunnerJob(claims(), { pullRequestNumber: 7, headSha: HEAD_SHA }),
     );
 
-    expect(Either.isLeft(result) && result.left._tag).toBe(
+    expect(Result.isFailure(result) && result.failure._tag).toBe(
       "RunnerJobNotReadyError",
     );
   });
@@ -215,7 +215,7 @@ describe("runner jobs", () => {
       }),
     );
 
-    expect(Either.isLeft(result) && result.left._tag).toBe(
+    expect(Result.isFailure(result) && result.failure._tag).toBe(
       "RunnerClaimsRejectedError",
     );
   });
@@ -230,7 +230,7 @@ describe("runner jobs", () => {
       }),
     );
 
-    expect(Either.isLeft(result) && result.left._tag).toBe(
+    expect(Result.isFailure(result) && result.failure._tag).toBe(
       "RunnerJobNotReadyError",
     );
   });
@@ -252,7 +252,7 @@ describe("runner jobs", () => {
 
     const first = await run(reportRunnerJob(claims(), jobId, report));
 
-    expect(Either.isRight(first) && first.right).toEqual({
+    expect(Result.isSuccess(first) && first.success).toEqual({
       status: "completed",
     });
     expect(delivered).toEqual([
@@ -269,7 +269,7 @@ describe("runner jobs", () => {
 
     const second = await run(reportRunnerJob(claims(), jobId, report));
 
-    expect(Either.isLeft(second) && second.left._tag).toBe(
+    expect(Result.isFailure(second) && second.failure._tag).toBe(
       "RunnerJobUnavailableError",
     );
     expect(delivered).toHaveLength(1);
@@ -300,12 +300,12 @@ describe("runner jobs", () => {
       }),
     );
 
-    expect(Either.isLeft(otherRun) && otherRun.left._tag).toBe(
+    expect(Result.isFailure(otherRun) && otherRun.failure._tag).toBe(
       "RunnerJobUnavailableError",
     );
-    expect(Either.isLeft(otherRepository) && otherRepository.left._tag).toBe(
-      "RunnerJobNotFoundError",
-    );
+    expect(
+      Result.isFailure(otherRepository) && otherRepository.failure._tag,
+    ).toBe("RunnerJobNotFoundError");
     expect(delivered).toHaveLength(0);
   });
 
@@ -320,7 +320,7 @@ describe("runner jobs", () => {
       claimRunnerJob(claims(), { pullRequestNumber: 7, headSha: HEAD_SHA }),
     );
 
-    expect(Either.isLeft(result) && result.left._tag).toBe(
+    expect(Result.isFailure(result) && result.failure._tag).toBe(
       "RunnerJobNotReadyError",
     );
   });
@@ -461,7 +461,7 @@ describe("GitHub Actions OIDC", async () => {
               ),
           }),
         ),
-        Effect.either,
+        Effect.result,
       ),
     );
   };
@@ -469,13 +469,15 @@ describe("GitHub Actions OIDC", async () => {
   const reasonOf = async (token: string) => {
     const result = await verify(token);
 
-    return Either.isLeft(result) ? result.left.reason : "verified";
+    return Result.isFailure(result) ? result.failure.reason : "verified";
   };
 
   it("accepts a token GitHub signed for Fletcher", async () => {
     const result = await verify(await sign(pair.privateKey, claims()));
 
-    expect(Either.isRight(result) && result.right.repository_id).toBe("3001");
+    expect(Result.isSuccess(result) && result.success.repository_id).toBe(
+      "3001",
+    );
   });
 
   it("accepts a single audience string", async () => {

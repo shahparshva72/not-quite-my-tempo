@@ -21,9 +21,9 @@ const runSession = <A, E>(effect: Effect.Effect<A, E, SessionRepository>) =>
 
 const createUser = () =>
   Effect.runPromise(
-    UserRepository.upsert({ githubUserId: 4001, login: "neiman" }).pipe(
-      Effect.provide(makeLiveLayer(env.DB)),
-    ),
+    UserRepository.use((store) =>
+      store.upsert({ githubUserId: 4001, login: "neiman" }),
+    ).pipe(Effect.provide(makeLiveLayer(env.DB))),
   );
 
 describe("server-side sessions", () => {

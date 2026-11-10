@@ -57,45 +57,45 @@ type Json =
   | readonly Json[]
   | { readonly [key: string]: Json };
 
-const JsonValue: Schema.Schema<Json> = Schema.Union(
+const JsonValue: Schema.Codec<Json> = Schema.Union([
   Schema.String,
   Schema.Number,
   Schema.Boolean,
   Schema.Null,
   Schema.Array(Schema.suspend(() => JsonValue)),
-  Schema.Record({ key: Schema.String, value: Schema.suspend(() => JsonValue) }),
-);
+  Schema.Record(
+    Schema.String,
+    Schema.suspend(() => JsonValue),
+  ),
+]);
 
 // Only the fields read here are named; the rest of each record is carried
 // through untouched so the benchmark's own steps still find everything.
-const OtherFields = Schema.Record({ key: Schema.String, value: JsonValue });
+const OtherFields = Schema.Record(Schema.String, JsonValue);
 
-const BenchmarkReview = Schema.Struct(
-  {
+const BenchmarkReview = Schema.StructWithRest(
+  Schema.Struct({
     tool: Schema.String,
     pr_url: Schema.optional(Schema.NullOr(Schema.String)),
-  },
-  OtherFields,
+  }),
+  [OtherFields],
 );
 
 type BenchmarkReview = typeof BenchmarkReview.Type;
 
-const BenchmarkEntry = Schema.Struct(
-  {
+const BenchmarkEntry = Schema.StructWithRest(
+  Schema.Struct({
     source_repo: Schema.String,
     // One golden file per upstream repo; source_repo splits some in two.
     golden_source_file: Schema.String,
     reviews: Schema.Array(BenchmarkReview),
-  },
-  OtherFields,
+  }),
+  [OtherFields],
 );
 
 type BenchmarkEntry = typeof BenchmarkEntry.Type;
 
-const BenchmarkData = Schema.Record({
-  key: Schema.String,
-  value: BenchmarkEntry,
-});
+const BenchmarkData = Schema.Record(Schema.String, BenchmarkEntry);
 
 type BenchmarkData = typeof BenchmarkData.Type;
 
@@ -228,7 +228,7 @@ const sourcePullRequest = (goldenUrl: string, entry: BenchmarkEntry) => {
     ),
   );
 
-  return Option.orElse(Option.fromNullable(copies[0]), () =>
+  return Option.orElse(Option.fromNullishOr(copies[0]), () =>
     parsePullRequestUrl(goldenUrl),
   );
 };
@@ -443,7 +443,7 @@ const runReviews = (
                   };
                 }).pipe(
                   Effect.flatMap(writeData),
-                  Effect.zipRight(
+                  Effect.andThen(
                     Ref.updateAndGet(spent, (n) => n + costMicros),
                   ),
                   Effect.tap((total) =>
@@ -455,7 +455,7 @@ const runReviews = (
                   ),
                 ),
               ),
-              Effect.catchAll((error) =>
+              Effect.catch((error) =>
                 Effect.sync(() => {
                   failed.push(goldenUrl);
                   console.error(
@@ -496,7 +496,7 @@ const estimateCost = (selected: readonly [string, BenchmarkEntry][]) =>
                   console.log(`${goldenUrl}: ~${tokens} prompt tokens`),
                 ),
               ),
-              Effect.catchAll((error) =>
+              Effect.catch((error) =>
                 Effect.sync(() => {
                   console.error(`${goldenUrl}: failed (${error._tag})`);
 
@@ -523,9 +523,9 @@ const estimateCost = (selected: readonly [string, BenchmarkEntry][]) =>
   });
 
 const program = Effect.gen(function* () {
-  const data = yield* Schema.decodeUnknown(Schema.parseJson(BenchmarkData))(
-    readFileSync(dataPath, "utf8"),
-  );
+  const data = yield* Schema.decodeUnknownEffect(
+    Schema.fromJsonString(BenchmarkData),
+  )(readFileSync(dataPath, "utf8"));
 
   const selected = selectEntries(data).filter(
     ([, entry]) =>
@@ -546,7 +546,7 @@ const program = Effect.gen(function* () {
 
 // The same project lookup production does, so models served only from
 // Vertex AI's global location (Gemini 4 Argon) work here too.
-const ReviewerFromKey = Layer.unwrapEffect(
+const ReviewerFromKey = Layer.unwrap(
   (dryRun
     ? Effect.succeed<ResolvedReviewKey>({
         apiKey: vertexApiKey,

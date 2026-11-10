@@ -15,8 +15,8 @@ import { logInfo } from "../logging.js";
  */
 export const handleAccessRevocation = (revocation: AccessRevocation) =>
   Effect.gen(function* () {
-    const user = yield* UserRepository.findByGithubUserId(
-      revocation.githubUserId,
+    const user = yield* UserRepository.use((store) =>
+      store.findByGithubUserId(revocation.githubUserId),
     );
 
     if (Option.isNone(user)) {
@@ -28,13 +28,11 @@ export const handleAccessRevocation = (revocation: AccessRevocation) =>
 
     yield* Match.value(revocation).pipe(
       Match.when({ kind: "app_revoked" }, () =>
-        MembershipRepository.removeAllForUser(userId),
+        MembershipRepository.use((store) => store.removeAllForUser(userId)),
       ),
       Match.when({ kind: "org_member_removed" }, (removal) =>
-        MembershipRepository.removeForAccount(
-          userId,
-          removal.githubAccountId,
-          now,
+        MembershipRepository.use((store) =>
+          store.removeForAccount(userId, removal.githubAccountId, now),
         ),
       ),
       Match.exhaustive,
@@ -42,7 +40,7 @@ export const handleAccessRevocation = (revocation: AccessRevocation) =>
 
     // Sessions carry repository IDs from every workspace, so end them all;
     // the next sign-in rebuilds access from GitHub.
-    yield* SessionRepository.revokeAllForUser(userId);
+    yield* SessionRepository.use((store) => store.revokeAllForUser(userId));
 
     yield* logInfo("access_revoked", {
       userId,

@@ -49,7 +49,7 @@ const usage = `Usage: pnpm --filter @not-quite-my-tempo/api spike:claude-review 
   --config <path>     Use this local .fletcher.json instead of the one on the
                       repository's default branch
   --model <id>        Claude model for Claude Code (default claude-sonnet-5-5)
-  --max-turns <n>     Claude Code turn cap (default 20)
+  --max-turns <n>     Claude Code turn cap (default 40)
   --workdir <dir>     Where to check out the pull request head
                       (default: a folder under the OS temp directory)
   --no-context        Review the diff alone, without repository context
@@ -66,7 +66,7 @@ const { values: args } = parseArgs({
     pr: { type: "string" },
     config: { type: "string" },
     model: { type: "string", default: "claude-sonnet-5-5" },
-    "max-turns": { type: "string", default: "20" },
+    "max-turns": { type: "string", default: "40" },
     workdir: { type: "string" },
     "no-context": { type: "boolean", default: false },
     "bundle-only": { type: "boolean", default: false },
@@ -143,14 +143,16 @@ const loadConfig = (content: Option.Option<string>, source: string) =>
         return defaultReviewConfig;
       }),
     onSome: (json) =>
-      Schema.decodeUnknown(Schema.parseJson(ReviewConfig))(json).pipe(
+      Schema.decodeUnknownEffect(Schema.fromJsonString(ReviewConfig))(
+        json,
+      ).pipe(
         Effect.tap(() =>
           Effect.sync(() =>
             console.log(`Using ${REVIEW_CONFIG_PATH} from ${source}.`),
           ),
         ),
         // Production logs and falls back the same way.
-        Effect.catchTag("ParseError", (error) =>
+        Effect.catchTag("SchemaError", (error) =>
           Effect.sync(() => {
             console.warn(
               `${REVIEW_CONFIG_PATH} from ${source} is invalid; using defaults.\n${error.message}`,
@@ -196,6 +198,7 @@ const buildBundle = Effect.gen(function* () {
         headSha: details.headSha,
         diff,
         guidelines: config.guidelines,
+        includeChangedFiles: false,
       });
 
   const input: GeminiReviewInput = {
@@ -216,7 +219,7 @@ const buildBundle = Effect.gen(function* () {
 // Fletcher's system prompt, appended to Claude Code's own so its tool
 // guidance stays; the same one the claim endpoint hands a runner.
 const systemPrompt = (input: GeminiReviewInput) =>
-  buildRunnerSystemPrompt(input.intensity, input.tone);
+  buildRunnerSystemPrompt(input.intensity, input.tone, maxTurns);
 
 const checkout = (headSha: string) => {
   if (!existsSync(join(workdir, ".git"))) {
@@ -282,7 +285,7 @@ const claudeArgs = (system: string): readonly string[] => [
 // checkout for Claude Code to Read; findings then cited that file's line
 // numbers instead of the source's, so none could anchor to the diff.
 const runClaudeCode = (system: string, prompt: string) =>
-  Effect.async<string, Error>((resume) => {
+  Effect.callback<string, Error>((resume) => {
     // An API key outranks the subscription login, so it must not leak in.
     const { ANTHROPIC_API_KEY: _apiKey, ...inherited } = process.env;
 
@@ -399,12 +402,12 @@ const program = Effect.gen(function* () {
   const structuredOutput =
     args["from-output"] === undefined
       ? yield* reviewWithClaudeCode(system, prompt)
-      : yield* Schema.decodeUnknown(Schema.parseJson())(
-          readFileSync(args["from-output"], "utf8"),
-        );
+      : yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(Schema.Unknown),
+        )(readFileSync(args["from-output"], "utf8"));
 
   const review = filterReviewBySeverity(
-    yield* Schema.decodeUnknown(GeminiReview)(structuredOutput),
+    yield* Schema.decodeUnknownEffect(GeminiReview)(structuredOutput),
     config.severityThreshold,
   );
 
@@ -428,8 +431,8 @@ const reviewWithClaudeCode = (system: string, prompt: string) =>
 
     writeFileSync(join(bundleDir, "result.json"), raw);
 
-    const result = yield* Schema.decodeUnknown(
-      Schema.parseJson(ClaudeCodeResult),
+    const result = yield* Schema.decodeUnknownEffect(
+      Schema.fromJsonString(ClaudeCodeResult),
     )(raw);
 
     console.log(

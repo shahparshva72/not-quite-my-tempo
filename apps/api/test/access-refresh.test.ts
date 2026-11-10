@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { Effect, Either, Layer, Option } from "effect";
+import { Effect, Result, Layer, Option } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeLiveLayer } from "@not-quite-my-tempo/db";
 
@@ -32,19 +32,19 @@ describe("token encryption", () => {
         const sealed = yield* encryptToken(key, "gho_secret", "user:1");
         const opened = yield* decryptToken(key, sealed, "user:1");
 
-        const otherUser = yield* Effect.either(
+        const otherUser = yield* Effect.result(
           decryptToken(key, sealed, "user:2"),
         );
 
-        const otherKey = yield* Effect.either(
+        const otherKey = yield* Effect.result(
           decryptToken(btoa("\x01".repeat(32)), sealed, "user:1"),
         );
 
-        const tampered = yield* Effect.either(
+        const tampered = yield* Effect.result(
           decryptToken(key, `${sealed.slice(0, -4)}AAAA`, "user:1"),
         );
 
-        const shortKey = yield* Effect.either(
+        const shortKey = yield* Effect.result(
           encryptToken(btoa("short"), "gho_secret", "user:1"),
         );
 
@@ -55,11 +55,11 @@ describe("token encryption", () => {
     expect(results.sealed).toMatch(/^v1\./);
     expect(results.sealed).not.toContain("gho_secret");
     expect(results.opened).toBe("gho_secret");
-    expect(Either.isLeft(results.otherUser)).toBe(true);
-    expect(Either.isLeft(results.otherKey)).toBe(true);
-    expect(Either.isLeft(results.tampered)).toBe(true);
+    expect(Result.isFailure(results.otherUser)).toBe(true);
+    expect(Result.isFailure(results.otherKey)).toBe(true);
+    expect(Result.isFailure(results.tampered)).toBe(true);
     expect(results.shortKey).toMatchObject(
-      Either.left({ reason: "invalid_key" }),
+      Result.fail({ reason: "invalid_key" }),
     );
   });
 });

@@ -203,12 +203,14 @@ describe("/fletcher again on the same commit", () => {
 
   it("checks a retried run's own workflow when looking for stuck reviews", async () => {
     const run = await Effect.runPromise(
-      ReviewRunRepository.create({
-        repositoryId: 1,
-        pullRequestNumber: 42,
-        headSha: "retried",
-        trigger: "manual",
-      }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+      ReviewRunRepository.use((store) =>
+        store.create({
+          repositoryId: 1,
+          pullRequestNumber: 42,
+          headSha: "retried",
+          trigger: "manual",
+        }),
+      ).pipe(Effect.provide(makeLiveLayer(env.DB))),
     );
 
     await env.DB.prepare(

@@ -218,8 +218,9 @@ describe("handleInstallationEvent", () => {
 
         const review = yield* handleReviewRequest(reviewRequest);
 
-        const visible =
-          yield* GitHubRepositoryRepository.listByGithubRepositoryIds([3001]);
+        const visible = yield* GitHubRepositoryRepository.use((store) =>
+          store.listByGithubRepositoryIds([3001]),
+        );
 
         return { review, visible };
       }).pipe(Effect.provide(stubLayers([]))),

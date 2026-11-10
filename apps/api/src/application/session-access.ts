@@ -50,10 +50,12 @@ export const refreshSessionAccess = (
         ),
       ),
       Effect.tap((access) =>
-        SessionRepository.updateAccess(
-          session.tokenHash,
-          access.repositoryIds,
-          verifiedAt,
+        SessionRepository.use((store) =>
+          store.updateAccess(
+            session.tokenHash,
+            access.repositoryIds,
+            verifiedAt,
+          ),
         ),
       ),
       Effect.map((access) =>
@@ -72,7 +74,9 @@ export const refreshSessionAccess = (
             return yield* error;
           }
 
-          yield* SessionRepository.revoke(session.tokenHash);
+          yield* SessionRepository.use((store) =>
+            store.revoke(session.tokenHash),
+          );
           yield* logInfo("access_revoked", {
             userId: session.userId,
             source: "token_revoked",
@@ -81,7 +85,7 @@ export const refreshSessionAccess = (
           return Option.none<SessionPayload>();
         }),
       ),
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         logError("membership_refresh_failed", {
           userId: session.userId,
           errorCode: error._tag,

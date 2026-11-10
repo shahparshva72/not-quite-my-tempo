@@ -15,14 +15,14 @@ import { DatabaseLive } from "../services/database.js";
 
 export const makeLiveLayer = (database: D1Database) =>
   Layer.mergeAll(
-    FindingRepository.Default,
-    GitHubInstallationRepository.Default,
-    GitHubRepositoryRepository.Default,
-    MembershipRepository.Default,
-    PullRequestRepository.Default,
-    ReviewRunRepository.Default,
-    RunnerJobRepository.Default,
-    SessionRepository.Default,
-    UserRepository.Default,
-    WorkspaceRepository.Default,
+    FindingRepository.layer,
+    GitHubInstallationRepository.layer,
+    GitHubRepositoryRepository.layer,
+    MembershipRepository.layer,
+    PullRequestRepository.layer,
+    ReviewRunRepository.layer,
+    RunnerJobRepository.layer,
+    SessionRepository.layer,
+    UserRepository.layer,
+    WorkspaceRepository.layer,
   ).pipe(Layer.provide(DatabaseLive(database)));

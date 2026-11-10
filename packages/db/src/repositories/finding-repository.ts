@@ -1,5 +1,5 @@
 import { count, eq, sql } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Effect, Option, Context, Layer } from "effect";
 
 import { databaseEffect } from "../errors.js";
 import { findings, findingSeverities } from "../schema/findings.js";
@@ -25,62 +25,60 @@ export interface FindingSeverityCount {
   readonly findingCount: number;
 }
 
-export class FindingRepository extends Effect.Service<FindingRepository>()(
-  "@not-quite-my-tempo/db/FindingRepository",
-  {
-    accessors: true,
-    effect: Effect.gen(function* () {
-      const { client } = yield* Database;
+const make = Effect.gen(function* () {
+  const { client } = yield* Database;
 
-      return {
-        insertMany: (
-          reviewRunId: number,
-          inputs: readonly CreateFindingInput[],
-        ) =>
-          inputs.length === 0
-            ? Effect.succeed<readonly Finding[]>([])
-            : databaseEffect("findings.insert_many", () =>
-                client
-                  .insert(findings)
-                  .values(inputs.map((input) => ({ reviewRunId, ...input })))
-                  .returning()
-                  .all(),
-              ),
-        listByReviewRun: (reviewRunId: number) =>
-          databaseEffect("findings.list_by_review_run", () =>
+  return {
+    insertMany: (reviewRunId: number, inputs: readonly CreateFindingInput[]) =>
+      inputs.length === 0
+        ? Effect.succeed<readonly Finding[]>([])
+        : databaseEffect("findings.insert_many", () =>
             client
-              .select()
-              .from(findings)
-              .where(eq(findings.reviewRunId, reviewRunId))
+              .insert(findings)
+              .values(inputs.map((input) => ({ reviewRunId, ...input })))
+              .returning()
               .all(),
           ),
-        severityCountsByReviewRunIds: (reviewRunIds: readonly number[]) =>
-          reviewRunIds.length === 0
-            ? Effect.succeed<readonly FindingSeverityCount[]>([])
-            : databaseEffect("findings.severity_counts_by_review_run_ids", () =>
-                client
-                  .select({
-                    reviewRunId: findings.reviewRunId,
-                    severity: findings.severity,
-                    findingCount: count(),
-                  })
-                  .from(findings)
-                  .where(
-                    sql`${findings.reviewRunId} in (select value from json_each(${JSON.stringify(reviewRunIds)}))`,
-                  )
-                  .groupBy(findings.reviewRunId, findings.severity)
-                  .all(),
-              ),
-        setGithubCommentId: (id: number, githubCommentId: number) =>
-          databaseEffect("findings.set_github_comment_id", () =>
+    listByReviewRun: (reviewRunId: number) =>
+      databaseEffect("findings.list_by_review_run", () =>
+        client
+          .select()
+          .from(findings)
+          .where(eq(findings.reviewRunId, reviewRunId))
+          .all(),
+      ),
+    severityCountsByReviewRunIds: (reviewRunIds: readonly number[]) =>
+      reviewRunIds.length === 0
+        ? Effect.succeed<readonly FindingSeverityCount[]>([])
+        : databaseEffect("findings.severity_counts_by_review_run_ids", () =>
             client
-              .update(findings)
-              .set({ githubCommentId })
-              .where(eq(findings.id, id))
-              .returning()
-              .get(),
-          ).pipe(Effect.map(Option.fromNullable)),
-      };
-    }),
-  },
-) {}
+              .select({
+                reviewRunId: findings.reviewRunId,
+                severity: findings.severity,
+                findingCount: count(),
+              })
+              .from(findings)
+              .where(
+                sql`${findings.reviewRunId} in (select value from json_each(${JSON.stringify(reviewRunIds)}))`,
+              )
+              .groupBy(findings.reviewRunId, findings.severity)
+              .all(),
+          ),
+    setGithubCommentId: (id: number, githubCommentId: number) =>
+      databaseEffect("findings.set_github_comment_id", () =>
+        client
+          .update(findings)
+          .set({ githubCommentId })
+          .where(eq(findings.id, id))
+          .returning()
+          .get(),
+      ).pipe(Effect.map(Option.fromNullishOr)),
+  };
+});
+
+export class FindingRepository extends Context.Service<
+  FindingRepository,
+  Effect.Success<typeof make>
+>()("@not-quite-my-tempo/db/FindingRepository") {
+  static readonly layer = Layer.effect(FindingRepository, make);
+}

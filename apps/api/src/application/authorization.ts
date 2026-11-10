@@ -59,9 +59,8 @@ export const repositoryActionAllowed = (
 
 /** Repositories the user may see, each with their role in its workspace. */
 export const visibleRepositories = (access: SessionAccess) =>
-  GitHubRepositoryRepository.listVisibleToUser(
-    access.userId,
-    access.repositoryIds,
+  GitHubRepositoryRepository.use((store) =>
+    store.listVisibleToUser(access.userId, access.repositoryIds),
   );
 
 /**
@@ -75,10 +74,12 @@ export const authorizeRepository = (
   action: RepositoryAction,
 ) =>
   Effect.gen(function* () {
-    const [visible] = yield* GitHubRepositoryRepository.listVisibleToUser(
-      access.userId,
-      access.repositoryIds,
-      repositoryId,
+    const [visible] = yield* GitHubRepositoryRepository.use((store) =>
+      store.listVisibleToUser(
+        access.userId,
+        access.repositoryIds,
+        repositoryId,
+      ),
     );
 
     if (visible === undefined) {
@@ -134,9 +135,8 @@ export const authorizeWorkspace = (
   action: WorkspaceAction,
 ) =>
   Effect.gen(function* () {
-    const membership = yield* MembershipRepository.findForUser(
-      workspaceId,
-      access.userId,
+    const membership = yield* MembershipRepository.use((store) =>
+      store.findForUser(workspaceId, access.userId),
     );
 
     if (Option.isNone(membership)) {

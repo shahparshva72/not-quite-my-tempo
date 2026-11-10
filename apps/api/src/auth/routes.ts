@@ -161,7 +161,9 @@ export const createAuthRoutes = (
           pendingInstallation,
         );
 
-        const user = yield* UserRepository.upsert(identity);
+        const user = yield* UserRepository.use((store) =>
+          store.upsert(identity),
+        );
 
         yield* saveUserAccess(user.id, access);
 

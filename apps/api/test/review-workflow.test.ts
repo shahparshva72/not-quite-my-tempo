@@ -106,7 +106,9 @@ describe("review workflow program", () => {
           reviewResult,
         );
 
-        const findings = yield* FindingRepository.listByReviewRun(reviewRun.id);
+        const findings = yield* FindingRepository.use((store) =>
+          store.listByReviewRun(reviewRun.id),
+        );
 
         const updatedRun = yield* reviewRuns.findById(reviewRun.id);
 
@@ -499,7 +501,9 @@ describe("postReviewToGitHub", () => {
           "standard",
         );
 
-        const findings = yield* FindingRepository.listByReviewRun(reviewRun.id);
+        const findings = yield* FindingRepository.use((store) =>
+          store.listByReviewRun(reviewRun.id),
+        );
 
         return { posted, findings };
       }).pipe(

@@ -58,7 +58,7 @@ export const decodeInstallationBody = (
   githubEvent: "installation" | "installation_repositories",
   rawBody: ArrayBuffer,
 ) =>
-  Schema.decodeUnknown(Schema.parseJson(InstallationWebhook))(
+  Schema.decodeUnknownEffect(Schema.fromJsonString(InstallationWebhook))(
     new TextDecoder().decode(rawBody),
   ).pipe(
     Effect.mapError(
@@ -73,7 +73,7 @@ export const decodeInstallationBody = (
           ? installationActions
           : installationRepositoriesActions;
 
-      return Option.fromNullable(actions.get(webhook.action)).pipe(
+      return Option.fromNullishOr(actions.get(webhook.action)).pipe(
         Option.map((effect): InstallationEvent => ({
           effect,
           installationId: webhook.installation.id,

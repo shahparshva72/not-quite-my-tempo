@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { Effect, Either, Layer, Option } from "effect";
+import { Effect, Result, Layer, Option } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import { makeLiveLayer, ReviewRunRepository } from "@not-quite-my-tempo/db";
 import {
@@ -28,18 +28,22 @@ const db = () => makeLiveLayer(env.DB);
 
 const createRun = (headSha: string, pullRequestNumber = 42) =>
   Effect.runPromise(
-    ReviewRunRepository.create({
-      repositoryId: 1,
-      pullRequestNumber,
-      headSha,
-      trigger: "opened",
-    }).pipe(Effect.provide(db())),
+    ReviewRunRepository.use((store) =>
+      store.create({
+        repositoryId: 1,
+        pullRequestNumber,
+        headSha,
+        trigger: "opened",
+      }),
+    ).pipe(Effect.provide(db())),
   );
 
 // Free trial reviews workspace 1 has used, as the product counts them.
 const trialUsed = () =>
   Effect.runPromise(
-    ReviewRunRepository.trialReviewsUsed([1]).pipe(Effect.provide(db())),
+    ReviewRunRepository.use((store) => store.trialReviewsUsed([1])).pipe(
+      Effect.provide(db()),
+    ),
   ).then((usage) => usage[0]?.used);
 
 // Runs that already claimed the platform key, in the given state.
@@ -271,7 +275,9 @@ describe("counting free reviews fairly", () => {
     ]);
 
     const usage = await Effect.runPromise(
-      ReviewRunRepository.trialReviewsUsed([1, 2]).pipe(Effect.provide(db())),
+      ReviewRunRepository.use((store) => store.trialReviewsUsed([1, 2])).pipe(
+        Effect.provide(db()),
+      ),
     );
 
     expect(usage).toEqual([
@@ -291,7 +297,9 @@ describe("counting free reviews fairly", () => {
       .run();
 
     await Effect.runPromise(
-      ReviewRunRepository.requeueFailed(run.id).pipe(Effect.provide(db())),
+      ReviewRunRepository.use((store) => store.requeueFailed(run.id)).pipe(
+        Effect.provide(db()),
+      ),
     );
 
     expect((await choose(run.id)).source).toBe("platform");
@@ -310,7 +318,9 @@ describe("counting free reviews fairly", () => {
     await seedTrialRuns(5, "completed");
 
     await Effect.runPromise(
-      ReviewRunRepository.requeueFailed(run.id).pipe(Effect.provide(db())),
+      ReviewRunRepository.use((store) => store.requeueFailed(run.id)).pipe(
+        Effect.provide(db()),
+      ),
     );
 
     expect((await choose(run.id)).source).toBe("none");
@@ -333,7 +343,7 @@ describe("resolving the key inside the review step", () => {
     model: string | null = null,
   ) =>
     Effect.runPromise(
-      Effect.either(
+      Effect.result(
         resolveReviewKey(
           { ...choiceOf(source), source, model },
           platformKeys,
@@ -345,7 +355,7 @@ describe("resolving the key inside the review step", () => {
 
   it("returns the platform Gemini key and model for trial reviews", async () => {
     expect(await resolve("platform")).toEqual(
-      Either.right({
+      Result.succeed({
         apiKey: "platform-key",
         provider: "gemini_api",
         model: "gemini-3.8-flash",
@@ -357,7 +367,7 @@ describe("resolving the key inside the review step", () => {
     expect(
       await resolve("subscription", TEST_TOKEN_ENCRYPTION_KEY, "gpt-6.1-sol"),
     ).toEqual(
-      Either.right({
+      Result.succeed({
         apiKey: "sk-platform-openai",
         provider: "openai",
         model: "gpt-6.1-sol",
@@ -370,14 +380,14 @@ describe("resolving the key inside the review step", () => {
       "claude-sonnet-5-5",
     );
 
-    expect(Either.isLeft(missing)).toBe(true);
+    expect(Result.isFailure(missing)).toBe(true);
   });
 
   it("decrypts the workspace key, and only with the right encryption key", async () => {
     await storeWorkspaceKey("AIzaWorkspaceKey1234567890");
 
     expect(await resolve("workspace")).toEqual(
-      Either.right({
+      Result.succeed({
         apiKey: "AIzaWorkspaceKey1234567890",
         provider: "gemini_api",
         model: "gemini-3.8-flash",
@@ -386,7 +396,7 @@ describe("resolving the key inside the review step", () => {
 
     const wrongKey = await resolve("workspace", btoa("\x07".repeat(32)));
 
-    expect(wrongKey).toEqual(Either.left(new GeminiKeyUnreadableError()));
+    expect(wrongKey).toEqual(Result.fail(new GeminiKeyUnreadableError()));
   });
 });
 
@@ -503,7 +513,7 @@ describe("checking a Gemini key", () => {
   // Answers per API: the Gemini API model list, then Vertex's countTokens.
   const check = (gemini: number, vertex: number) =>
     Effect.runPromise(
-      Effect.either(
+      Effect.result(
         checkGeminiKey("AQ.check", {
           fetchImpl: (input) =>
             Promise.resolve(
@@ -517,20 +527,20 @@ describe("checking a Gemini key", () => {
 
   it("tells which Google API accepts the key", async () => {
     expect(await check(200, 500)).toEqual(
-      Either.right(Option.some("gemini_api")),
+      Result.succeed(Option.some("gemini_api")),
     );
     expect(await check(403, 200)).toEqual(
-      Either.right(Option.some("vertex_express")),
+      Result.succeed(Option.some("vertex_express")),
     );
     expect(await check(404, 200)).toEqual(
-      Either.right(Option.some("vertex_express")),
+      Result.succeed(Option.some("vertex_express")),
     );
   });
 
   it("rejects a key both APIs refuse, and reports when it couldn't tell", async () => {
-    expect(await check(400, 401)).toEqual(Either.right(Option.none()));
-    expect(Either.isLeft(await check(503, 401))).toBe(true);
-    expect(Either.isLeft(await check(403, 503))).toBe(true);
+    expect(await check(400, 401)).toEqual(Result.succeed(Option.none()));
+    expect(Result.isFailure(await check(503, 401))).toBe(true);
+    expect(Result.isFailure(await check(403, 503))).toBe(true);
   });
 });
 

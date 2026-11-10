@@ -7,6 +7,7 @@ import {
   Layer,
   Option,
   Schema,
+  SchemaTransformation,
 } from "effect";
 
 /**
@@ -43,10 +44,18 @@ export class ActionsOidcError extends Data.TaggedError("ActionsOidcError")<{
 }> {}
 
 // JWT allows one audience or several.
-const Audiences = Schema.transform(
-  Schema.Union(Schema.String, Schema.Array(Schema.String)),
+const Audiences = Schema.Union([
+  Schema.String,
   Schema.Array(Schema.String),
-  { strict: true, decode: (aud) => Arr.ensure(aud), encode: (aud) => aud },
+]).pipe(
+  Schema.decodeTo(
+    Schema.Array(Schema.String),
+    SchemaTransformation.transform({
+      decode: (aud: string | readonly string[]): readonly string[] =>
+        Arr.ensure(aud),
+      encode: (aud): string | readonly string[] => aud,
+    }),
+  ),
 );
 
 /** The claims Fletcher relies on. GitHub sends numeric IDs as strings. */
@@ -90,9 +99,10 @@ export interface GitHubActionsOidcService {
   ) => Effect.Effect<ActionsOidcClaims, ActionsOidcError>;
 }
 
-export class GitHubActionsOidc extends Context.Tag(
-  "@not-quite-my-tempo/api/GitHubActionsOidc",
-)<GitHubActionsOidc, GitHubActionsOidcService>() {}
+export class GitHubActionsOidc extends Context.Service<
+  GitHubActionsOidc,
+  GitHubActionsOidcService
+>()("@not-quite-my-tempo/api/GitHubActionsOidc") {}
 
 export interface GitHubActionsOidcConfig {
   /** The `aud` runners request, e.g. `fletcher`. */
@@ -114,10 +124,10 @@ const base64UrlBytes = (segment: string) =>
     catch: () => fail("malformed"),
   });
 
-const decodeSegment = <A, I>(schema: Schema.Schema<A, I>, segment: string) =>
+const decodeSegment = <A, I>(schema: Schema.Codec<A, I>, segment: string) =>
   base64UrlBytes(segment).pipe(
     Effect.flatMap((bytes) =>
-      Schema.decodeUnknown(Schema.parseJson(schema))(
+      Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(
         new TextDecoder().decode(bytes),
       ),
     ),
@@ -151,7 +161,7 @@ export const GitHubActionsOidcLive = (config: GitHubActionsOidcConfig) => {
       },
       catch: () => fail("jwks_unavailable"),
     }).pipe(
-      Effect.flatMap(Schema.decodeUnknown(Jwks)),
+      Effect.flatMap(Schema.decodeUnknownEffect(Jwks)),
       Effect.mapError(() => fail("jwks_unavailable")),
       Effect.map((jwks) => {
         const keys = new Map(
@@ -180,7 +190,7 @@ export const GitHubActionsOidcLive = (config: GitHubActionsOidcConfig) => {
     return known === undefined
       ? fetchKeys(now).pipe(
           Effect.flatMap((keys) =>
-            Option.match(Option.fromNullable(keys.get(kid)), {
+            Option.match(Option.fromNullishOr(keys.get(kid)), {
               onNone: () => Effect.fail(fail("unknown_key")),
               onSome: Effect.succeed,
             }),
@@ -278,10 +288,10 @@ export const GitHubActionsOidcLive = (config: GitHubActionsOidcConfig) => {
 
 /** The bearer token of an Authorization header, if it has one. */
 export const bearerToken = (authorization: string | undefined) =>
-  Option.fromNullable(authorization).pipe(
+  Option.fromNullishOr(authorization).pipe(
     Option.flatMap((value) => {
       const match = /^Bearer\s+(\S+)$/i.exec(value);
 
-      return Option.fromNullable(match?.[1]);
+      return Option.fromNullishOr(match?.[1]);
     }),
   );

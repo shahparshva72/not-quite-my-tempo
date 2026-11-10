@@ -166,7 +166,7 @@ describe("handleManualReviewCommand", () => {
         createCommentReaction: (token, ref, commentId, content) =>
           Effect.sync(() => {
             reactions.push({ token, ref, commentId, content });
-          }).pipe(Effect.zipRight(reactionResult)),
+          }).pipe(Effect.andThen(reactionResult)),
         fetchRepositoryFile: () => Effect.succeed(Option.none()),
         fetchTree: () => Effect.succeed([]),
       }),
@@ -280,12 +280,14 @@ describe("handleManualReviewCommand", () => {
   it("replies instead of reacting when the daily cap is hit", async () => {
     for (let index = 0; index < DAILY_REVIEW_RUN_CAP; index += 1) {
       await Effect.runPromise(
-        ReviewRunRepository.create({
-          repositoryId: 1,
-          pullRequestNumber: 7,
-          headSha: `busy${index}`,
-          trigger: "opened",
-        }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+        ReviewRunRepository.use((store) =>
+          store.create({
+            repositoryId: 1,
+            pullRequestNumber: 7,
+            headSha: `busy${index}`,
+            trigger: "opened",
+          }),
+        ).pipe(Effect.provide(makeLiveLayer(env.DB))),
       );
     }
 

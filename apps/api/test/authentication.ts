@@ -17,10 +17,12 @@ export const TEST_TOKEN_ENCRYPTION_KEY = btoa("\0".repeat(32));
  */
 const seedMember = (role: WorkspaceRole) =>
   Effect.gen(function* () {
-    const user = yield* UserRepository.upsert({
-      githubUserId: 4001,
-      login: "neiman",
-    });
+    const user = yield* UserRepository.use((store) =>
+      store.upsert({
+        githubUserId: 4001,
+        login: "neiman",
+      }),
+    );
 
     yield* Effect.promise(() =>
       env.DB.prepare(

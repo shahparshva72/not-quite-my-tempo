@@ -1,25 +1,28 @@
-import { Data, Effect, Option, Schema } from "effect";
+import { Data, Effect, Option, Schema, SchemaTransformation } from "effect";
 
 import { logInfo } from "../logging.js";
 
-export const ReviewTrigger = Schema.Literal(
+export const ReviewTrigger = Schema.Literals([
   "opened",
   "synchronize",
   "reopened",
-);
+]);
 
 export type ReviewTrigger = typeof ReviewTrigger.Type;
 
-export const ReviewRequestTrigger = Schema.Literal(
+export const ReviewRequestTrigger = Schema.Literals([
   "opened",
   "synchronize",
   "reopened",
   "manual",
-);
+]);
 
 export type ReviewRequestTrigger = typeof ReviewRequestTrigger.Type;
 
-export const GitHubId = Schema.Number.pipe(Schema.int(), Schema.positive());
+export const GitHubId = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isGreaterThan(0),
+);
 
 /**
  * GitHub author associations with standing on the repository. Pull
@@ -81,40 +84,40 @@ const PullRequestWebhook = Schema.Struct({
   }),
 });
 
-const NormalizedPullRequestWebhook = Schema.transform(
-  PullRequestWebhook,
-  WebhookReviewRequest,
-  {
-    strict: true,
-    decode: (webhook) => ({
-      installationId: webhook.installation.id,
-      installationAccountId: webhook.repository.owner.id,
-      installationAccountType: webhook.repository.owner.type,
-      githubRepositoryId: webhook.repository.id,
-      owner: webhook.repository.owner.login,
-      repo: webhook.repository.name,
-      defaultBranch: webhook.repository.default_branch,
-      pullRequestNumber: webhook.number,
-      headSha: webhook.pull_request.head.sha,
-      trigger: webhook.action,
-    }),
-    encode: (request) => ({
-      action: request.trigger,
-      installation: { id: request.installationId },
-      number: request.pullRequestNumber,
-      pull_request: { head: { sha: request.headSha } },
-      repository: {
-        id: request.githubRepositoryId,
-        name: request.repo,
-        default_branch: request.defaultBranch,
-        owner: {
-          id: request.installationAccountId,
-          login: request.owner,
-          type: request.installationAccountType,
+const NormalizedPullRequestWebhook = PullRequestWebhook.pipe(
+  Schema.decodeTo(
+    WebhookReviewRequest,
+    SchemaTransformation.transform({
+      decode: (webhook) => ({
+        installationId: webhook.installation.id,
+        installationAccountId: webhook.repository.owner.id,
+        installationAccountType: webhook.repository.owner.type,
+        githubRepositoryId: webhook.repository.id,
+        owner: webhook.repository.owner.login,
+        repo: webhook.repository.name,
+        defaultBranch: webhook.repository.default_branch,
+        pullRequestNumber: webhook.number,
+        headSha: webhook.pull_request.head.sha,
+        trigger: webhook.action,
+      }),
+      encode: (request) => ({
+        action: request.trigger,
+        installation: { id: request.installationId },
+        number: request.pullRequestNumber,
+        pull_request: { head: { sha: request.headSha } },
+        repository: {
+          id: request.githubRepositoryId,
+          name: request.repo,
+          default_branch: request.defaultBranch,
+          owner: {
+            id: request.installationAccountId,
+            login: request.owner,
+            type: request.installationAccountType,
+          },
         },
-      },
+      }),
     }),
-  },
+  ),
 );
 
 export class InvalidGitHubPayloadError extends Data.TaggedError(
@@ -132,11 +135,11 @@ export const decodePullRequestBody = (rawBody: ArrayBuffer) =>
   Effect.gen(function* () {
     const json = new TextDecoder().decode(rawBody);
 
-    const envelope = yield* Schema.decodeUnknown(
-      Schema.parseJson(ActionEnvelope),
+    const envelope = yield* Schema.decodeUnknownEffect(
+      Schema.fromJsonString(ActionEnvelope),
     )(json).pipe(Effect.mapError(invalidPayload));
 
-    const supportedAction = yield* Schema.decodeUnknown(ReviewTrigger)(
+    const supportedAction = yield* Schema.decodeUnknownEffect(ReviewTrigger)(
       envelope.action,
     ).pipe(Effect.option);
 
@@ -158,9 +161,9 @@ export const decodePullRequestBody = (rawBody: ArrayBuffer) =>
       {
         onNone: () => Effect.succeed(Option.none<ReviewRequest>()),
         onSome: () =>
-          Schema.decodeUnknown(Schema.parseJson(NormalizedPullRequestWebhook))(
-            json,
-          ).pipe(
+          Schema.decodeUnknownEffect(
+            Schema.fromJsonString(NormalizedPullRequestWebhook),
+          )(json).pipe(
             Effect.map((request): Option.Option<ReviewRequest> =>
               Option.some(request),
             ),

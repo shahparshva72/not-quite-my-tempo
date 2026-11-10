@@ -35,7 +35,7 @@ const isOwner = (
     : Effect.flatMap(GitHubOAuth, (oauth) =>
         oauth.isOrgOwner(accessToken, installation.accountLogin),
       ).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           logError("membership_owner_check_failed", {
             installationId: installation.installationId,
             errorCode: error._tag,
@@ -59,10 +59,11 @@ export const readUserAccess = (
 
     yield* syncUserInstallations(access.installations, pendingInstallationId);
 
-    const stored =
-      yield* GitHubInstallationRepository.listByGithubInstallationIds(
+    const stored = yield* GitHubInstallationRepository.use((store) =>
+      store.listByGithubInstallationIds(
         access.installations.map((installation) => installation.installationId),
-      );
+      ),
+    );
 
     const memberships: VerifiedMembership[] = [];
 
@@ -100,7 +101,9 @@ export const saveUserAccess = (userId: number, answer: UserAccessAnswer) =>
   Effect.gen(function* () {
     const now = new Date(yield* Clock.currentTimeMillis);
 
-    yield* MembershipRepository.syncForUser(userId, answer.memberships, now);
+    yield* MembershipRepository.use((store) =>
+      store.syncForUser(userId, answer.memberships, now),
+    );
 
     yield* logInfo("membership_refreshed", {
       userId,

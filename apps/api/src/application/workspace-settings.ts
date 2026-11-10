@@ -82,9 +82,10 @@ export interface ReviewKeyCheckerService {
   >;
 }
 
-export class ReviewKeyChecker extends Context.Tag(
-  "@not-quite-my-tempo/api/ReviewKeyChecker",
-)<ReviewKeyChecker, ReviewKeyCheckerService>() {}
+export class ReviewKeyChecker extends Context.Service<
+  ReviewKeyChecker,
+  ReviewKeyCheckerService
+>()("@not-quite-my-tempo/api/ReviewKeyChecker") {}
 
 export const ReviewKeyCheckerLive = Layer.succeed(
   ReviewKeyChecker,
@@ -125,14 +126,17 @@ export const workspaceSettings = (access: SessionAccess, workspaceId: number) =>
       "view_settings",
     );
 
-    const [usage] = yield* ReviewRunRepository.trialReviewsUsed([workspaceId]);
+    const [usage] = yield* ReviewRunRepository.use((store) =>
+      store.trialReviewsUsed([workspaceId]),
+    );
+
+    const periodStart = viewer.workspace.subscriptionPeriodStart;
 
     const creditsUsedX100 =
-      viewer.workspace.subscriptionPeriodStart === null
+      periodStart === null
         ? 0
-        : yield* ReviewRunRepository.creditsUsedX100(
-            workspaceId,
-            viewer.workspace.subscriptionPeriodStart,
+        : yield* ReviewRunRepository.use((store) =>
+            store.creditsUsedX100(workspaceId, periodStart),
           );
 
     return {
@@ -207,18 +211,20 @@ export const saveReviewKey = (
 
     const previous = viewer.workspace.geminiKeyProvider;
 
-    yield* WorkspaceRepository.saveReviewKeyWithAudit({
-      workspaceId,
-      actorUserId: access.userId,
-      previousLast4: viewer.workspace.geminiKeyLast4,
-      ciphertext,
-      last4: apiKey.slice(-4),
-      provider: provider.value,
-      model:
-        previous !== null && vendorOf(previous) === vendor
-          ? viewer.workspace.reviewModel
-          : null,
-    });
+    yield* WorkspaceRepository.use((store) =>
+      store.saveReviewKeyWithAudit({
+        workspaceId,
+        actorUserId: access.userId,
+        previousLast4: viewer.workspace.geminiKeyLast4,
+        ciphertext,
+        last4: apiKey.slice(-4),
+        provider: provider.value,
+        model:
+          previous !== null && vendorOf(previous) === vendor
+            ? viewer.workspace.reviewModel
+            : null,
+      }),
+    );
 
     yield* logInfo("review_key_saved", {
       workspaceId,
@@ -240,11 +246,13 @@ export const removeReviewKey = (access: SessionAccess, workspaceId: number) =>
       return;
     }
 
-    yield* WorkspaceRepository.removeReviewKeyWithAudit({
-      workspaceId,
-      actorUserId: access.userId,
-      previousLast4: viewer.workspace.geminiKeyLast4,
-    });
+    yield* WorkspaceRepository.use((store) =>
+      store.removeReviewKeyWithAudit({
+        workspaceId,
+        actorUserId: access.userId,
+        previousLast4: viewer.workspace.geminiKeyLast4,
+      }),
+    );
 
     yield* logInfo("review_key_removed", {
       workspaceId,
@@ -332,12 +340,14 @@ export const saveReviewModel = (
       }
     }
 
-    yield* WorkspaceRepository.saveReviewModelWithAudit({
-      workspaceId,
-      actorUserId: access.userId,
-      previousModel: viewer.workspace.reviewModel,
-      model: model === "" ? null : model,
-    });
+    yield* WorkspaceRepository.use((store) =>
+      store.saveReviewModelWithAudit({
+        workspaceId,
+        actorUserId: access.userId,
+        previousModel: viewer.workspace.reviewModel,
+        model: model === "" ? null : model,
+      }),
+    );
   });
 
 /**
@@ -371,10 +381,12 @@ export const savePlanModel = (
       }
     }
 
-    yield* WorkspaceRepository.savePlanModelWithAudit({
-      workspaceId,
-      actorUserId: access.userId,
-      previousModel: viewer.workspace.planModel,
-      model: model === "" ? null : model,
-    });
+    yield* WorkspaceRepository.use((store) =>
+      store.savePlanModelWithAudit({
+        workspaceId,
+        actorUserId: access.userId,
+        previousModel: viewer.workspace.planModel,
+        model: model === "" ? null : model,
+      }),
+    );
   });

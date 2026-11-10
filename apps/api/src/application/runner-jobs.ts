@@ -74,15 +74,19 @@ export const runnerModelFor = (
     ? repository.runnerModel
     : DEFAULT_MODELS.anthropic;
 
-/** Claude Code's turn cap on the runner. */
-export const RUNNER_MAX_TURNS = 20;
+/**
+ * Claude Code's turn cap on the runner: room to read the changed files,
+ * follow callers and tests, and check each finding against the code. The
+ * system prompt tells the model the cap (buildRunnerSystemPrompt).
+ */
+export const RUNNER_MAX_TURNS = 40;
 
 // What is stored on the run when a runner review doesn't produce one.
-export const RunnerFailureCode = Schema.Literal(
+export const RunnerFailureCode = Schema.Literals([
   "runner_failed",
   "runner_cancelled",
   "runner_output_invalid",
-);
+]);
 
 export type RunnerFailureCode = typeof RunnerFailureCode.Type;
 
@@ -93,7 +97,7 @@ const RunnerUsage = Schema.Struct({
 });
 
 /** The event that resumes the Workflow (it re-decodes it). */
-export const RunnerResult = Schema.Union(
+export const RunnerResult = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("completed"),
     review: GeminiReview,
@@ -105,33 +109,35 @@ export const RunnerResult = Schema.Union(
     code: RunnerFailureCode,
     message: Schema.String,
   }),
-);
+]);
 
 export type RunnerResult = typeof RunnerResult.Type;
 
 /** The body of POST /runner/v1/claim. */
 export const RunnerClaimRequest = Schema.Struct({
-  pullRequestNumber: Schema.Number.pipe(Schema.int(), Schema.positive()),
-  headSha: Schema.String.pipe(Schema.pattern(/^[0-9a-f]{40}$/)),
+  pullRequestNumber: Schema.Number.check(
+    Schema.isInt(),
+    Schema.isGreaterThan(0),
+  ),
+  headSha: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)),
 });
 
 export type RunnerClaimRequest = typeof RunnerClaimRequest.Type;
 
-const ReportedTokens = Schema.optionalWith(
-  Schema.NullOr(Schema.Number.pipe(Schema.int(), Schema.nonNegative())),
-  { default: () => null },
-);
+const ReportedTokens = Schema.NullOr(
+  Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+).pipe(Schema.withDecodingDefault(Effect.succeed(null)));
 
 /** The body of POST /runner/v1/jobs/:id/result. */
 export const RunnerReport = Schema.Struct({
-  outcome: Schema.Literal("success", "failure", "cancelled"),
+  outcome: Schema.Literals(["success", "failure", "cancelled"]),
   // Claude Code's structured_output; decoded here, not trusted.
   structuredOutput: Schema.optional(Schema.Unknown),
-  model: Schema.optional(Schema.String.pipe(Schema.maxLength(100))),
+  model: Schema.optional(Schema.String.check(Schema.isMaxLength(100))),
   inputTokens: ReportedTokens,
   outputTokens: ReportedTokens,
   // Why the run failed, as the runner saw it. Shown on the dashboard.
-  message: Schema.optional(Schema.String.pipe(Schema.maxLength(500))),
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
 });
 
 export type RunnerReport = typeof RunnerReport.Type;
@@ -172,9 +178,10 @@ export interface RunnerResultSinkService {
   ) => Effect.Effect<void, RunnerResultDeliveryError>;
 }
 
-export class RunnerResultSink extends Context.Tag(
-  "@not-quite-my-tempo/api/RunnerResultSink",
-)<RunnerResultSink, RunnerResultSinkService>() {}
+export class RunnerResultSink extends Context.Service<
+  RunnerResultSink,
+  RunnerResultSinkService
+>()("@not-quite-my-tempo/api/RunnerResultSink") {}
 
 export const RunnerResultSinkLive = (workflow: Workflow) =>
   Layer.succeed(
@@ -206,11 +213,11 @@ export const repositoryReviewRunner = (reviewRunId: number) =>
   Effect.gen(function* () {
     const run = yield* requireReviewRun(
       reviewRunId,
-      ReviewRunRepository.findById(reviewRunId),
+      ReviewRunRepository.use((store) => store.findById(reviewRunId)),
     );
 
-    const repository = yield* GitHubRepositoryRepository.findById(
-      run.repositoryId,
+    const repository = yield* GitHubRepositoryRepository.use((store) =>
+      store.findById(run.repositoryId),
     );
 
     return Option.match(repository, {
@@ -228,23 +235,25 @@ export const issueRunnerJob = (
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
 
-    const job = yield* RunnerJobRepository.issue({
-      id: randomJobId(),
-      reviewRunId,
-      workflowInstanceId,
-      githubRepositoryId: request.githubRepositoryId,
-      pullRequestNumber: request.pullRequestNumber,
-      headSha: request.headSha,
-      request: JSON.stringify(Schema.encodeSync(ReviewRequest)(request)),
-      expiresAt: new Date(now + JOB_LIFETIME_MILLIS),
-    });
+    const job = yield* RunnerJobRepository.use((store) =>
+      store.issue({
+        id: randomJobId(),
+        reviewRunId,
+        workflowInstanceId,
+        githubRepositoryId: request.githubRepositoryId,
+        pullRequestNumber: request.pullRequestNumber,
+        headSha: request.headSha,
+        request: JSON.stringify(Schema.encodeSync(ReviewRequest)(request)),
+        expiresAt: new Date(now + JOB_LIFETIME_MILLIS),
+      }),
+    );
 
     return { jobId: job.id };
   });
 
 /** Marks the run's job expired once the Workflow stops waiting for it. */
 export const expireRunnerJob = (reviewRunId: number) =>
-  RunnerJobRepository.expire(reviewRunId);
+  RunnerJobRepository.use((store) => store.expire(reviewRunId));
 
 const claimant = (claims: ActionsOidcClaims) => ({
   githubRunId: claims.run_id,
@@ -315,29 +324,29 @@ export const claimRunnerJob = (
 
     const now = new Date(yield* Clock.currentTimeMillis);
 
-    const open = yield* RunnerJobRepository.findOpen(
-      githubRepositoryId,
-      body.pullRequestNumber,
-      body.headSha,
-      now,
+    const open = yield* RunnerJobRepository.use((store) =>
+      store.findOpen(
+        githubRepositoryId,
+        body.pullRequestNumber,
+        body.headSha,
+        now,
+      ),
     );
 
     if (Option.isNone(open)) {
       return yield* new RunnerJobNotReadyError();
     }
 
-    const claimed = yield* RunnerJobRepository.claim(
-      open.value.id,
-      claimant(claims),
-      now,
+    const claimed = yield* RunnerJobRepository.use((store) =>
+      store.claim(open.value.id, claimant(claims), now),
     );
 
     if (Option.isNone(claimed)) {
       return yield* new RunnerJobUnavailableError();
     }
 
-    const request = yield* Schema.decodeUnknown(
-      Schema.parseJson(ReviewRequest),
+    const request = yield* Schema.decodeUnknownEffect(
+      Schema.fromJsonString(ReviewRequest),
     )(claimed.value.request).pipe(Effect.orDie);
 
     return { job: claimed.value, request };
@@ -356,7 +365,8 @@ export interface RunnerBundle {
 /**
  * Builds the review prompt for a claimed job, the way the Workflow builds
  * it for a model call: the repository's .fletcher.json (or the dashboard
- * tone), its filtered diff, its context, and the prior review.
+ * tone), its filtered diff, its guidelines and manifests, and the prior
+ * review. The changed files are left for Claude Code to read.
  */
 export const buildRunnerBundle = (
   installationToken: string,
@@ -366,11 +376,11 @@ export const buildRunnerBundle = (
   Effect.gen(function* () {
     const run = yield* requireReviewRun(
       job.reviewRunId,
-      ReviewRunRepository.findById(job.reviewRunId),
+      ReviewRunRepository.use((store) => store.findById(job.reviewRunId)),
     );
 
-    const repository = yield* GitHubRepositoryRepository.findById(
-      run.repositoryId,
+    const repository = yield* GitHubRepositoryRepository.use((store) =>
+      store.findById(run.repositoryId),
     );
 
     const model = Option.match(repository, {
@@ -403,6 +413,9 @@ export const buildRunnerBundle = (
       headSha: pullRequest.details.headSha,
       diff: pullRequest.diff,
       guidelines: pullRequest.config.guidelines ?? null,
+      // Claude Code reads the changed files from its checkout, where they
+      // carry line numbers; repeating them here only invites it not to.
+      includeChangedFiles: false,
     });
 
     const tone = reviewToneOf(pullRequest.config);
@@ -411,7 +424,11 @@ export const buildRunnerBundle = (
       jobId: job.id,
       model,
       maxTurns: RUNNER_MAX_TURNS,
-      systemPrompt: buildRunnerSystemPrompt(pullRequest.config.intensity, tone),
+      systemPrompt: buildRunnerSystemPrompt(
+        pullRequest.config.intensity,
+        tone,
+        RUNNER_MAX_TURNS,
+      ),
       prompt: buildReviewUserPrompt({
         repository: `${request.owner}/${request.repo}`,
         pullRequestNumber: request.pullRequestNumber,
@@ -484,7 +501,9 @@ export const reportRunnerJob = (
   report: RunnerReport,
 ) =>
   Effect.gen(function* () {
-    const job = yield* RunnerJobRepository.findById(jobId).pipe(
+    const job = yield* RunnerJobRepository.use((store) =>
+      store.findById(jobId),
+    ).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.fail(new RunnerJobNotFoundError()),
@@ -516,7 +535,9 @@ export const reportRunnerJob = (
 
     const now = new Date(yield* Clock.currentTimeMillis);
 
-    yield* RunnerJobRepository.complete(job.id, claimant(claims), now);
+    yield* RunnerJobRepository.use((store) =>
+      store.complete(job.id, claimant(claims), now),
+    );
 
     return { status: result.status };
   });

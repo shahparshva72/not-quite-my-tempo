@@ -230,9 +230,9 @@ const nothingDeleted = async () => {
 
 const trialUsed = (workspaceIds: readonly number[]) =>
   Effect.runPromise(
-    ReviewRunRepository.trialReviewsUsed(workspaceIds).pipe(
-      Effect.provide(makeLiveLayer(env.DB)),
-    ),
+    ReviewRunRepository.use((store) =>
+      store.trialReviewsUsed(workspaceIds),
+    ).pipe(Effect.provide(makeLiveLayer(env.DB))),
   );
 
 describe("deleting a workspace's data", () => {
@@ -332,13 +332,16 @@ describe("deleting a workspace's data", () => {
 
     const claimed = await Effect.runPromise(
       Effect.gen(function* () {
-        const installation = yield* GitHubInstallationRepository.upsert({
-          githubInstallationId: 1003,
-          githubAccountId: 2001,
-          githubAccountLogin: "not-my-tempo",
-          accountType: "Organization",
-          status: "active",
-        });
+        const installation = yield* GitHubInstallationRepository.use(
+          (repository) =>
+            repository.upsert({
+              githubInstallationId: 1003,
+              githubAccountId: 2001,
+              githubAccountLogin: "not-my-tempo",
+              accountType: "Organization",
+              status: "active",
+            }),
+        );
 
         yield* Effect.promise(() =>
           env.DB.batch([
@@ -356,10 +359,12 @@ describe("deleting a workspace's data", () => {
 
         expect(installation.workspaceId).toBe(1);
 
-        return yield* ReviewRunRepository.claimTrialReview(9, 1, 5, {
-          limit: 100,
-          since: new Date(0),
-        });
+        return yield* ReviewRunRepository.use((store) =>
+          store.claimTrialReview(9, 1, 5, {
+            limit: 100,
+            since: new Date(0),
+          }),
+        );
       }).pipe(Effect.provide(makeLiveLayer(env.DB))),
     );
 
@@ -401,9 +406,9 @@ describe("deleting a workspace's data", () => {
 
     const used = (start: Date) =>
       Effect.runPromise(
-        ReviewRunRepository.creditsUsedX100(1, start).pipe(
-          Effect.provide(makeLiveLayer(env.DB)),
-        ),
+        ReviewRunRepository.use((store) =>
+          store.creditsUsedX100(1, start),
+        ).pipe(Effect.provide(makeLiveLayer(env.DB))),
       );
 
     // Only the current period's counted runs carry; the failed one had

@@ -20,7 +20,7 @@ The workspace pins the versions researched on September 11, 2026:
 | Package                     | Version   |
 | --------------------------- | --------- |
 | Hono                        | `4.13.7`  |
-| Effect                      | `3.22.2`  |
+| Effect                      | `4.1.3`   |
 | Wrangler                    | `4.131.0` |
 | TypeScript                  | `7.0.2`   |
 | Vite                        | `8.3.0`   |
@@ -304,6 +304,15 @@ Workflow issues a `runner_jobs` row and waits up to 30 minutes for the
 - `POST /runner/v1/jobs/:id/result` sends Claude Code's `structured_output`
   and resumes the Workflow, which persists and posts the review as usual,
   with `provider = 'claude_actions'` and zero cost and credits.
+
+The runner review is agentic: Claude Code has `Read`, `Grep` and `Glob` on
+a checkout of the head commit, and the runner system prompt
+(`buildRunnerSystemPrompt`) has it read each changed file in place, follow
+changed symbols to their callers and tests, and try to refute every
+candidate finding against the code before reporting it. The claim's prompt
+therefore carries the diff, guidelines (from the default branch) and
+manifests, but not the changed files. The turn cap (`RUNNER_MAX_TURNS`, 40)
+comes from the claim, so a committed workflow file picks up changes to it.
 
 Both calls authenticate with the job's GitHub Actions OIDC token (audience
 `RUNNER_OIDC_AUDIENCE`, default `fletcher`). Only a `pull_request` run of

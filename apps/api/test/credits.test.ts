@@ -57,12 +57,14 @@ const createRun = async (pullRequestNumber = 42) => {
   shaCounter += 1;
 
   return Effect.runPromise(
-    ReviewRunRepository.create({
-      repositoryId: 1,
-      pullRequestNumber,
-      headSha: `credits-${shaCounter}`,
-      trigger: "opened",
-    }).pipe(Effect.provide(db())),
+    ReviewRunRepository.use((store) =>
+      store.create({
+        repositoryId: 1,
+        pullRequestNumber,
+        headSha: `credits-${shaCounter}`,
+        trigger: "opened",
+      }),
+    ).pipe(Effect.provide(db())),
   );
 };
 
@@ -75,9 +77,9 @@ const choose = (runId: number, diffBytes = SMALL_DIFF, allowance = 200) =>
 
 const creditsUsed = () =>
   Effect.runPromise(
-    ReviewRunRepository.creditsUsedX100(1, new Date(PERIOD_START)).pipe(
-      Effect.provide(db()),
-    ),
+    ReviewRunRepository.use((store) =>
+      store.creditsUsedX100(1, new Date(PERIOD_START)),
+    ).pipe(Effect.provide(db())),
   ).then((used) => used / 100);
 
 // Paid-plan runs already charged this period, in the given state.
@@ -307,7 +309,9 @@ describe("paid plan credits", () => {
     expect(await creditsUsed()).toBe(0);
 
     await Effect.runPromise(
-      ReviewRunRepository.requeueFailed(run.id).pipe(Effect.provide(db())),
+      ReviewRunRepository.use((store) => store.requeueFailed(run.id)).pipe(
+        Effect.provide(db()),
+      ),
     );
 
     expect((await choose(run.id)).source).toBe("subscription");

@@ -5,7 +5,8 @@ GitHub Actions. `review.ts` does locally what a runner would do:
 
 1. Builds the bundle `POST /runner/v1/claim` would return: production's
    system prompt and pull request prompt (diff filtered by `ignore`,
-   repository context, `guidelines`), under the repository's
+   `guidelines`, manifests; the changed files are left for Claude Code to
+   read), under the repository's
    `.fletcher.json` `intensity` and `tone`.
 2. Checks out the pull request head (`pull/<n>/head`, shallow).
 3. Runs the official Claude Code CLI there with the flags the workflow would
@@ -32,7 +33,7 @@ pnpm --filter @not-quite-my-tempo/api spike:claude-review \
 ```
 
 `--model` picks the Claude model (default `claude-sonnet-5-5`), `--max-turns`
-caps Claude Code's turns (default 20), and `--no-context` reviews the diff
+caps Claude Code's turns (default 40), and `--no-context` reviews the diff
 alone. The checkout goes under the OS temp directory unless you pass
 `--workdir <dir>`. The bundle (`system.md`, `prompt.md`, `schema.json`) and
 the outputs (`result.json`, `review.md`) go in `<workdir>.fletcher/`, beside

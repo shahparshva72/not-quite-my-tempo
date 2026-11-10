@@ -12,7 +12,7 @@ const secret = "test-webhook-secret";
 
 const WebhookResponse = Schema.Struct({
   reviewRunId: Schema.Number,
-  status: Schema.Literal("queued", "already_processed"),
+  status: Schema.Literals(["queued", "already_processed"]),
 });
 
 const pullRequestPayload = {
@@ -236,7 +236,7 @@ describe("GitHub webhook", () => {
     );
 
     const responseBody = await Effect.runPromise(
-      Schema.decodeUnknown(WebhookResponse)(await response.json()),
+      Schema.decodeUnknownEffect(WebhookResponse)(await response.json()),
     );
 
     const reviewRun = await env.DB.prepare(

@@ -17,13 +17,15 @@ const upsertInstallation = (
   event: InstallationIdentity,
   status: GitHubInstallationStatus,
 ) =>
-  GitHubInstallationRepository.upsert({
-    githubInstallationId: event.installationId,
-    githubAccountId: event.accountId,
-    githubAccountLogin: event.accountLogin,
-    accountType: event.accountType,
-    status,
-  });
+  GitHubInstallationRepository.use((store) =>
+    store.upsert({
+      githubInstallationId: event.installationId,
+      githubAccountId: event.accountId,
+      githubAccountLogin: event.accountLogin,
+      accountType: event.accountType,
+      status,
+    }),
+  );
 
 /**
  * Marks the installation active and reconciles its repositories with the
@@ -38,9 +40,8 @@ export const syncInstallation = (event: InstallationIdentity) =>
     const token = yield* auth.mintInstallationToken(event.installationId);
     const repositories = yield* client.listRepositories(token.token);
 
-    yield* GitHubRepositoryRepository.syncForInstallation(
-      installation.id,
-      repositories,
+    yield* GitHubRepositoryRepository.use((store) =>
+      store.syncForInstallation(installation.id, repositories),
     );
 
     yield* logInfo("github_installation_synced", {
@@ -73,10 +74,9 @@ export const handleInstallationEvent = (event: InstallationEvent) =>
     ),
     Match.when("remove", () =>
       Effect.gen(function* () {
-        const [stored] =
-          yield* GitHubInstallationRepository.listByGithubInstallationIds([
-            event.installationId,
-          ]);
+        const [stored] = yield* GitHubInstallationRepository.use((store) =>
+          store.listByGithubInstallationIds([event.installationId]),
+        );
 
         // Never stored, or deleted with its workspace's data (which is what
         // uninstalls it). Storing it now would bring back deleted data.
@@ -90,8 +90,8 @@ export const handleInstallationEvent = (event: InstallationEvent) =>
 
         const installation = yield* upsertInstallation(event, "removed");
 
-        yield* GitHubRepositoryRepository.removeAllForInstallation(
-          installation.id,
+        yield* GitHubRepositoryRepository.use((store) =>
+          store.removeAllForInstallation(installation.id),
         );
 
         yield* logInfo("github_installation_removed", {
@@ -117,10 +117,11 @@ export const syncUserInstallations = (
   pendingInstallationId: Option.Option<number>,
 ) =>
   Effect.gen(function* () {
-    const stored =
-      yield* GitHubInstallationRepository.listByGithubInstallationIds(
+    const stored = yield* GitHubInstallationRepository.use((store) =>
+      store.listByGithubInstallationIds(
         installations.map((installation) => installation.installationId),
-      );
+      ),
+    );
 
     const storedIds = new Set(
       stored.map((installation) => installation.githubInstallationId),
@@ -136,7 +137,7 @@ export const syncUserInstallations = (
       toSync,
       (installation) =>
         syncInstallation(installation).pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             logError("github_installation_sign_in_sync_failed", {
               installationId: installation.installationId,
               errorCode: error._tag,

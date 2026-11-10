@@ -16,11 +16,11 @@ export const recordPullRequest = (snapshot: PullRequestSnapshot) => {
     state: snapshot.state,
   };
 
-  return PullRequestRepository.record(snapshot).pipe(
+  return PullRequestRepository.use((store) => store.record(snapshot)).pipe(
     Effect.flatMap((written) =>
       written ? logInfo("pull_request_recorded", fields) : Effect.void,
     ),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       logError("pull_request_record_failed", {
         ...fields,
         error: Inspectable.toStringUnknown(error.cause),

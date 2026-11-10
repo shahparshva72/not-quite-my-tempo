@@ -81,7 +81,7 @@ const fakeClient = (repository: FakeRepository, reads: string[] = []) =>
         }
 
         return Effect.succeed(
-          Option.fromNullable(repository.files[`${gitRef}:${path}`]),
+          Option.fromNullishOr(repository.files[`${gitRef}:${path}`]),
         );
       },
       fetchTree: (_token, _ref, gitRef) =>
@@ -263,6 +263,35 @@ describe("fetchRepositoryContext", () => {
     expect(context?.guidelines).toHaveLength(1);
     expect(context?.files).toEqual([]);
     expect(context?.omittedFiles).toEqual(["apps/api/src/tempo.ts"]);
+  });
+
+  it("leaves changed files out for a reviewer that reads the checkout", async () => {
+    const reads: string[] = [];
+
+    const context = await Effect.runPromise(
+      fetchRepositoryContext({
+        ...baseInput,
+        includeChangedFiles: false,
+      }).pipe(
+        Effect.provide(
+          fakeClient(
+            {
+              tree: [blob("AGENTS.md"), blob("apps/api/src/tempo.ts")],
+              files: {
+                "main:AGENTS.md": "Root rules.",
+                "head789:apps/api/src/tempo.ts": "const before = 1;",
+              },
+            },
+            reads,
+          ),
+        ),
+      ),
+    );
+
+    expect(context?.guidelines).toHaveLength(1);
+    expect(context?.files).toEqual([]);
+    expect(context?.omittedFiles).toEqual([]);
+    expect(reads).not.toContain("head789:apps/api/src/tempo.ts");
   });
 
   it("returns null when the tree can't be listed", async () => {
