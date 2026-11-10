@@ -34,7 +34,10 @@ concurrency:
 
 jobs:
   review:
-    if: \${{ !github.event.pull_request.draft }}
+    # Forks get no secrets or OIDC token on pull_request, so they can't run.
+    if: >-
+      \${{ !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -94,7 +97,8 @@ jobs:
           MAX_TURNS: \${{ steps.claim.outputs.max_turns }}
         run: |
           dir="$RUNNER_TEMP/fletcher"
-          npm install --global --silent @anthropic-ai/claude-code@${RUNNER_CLAUDE_CODE_VERSION}
+          npm install --global --loglevel=error @anthropic-ai/claude-code@${RUNNER_CLAUDE_CODE_VERSION}
+          status=0
           claude -p \\
             --append-system-prompt-file "$dir/system.md" \\
             --output-format json \\
@@ -107,8 +111,14 @@ jobs:
             --setting-sources user \\
             --strict-mcp-config \\
             --no-session-persistence \\
-            < "$dir/prompt.md" > "$dir/result.json"
-          jq -e '.is_error == false and .structured_output != null' "$dir/result.json" > /dev/null
+            < "$dir/prompt.md" > "$dir/result.json" || status=$?
+          # Say why there is no review: Claude Code reports it on stdout.
+          if [ "$status" -ne 0 ] || ! jq -e '.is_error == false and .structured_output != null' "$dir/result.json" > /dev/null; then
+            reason=$(jq -r '[.subtype, .result] | map(select(. != null)) | join(": ")' \\
+              "$dir/result.json" 2>/dev/null | tr '\\n' ' ' | head -c 400 || true)
+            echo "::error::Claude Code produced no review (exit $status). \${reason:-It printed no result.}"
+            exit 1
+          fi
 
       - name: Send the review to Fletcher
         if: always() && steps.claim.outputs.job_id != ''
@@ -124,7 +134,7 @@ jobs:
             report=$(jq -c --arg model "$MODEL" '{
               outcome: "success",
               structuredOutput: .structured_output,
-              model: ((.modelUsage // {} | keys | first) // $model),
+              model: ((.modelUsage // {} | keys | map(select(startswith($model))) | first) // (.modelUsage // {} | keys | first) // $model),
               inputTokens: ((.usage.input_tokens // 0) + (.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0)),
               outputTokens: (.usage.output_tokens // null)
             }' "$dir/result.json")

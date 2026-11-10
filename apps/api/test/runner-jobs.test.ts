@@ -569,8 +569,26 @@ describe("runner workflow template", () => {
     expect(yaml).toContain("--strict-mcp-config");
   });
 
-  it("reports the model Claude Code ran, not just the one asked for", () => {
-    expect(yaml).toContain("(.modelUsage // {} | keys | first) // $model");
+  it("reports the model Claude Code ran, preferring the one asked for", () => {
+    // modelUsage also lists models Claude Code used for side tasks, and
+    // its keys sort alphabetically, so the first key may not be the one
+    // that wrote the review.
+    expect(yaml).toContain(
+      "(.modelUsage // {} | keys | map(select(startswith($model))) | first)",
+    );
+  });
+
+  it("fails the review step with Claude Code's reason", () => {
+    expect(yaml).toContain('> "$dir/result.json" || status=$?');
+    expect(yaml).toContain('if [ "$status" -ne 0 ] || ! jq -e');
+    expect(yaml).toContain("::error::Claude Code produced no review");
+    expect(yaml).not.toContain("npm install --global --silent");
+  });
+
+  it("skips pull requests from forks", () => {
+    expect(yaml).toContain(
+      "github.event.pull_request.head.repo.full_name == github.repository",
+    );
   });
 
   it("leaves the check green when Fletcher can't be reached", () => {
