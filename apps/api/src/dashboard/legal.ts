@@ -90,17 +90,18 @@ export const privacyPage = (login: string | null) =>
       <h3>Reviews on your own runner</h3>
       <p>
         An admin can set a repository to review on its own GitHub Actions runner
-        with a Claude subscription. For those repositories Fletcher calls no AI
-        model. Instead, the repository's Fletcher review workflow asks Fletcher
-        for the review, proving which repository, pull request, and commit it
-        runs for with a token GitHub issues to that workflow run. Fletcher sends
-        it the review instructions and the same pull request content described
-        above, and keeps none of that content. Claude Code then runs on the
-        runner, can read other files in the repository's checkout there, and
-        sends the review back. We keep the review as described above, plus a
-        record of the job: its status and timing, and the ID of the GitHub
-        Actions run that took it. Your Claude token is a secret in your
-        repository, used only on the runner; we never see or store it.
+        with a Claude subscription or a ChatGPT plan. For those repositories
+        Fletcher calls no AI model. Instead, the repository's Fletcher review
+        workflow asks Fletcher for the review, proving which repository, pull
+        request, and commit it runs for with a token GitHub issues to that
+        workflow run. Fletcher sends it the review instructions and the same
+        pull request content described above, and keeps none of that content.
+        Claude Code or Codex then runs on the runner, can read other files in
+        the repository's checkout there, and sends the review back. We keep the
+        review as described above, plus a record of the job: its status and
+        timing, and the ID of the GitHub Actions run that took it. Your Claude
+        token or ChatGPT sign-in is a secret in your repository, used only on
+        the runner; we never see or store it.
       </p>
       <h3>Your own API keys</h3>
       <p>
@@ -182,6 +183,14 @@ export const privacyPage = (login: string | null) =>
         including whether Anthropic may use it to improve its models. Check your
         Claude privacy settings before reviewing private code this way.
       </p>
+      <p>
+        Likewise, for a repository that reviews with Codex on its own runner,
+        OpenAI's models generate the review under your own ChatGPT account. That
+        content goes from the runner to OpenAI, not through us, and your
+        account's terms with OpenAI apply to it, including whether OpenAI may
+        use it to improve its models. Check your ChatGPT data controls before
+        reviewing private code this way.
+      </p>
 
       <h2>Who we share it with</h2>
       <p>We use these service providers, and only for running Fletcher:</p>
@@ -203,8 +212,8 @@ export const privacyPage = (login: string | null) =>
       <p>
         For a repository that reviews on its own runner, pull request content
         also goes to GitHub Actions in your account and, from there, to
-        Anthropic under your own Claude account. Those are your providers, not
-        ours.
+        Anthropic under your own Claude account or OpenAI under your own ChatGPT
+        account. Those are your providers, not ours.
       </p>
       <p>
         These providers may process data in the United States and other
@@ -295,10 +304,10 @@ export const termsPage = (login: string | null) =>
       <p>
         Fletcher is a GitHub App that reviews pull requests in the repositories
         you choose, using Google's Gemini AI models or, if you set a repository
-        up for it, Claude Code on your own GitHub Actions runner and Claude
-        subscription. It posts the review as comments on the pull request.
-        Workspaces, roles, and access follow your GitHub accounts and
-        organizations.
+        up for it, Claude Code or Codex on your own GitHub Actions runner and
+        your Claude or ChatGPT subscription. It posts the review as comments on
+        the pull request. Workspaces, roles, and access follow your GitHub
+        accounts and organizations.
       </p>
 
       <h2>3. Your code</h2>
@@ -326,11 +335,12 @@ export const termsPage = (login: string | null) =>
       </p>
       <p>
         If a repository reviews on its own runner, the review runs on your
-        Claude subscription under your terms with Anthropic, and the runner's
-        time counts as your GitHub Actions usage. You're responsible for the
-        Claude token you store as a repository secret and for using your Claude
-        plan as Anthropic's terms allow. These reviews don't use free trial
-        reviews or the paid plan's credits.
+        Claude subscription under your terms with Anthropic, or on your ChatGPT
+        plan under your terms with OpenAI, and the runner's time counts as your
+        GitHub Actions usage. You're responsible for the token or sign-in you
+        store as a repository secret and for using your plan as its provider's
+        terms allow. These reviews don't use free trial reviews or the paid
+        plan's credits.
       </p>
 
       <h2>6. Trial, paid plan, and refunds</h2>
@@ -387,8 +397,8 @@ export const termsPage = (login: string | null) =>
       </ul>
       <p>
         You must also follow the terms of GitHub and of Google's Gemini API when
-        using Fletcher, and Anthropic's terms when a repository reviews on its
-        own runner.
+        using Fletcher, and Anthropic's or OpenAI's terms when a repository
+        reviews on its own runner.
       </p>
 
       <h2>8. Suspension and ending</h2>

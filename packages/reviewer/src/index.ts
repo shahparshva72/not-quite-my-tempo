@@ -14,6 +14,7 @@ export type {
   RepositoryContext,
   ReviewIntensity,
   ReviewTone,
+  RunnerBudget,
 } from "./prompt.js";
 
 export {

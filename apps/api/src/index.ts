@@ -8,6 +8,7 @@ import {
   DatabaseLive,
   GitHubRepositoryRepository,
   makeLiveLayer,
+  reviewRunners,
 } from "@not-quite-my-tempo/db";
 import type {
   RepositoryReviewRunner,
@@ -50,12 +51,16 @@ import {
   claimRunnerJob,
   reportRunnerJob,
   RunnerClaimRequest,
-  RUNNER_MODELS,
+  RUNNER_AGENTS,
   RUNNER_OIDC_AUDIENCE,
+  runnerAgentOf,
+  runnerModels,
   RunnerReport,
   RunnerResultSinkLive,
 } from "./application/runner-jobs.js";
 import type {
+  RunnerAgent,
+  RunnerAgentMismatchError,
   RunnerClaimsRejectedError,
   RunnerJobNotFoundError,
   RunnerJobNotReadyError,
@@ -378,6 +383,7 @@ type RunnerRouteError =
   | ActionsOidcError
   | RequestBodyError
   | RunnerClaimsRejectedError
+  | RunnerAgentMismatchError
   | RunnerJobNotReadyError
   | RunnerJobUnavailableError
   | RunnerJobNotFoundError
@@ -397,6 +403,14 @@ const runnerErrorResponse = (c: AppContext, cause: RunnerRouteError) =>
     ),
     Match.tag("RunnerClaimsRejectedError", (error) =>
       errorResponse(c, 403, "claims_rejected", error.reason),
+    ),
+    Match.tag("RunnerAgentMismatchError", (error) =>
+      errorResponse(
+        c,
+        409,
+        "wrong_agent",
+        `This repository reviews with ${RUNNER_AGENTS[error.expected].name}, but this workflow runs ${RUNNER_AGENTS[error.claimant].name}. Replace .github/workflows/fletcher-review.yml with the ${RUNNER_AGENTS[error.expected].name} template from the docs, or change Where reviews run on the dashboard.`,
+      ),
     ),
     Match.tag("RunnerJobNotReadyError", () =>
       errorResponse(
@@ -424,19 +438,19 @@ const runnerErrorResponse = (c: AppContext, cause: RunnerRouteError) =>
   );
 
 // A repository's fletcher-review.yml claims the review waiting for its pull
-// request's commit and gets the prompt to run Claude Code with.
+// request's commit and gets the prompt to run Claude Code or Codex with.
 app.post("/runner/v1/claim", (c) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const claims = yield* runnerClaims(c);
       const body = yield* readJsonBody(c, RunnerClaimRequest);
-      const { job, request } = yield* claimRunnerJob(claims, body);
+      const { job, request, agent } = yield* claimRunnerJob(claims, body);
 
       const installationToken = yield* mintInstallationToken(
         request.installationId,
       );
 
-      return yield* buildRunnerBundle(installationToken, job, request);
+      return yield* buildRunnerBundle(installationToken, job, request, agent);
     }).pipe(
       Effect.provide(makeLiveLayer(c.env.DB)),
       Effect.provide(
@@ -706,10 +720,16 @@ app.post("/dashboard/repositories/:id/review-tone", (c) =>
   }),
 );
 
-// An empty model keeps Fletcher's default for runner reviews.
+// Each agent has its own model picker; only the chosen runner's is saved.
+// An empty model keeps Fletcher's default for that runner.
+const RunnerModelField = Schema.String.pipe(
+  Schema.withDecodingDefault(Effect.succeed("")),
+);
+
 const ReviewRunnerForm = Schema.Struct({
-  runner: Schema.Literals(["fletcher", "claude_actions"]),
-  model: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  runner: Schema.Literals(reviewRunners),
+  claudeModel: RunnerModelField,
+  codexModel: RunnerModelField,
 });
 
 app.post("/dashboard/repositories/:id/review-runner", (c) =>
@@ -720,16 +740,27 @@ app.post("/dashboard/repositories/:id/review-runner", (c) =>
       await c.req.parseBody(),
     );
 
-    if (
-      !Number.isInteger(repositoryId) ||
-      Option.isNone(form) ||
-      (form.value.model !== "" && !RUNNER_MODELS.includes(form.value.model))
-    ) {
+    if (!Number.isInteger(repositoryId) || Option.isNone(form)) {
       return c.html(notFoundPage(session.login), 404);
     }
 
     const reviewRunner: RepositoryReviewRunner = form.value.runner;
-    const runnerModel = form.value.model === "" ? null : form.value.model;
+    const agent = runnerAgentOf(reviewRunner);
+
+    const pickedModels: Record<RunnerAgent, string> = {
+      claude: form.value.claudeModel,
+      codex: form.value.codexModel,
+    };
+
+    const model = agent === null ? "" : pickedModels[agent];
+
+    if (
+      agent !== null &&
+      model !== "" &&
+      !runnerModels(agent).includes(model)
+    ) {
+      return c.html(notFoundPage(session.login), 404);
+    }
 
     return Effect.runPromise(
       authorizeRepository(session, repositoryId, "set_review_runner").pipe(
@@ -738,7 +769,12 @@ app.post("/dashboard/repositories/:id/review-runner", (c) =>
             store.setReviewRunnerWithAudit(
               visible.repository,
               reviewRunner,
-              runnerModel,
+              // Reviewing in Fletcher keeps the runner model for later.
+              agent === null
+                ? visible.repository.runnerModel
+                : model === ""
+                  ? null
+                  : model,
               { workspaceId: visible.workspaceId, actorUserId: session.userId },
             ),
           ),

@@ -19,7 +19,12 @@ import {
   reviewCostUsdMicros,
   Reviewer,
 } from "@not-quite-my-tempo/reviewer";
-import type { DatabaseError, Finding, ReviewRun } from "@not-quite-my-tempo/db";
+import type {
+  DatabaseError,
+  Finding,
+  RepositoryReviewRunner,
+  ReviewRun,
+} from "@not-quite-my-tempo/db";
 import type {
   GeminiReview,
   PriorReview,
@@ -351,9 +356,6 @@ export const performGeminiReview = (
     };
   });
 
-/** The provider recorded for reviews run on the repository's own runner. */
-export const RUNNER_REVIEW_PROVIDER = "claude_actions";
-
 const catalogCostUsdMicros = (result: ReviewResult) =>
   Option.match(Option.fromNullishOr(findCatalogModel(result.model)), {
     onNone: () => null,
@@ -417,13 +419,16 @@ export const persistReviewFindings = (
   );
 
 /**
- * Persists a review Claude Code produced on the repository's own runner.
- * It ran on the owner's Claude subscription, so it cost Fletcher nothing.
+ * Persists a review Claude Code or Codex produced on the repository's own
+ * runner. It ran on the owner's subscription, so it cost Fletcher nothing.
+ * The provider recorded is the runner: "claude_actions" or
+ * "codex_actions".
  */
 export const persistRunnerReviewFindings = (
   reviewRunId: number,
   result: Omit<ReviewResult, "provider">,
-) => persistReview(reviewRunId, result, RUNNER_REVIEW_PROVIDER, 0);
+  runner: Exclude<RepositoryReviewRunner, "fletcher">,
+) => persistReview(reviewRunId, result, runner, 0);
 
 interface AnchoredFinding {
   readonly finding: Finding;

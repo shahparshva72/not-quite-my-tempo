@@ -1,7 +1,12 @@
 import { env } from "cloudflare:workers";
 import { Effect, Result, Layer } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
-import { makeLiveLayer, RunnerJobRepository } from "@not-quite-my-tempo/db";
+import {
+  GitHubRepositoryRepository,
+  makeLiveLayer,
+  ReviewRunRepository,
+  RunnerJobRepository,
+} from "@not-quite-my-tempo/db";
 import type { GeminiReview } from "@not-quite-my-tempo/reviewer";
 
 import app from "../src/index";
@@ -11,9 +16,10 @@ import {
   issueRunnerJob,
   reportRunnerJob,
   repositoryReviewRunner,
-  RUNNER_MODELS,
+  RunnerAgentMismatchError,
   RUNNER_WORKFLOW_FILE,
   runnerModelFor,
+  runnerModels,
   RunnerResultSink,
   runnerResultOf,
 } from "../src/application/runner-jobs";
@@ -26,7 +32,11 @@ import {
 } from "../src/github/actions-oidc";
 import type { ActionsOidcClaims } from "../src/github/actions-oidc";
 import type { ReviewRequest } from "../src/github/review-request";
-import { runnerWorkflowYaml } from "../src/dashboard/runner-workflow";
+import {
+  CODEX_AUTH_WRITE_TOKEN_SECRET,
+  codexRunnerWorkflowYaml,
+  runnerWorkflowYaml,
+} from "../src/dashboard/runner-workflow";
 import { resetAndSeedRepository } from "./database";
 
 const HEAD_SHA = "a".repeat(40);
@@ -99,7 +109,14 @@ const SinkTest = Layer.succeed(
 );
 
 const run = <A, E>(
-  effect: Effect.Effect<A, E, RunnerJobRepository | RunnerResultSink | never>,
+  effect: Effect.Effect<
+    A,
+    E,
+    | RunnerJobRepository
+    | ReviewRunRepository
+    | GitHubRepositoryRepository
+    | RunnerResultSink
+  >,
 ) =>
   Effect.runPromise(
     effect.pipe(
@@ -151,7 +168,11 @@ describe("runner jobs", () => {
     await issue();
 
     const claimed = await run(
-      claimRunnerJob(claims(), { pullRequestNumber: 7, headSha: HEAD_SHA }),
+      claimRunnerJob(claims(), {
+        pullRequestNumber: 7,
+        headSha: HEAD_SHA,
+        agent: "claude",
+      }),
     );
 
     expect(Result.isSuccess(claimed)).toBe(true);
@@ -162,7 +183,11 @@ describe("runner jobs", () => {
     }
 
     const again = await run(
-      claimRunnerJob(claims(), { pullRequestNumber: 7, headSha: HEAD_SHA }),
+      claimRunnerJob(claims(), {
+        pullRequestNumber: 7,
+        headSha: HEAD_SHA,
+        agent: "claude",
+      }),
     );
 
     expect(Result.isSuccess(again)).toBe(true);
@@ -171,6 +196,7 @@ describe("runner jobs", () => {
       claimRunnerJob(claims({ run_id: "556" }), {
         pullRequestNumber: 7,
         headSha: HEAD_SHA,
+        agent: "claude",
       }),
     );
 
@@ -179,9 +205,56 @@ describe("runner jobs", () => {
     );
   });
 
+  it("leaves the job open for the agent the repository reviews with", async () => {
+    await env.DB.prepare(
+      "UPDATE repositories SET review_runner = 'codex_actions' WHERE id = 1",
+    ).run();
+    await issue();
+
+    const claude = await run(
+      claimRunnerJob(claims(), {
+        pullRequestNumber: 7,
+        headSha: HEAD_SHA,
+        agent: "claude",
+      }),
+    );
+
+    expect(Result.isFailure(claude) && claude.failure).toEqual(
+      new RunnerAgentMismatchError({ expected: "codex", claimant: "claude" }),
+    );
+
+    const codex = await run(
+      claimRunnerJob(claims(), {
+        pullRequestNumber: 7,
+        headSha: HEAD_SHA,
+        agent: "codex",
+      }),
+    );
+
+    expect(Result.isSuccess(codex) && codex.success.agent).toBe("codex");
+  });
+
+  it("lets the job's runner finish after the repository goes back to Fletcher", async () => {
+    await issue();
+
+    const claimed = await run(
+      claimRunnerJob(claims(), {
+        pullRequestNumber: 7,
+        headSha: HEAD_SHA,
+        agent: "codex",
+      }),
+    );
+
+    expect(Result.isSuccess(claimed)).toBe(true);
+  });
+
   it("says not ready when no job waits for that commit yet", async () => {
     const result = await run(
-      claimRunnerJob(claims(), { pullRequestNumber: 7, headSha: HEAD_SHA }),
+      claimRunnerJob(claims(), {
+        pullRequestNumber: 7,
+        headSha: HEAD_SHA,
+        agent: "claude",
+      }),
     );
 
     expect(Result.isFailure(result) && result.failure._tag).toBe(
@@ -212,6 +285,7 @@ describe("runner jobs", () => {
       claimRunnerJob(claims(overrides), {
         pullRequestNumber: 7,
         headSha: HEAD_SHA,
+        agent: "claude",
       }),
     );
 
@@ -227,6 +301,7 @@ describe("runner jobs", () => {
       claimRunnerJob(claims({ repository_id: "9999" }), {
         pullRequestNumber: 7,
         headSha: HEAD_SHA,
+        agent: "claude",
       }),
     );
 
@@ -239,10 +314,15 @@ describe("runner jobs", () => {
     const { jobId } = await issue();
 
     await run(
-      claimRunnerJob(claims(), { pullRequestNumber: 7, headSha: HEAD_SHA }),
+      claimRunnerJob(claims(), {
+        pullRequestNumber: 7,
+        headSha: HEAD_SHA,
+        agent: "claude",
+      }),
     );
 
     const report = {
+      agent: "claude",
       outcome: "success",
       structuredOutput: review,
       model: "claude-sonnet-5-5",
@@ -260,6 +340,7 @@ describe("runner jobs", () => {
         instanceId: "review-run-1",
         result: {
           status: "completed",
+          agent: "claude",
           review,
           model: "claude-sonnet-5-5",
           usage: { inputTokens: 1200, outputTokens: 300, totalTokens: 1500 },
@@ -279,11 +360,16 @@ describe("runner jobs", () => {
     const { jobId } = await issue();
 
     await run(
-      claimRunnerJob(claims(), { pullRequestNumber: 7, headSha: HEAD_SHA }),
+      claimRunnerJob(claims(), {
+        pullRequestNumber: 7,
+        headSha: HEAD_SHA,
+        agent: "claude",
+      }),
     );
 
     const otherRun = await run(
       reportRunnerJob(claims({ run_attempt: "2" }), jobId, {
+        agent: "claude",
         outcome: "success",
         structuredOutput: review,
         inputTokens: null,
@@ -293,6 +379,7 @@ describe("runner jobs", () => {
 
     const otherRepository = await run(
       reportRunnerJob(claims({ repository_id: "9999" }), jobId, {
+        agent: "claude",
         outcome: "success",
         structuredOutput: review,
         inputTokens: null,
@@ -317,7 +404,11 @@ describe("runner jobs", () => {
     );
 
     const result = await run(
-      claimRunnerJob(claims(), { pullRequestNumber: 7, headSha: HEAD_SHA }),
+      claimRunnerJob(claims(), {
+        pullRequestNumber: 7,
+        headSha: HEAD_SHA,
+        agent: "claude",
+      }),
     );
 
     expect(Result.isFailure(result) && result.failure._tag).toBe(
@@ -327,11 +418,15 @@ describe("runner jobs", () => {
 
   it("records a runner review at no cost to Fletcher", async () => {
     await Effect.runPromise(
-      persistRunnerReviewFindings(1, {
-        review,
-        model: "claude-sonnet-5-5",
-        usage: { inputTokens: 1200, outputTokens: 300, totalTokens: 1500 },
-      }).pipe(Effect.provide(makeLiveLayer(env.DB))),
+      persistRunnerReviewFindings(
+        1,
+        {
+          review,
+          model: "claude-sonnet-5-5",
+          usage: { inputTokens: 1200, outputTokens: 300, totalTokens: 1500 },
+        },
+        "codex_actions",
+      ).pipe(Effect.provide(makeLiveLayer(env.DB))),
     );
 
     const row = await env.DB.prepare(
@@ -339,7 +434,7 @@ describe("runner jobs", () => {
     ).first();
 
     expect(row).toEqual({
-      provider: "claude_actions",
+      provider: "codex_actions",
       cost_usd_micros: 0,
       verdict: "almost",
     });
@@ -347,25 +442,70 @@ describe("runner jobs", () => {
 });
 
 describe("runnerModelFor", () => {
-  it("offers every Claude model, Opus included", () => {
-    expect(RUNNER_MODELS).toEqual(
+  it("offers every Claude model to Claude Code, Opus included", () => {
+    expect(runnerModels("claude")).toEqual(
       expect.arrayContaining(["claude-opus-5-5", "claude-sonnet-5-5"]),
+    );
+    expect(runnerModels("claude").every((id) => id.startsWith("claude-"))).toBe(
+      true,
+    );
+  });
+
+  it("offers every GPT model to Codex, the plan-excluded ones included", () => {
+    expect(runnerModels("codex")).toEqual(
+      expect.arrayContaining(["gpt-6-astra", "gpt-6.1-sol"]),
+    );
+    expect(runnerModels("codex").every((id) => id.startsWith("gpt-"))).toBe(
+      true,
     );
   });
 
   it("uses the repository's pick, or the default for none or a retired one", () => {
-    expect(runnerModelFor({ runnerModel: "claude-opus-5-5" })).toBe(
+    expect(runnerModelFor("claude", { runnerModel: "claude-opus-5-5" })).toBe(
       "claude-opus-5-5",
     );
-    expect(runnerModelFor({ runnerModel: null })).toBe("claude-sonnet-5-5");
-    expect(runnerModelFor({ runnerModel: "claude-opus-4" })).toBe(
+    expect(runnerModelFor("claude", { runnerModel: null })).toBe(
+      "claude-sonnet-5-5",
+    );
+    expect(runnerModelFor("claude", { runnerModel: "claude-opus-4" })).toBe(
+      "claude-sonnet-5-5",
+    );
+  });
+
+  it("never hands one agent the other vendor's model", () => {
+    expect(runnerModelFor("codex", { runnerModel: "claude-opus-5-5" })).toBe(
+      "gpt-6.1-sol",
+    );
+    expect(runnerModelFor("claude", { runnerModel: "gpt-6.1-sol" })).toBe(
       "claude-sonnet-5-5",
     );
   });
 });
 
 describe("runnerResultOf", () => {
-  const base = { inputTokens: null, outputTokens: null } as const;
+  const base = {
+    agent: "claude",
+    inputTokens: null,
+    outputTokens: null,
+  } as const;
+
+  it("names Codex, and defaults to a GPT model, for Codex reports", () => {
+    expect(
+      runnerResultOf({ ...base, agent: "codex", outcome: "failure" }),
+    ).toMatchObject({ message: "Codex failed on the GitHub Actions runner" });
+    expect(
+      runnerResultOf({
+        ...base,
+        agent: "codex",
+        outcome: "success",
+        structuredOutput: review,
+      }),
+    ).toMatchObject({
+      status: "completed",
+      agent: "codex",
+      model: "gpt-6.1-sol",
+    });
+  });
 
   it("fails the run when the output isn't a review", () => {
     expect(
@@ -598,5 +738,77 @@ describe("runner workflow template", () => {
   it("talks to the Fletcher it was shown on", () => {
     expect(yaml).toContain("FLETCHER_URL: https://fletcher.test");
     expect(yaml).toContain(`workflows/${RUNNER_WORKFLOW_FILE}`);
+  });
+
+  it("claims and reports as Claude Code", () => {
+    expect(yaml).toContain('agent: "claude"}');
+    expect(yaml).toContain(
+      'agent: "claude",\n              outcome: "success"',
+    );
+  });
+
+  it("fails the check when the repository uses the other template", () => {
+    expect(yaml).toContain('if [ "$code" = wrong_agent ]; then');
+  });
+});
+
+describe("Codex runner workflow template", () => {
+  const yaml = codexRunnerWorkflowYaml("https://fletcher.test");
+  const refreshStart = yaml.indexOf("  refresh-codex-sign-in:");
+
+  const reviewJob = yaml.slice(yaml.indexOf("  review:"), refreshStart);
+
+  const refreshJob = yaml.slice(refreshStart);
+
+  it("reviews only pull_request runs, never pull_request_target", () => {
+    expect(yaml).toContain("  pull_request: # never pull_request_target");
+    expect(yaml).not.toMatch(/^\s+pull_request_target:/m);
+    expect(reviewJob).toContain("github.event_name == 'pull_request' &&");
+    expect(reviewJob).toContain(
+      "github.event.pull_request.head.repo.full_name == github.repository",
+    );
+  });
+
+  it("claims and reports as Codex", () => {
+    expect(yaml).toContain('agent: "codex"}');
+    expect(yaml).toContain('agent: "codex",\n              outcome: "success"');
+  });
+
+  it("keeps the sign-in out of reach of the commands Codex runs", () => {
+    expect(reviewJob).toContain("-c default_permissions='\"fletcher\"'");
+    expect(reviewJob).toContain(
+      "-c permissions.fletcher.extends='\":read-only\"'",
+    );
+    expect(reviewJob).toContain(
+      '-c "permissions.fletcher.filesystem={\\"$CODEX_HOME\\"=\\"none\\"}"',
+    );
+    expect(reviewJob).toContain(
+      "-c shell_environment_policy.inherit='\"core\"'",
+    );
+    // A sandbox mode would compete with the permission profile.
+    expect(reviewJob).not.toContain("--sandbox");
+  });
+
+  it("keeps the pull request's AGENTS.md and user config out", () => {
+    expect(reviewJob).toContain("-c project_doc_max_bytes=0");
+    expect(reviewJob).toContain("--ignore-user-config");
+    expect(reviewJob).toContain("--ignore-rules");
+  });
+
+  it("never writes the sign-in back from a pull request run", () => {
+    expect(reviewJob).not.toContain("gh secret set");
+    expect(reviewJob).not.toContain(CODEX_AUTH_WRITE_TOKEN_SECRET);
+    expect(reviewJob.match(/secrets\.CODEX_AUTH_JSON/g)).toHaveLength(1);
+    expect(reviewJob.match(/secrets\.CODEX_ACCESS_TOKEN/g)).toHaveLength(1);
+  });
+
+  it("refreshes the sign-in on a schedule, without checking out any code", () => {
+    expect(yaml).toContain("  schedule:");
+    expect(refreshJob).toContain("if: github.event_name != 'pull_request'");
+    expect(refreshJob).not.toContain("actions/checkout");
+    expect(refreshJob).toContain("permissions: {}");
+    expect(refreshJob).toContain(
+      'gh secret set CODEX_AUTH_JSON --repo "$REPOSITORY"',
+    );
   });
 });

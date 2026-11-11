@@ -857,7 +857,10 @@ describe("buildSystemPrompt", () => {
 
 describe("buildRunnerSystemPrompt", () => {
   it("adds the investigation procedure to the production prompt", () => {
-    const prompt = buildRunnerSystemPrompt("carnegie", "ruthless", 40);
+    const prompt = buildRunnerSystemPrompt("carnegie", "ruthless", {
+      agent: "claude",
+      maxTurns: 40,
+    });
 
     expect(prompt.startsWith(buildSystemPrompt("carnegie", "ruthless"))).toBe(
       true,
@@ -867,10 +870,28 @@ describe("buildRunnerSystemPrompt", () => {
   });
 
   it("tells the model its turn cap and when to stop investigating", () => {
-    const prompt = buildRunnerSystemPrompt("studio_band", "standard", 40);
+    const prompt = buildRunnerSystemPrompt("studio_band", "standard", {
+      agent: "claude",
+      maxTurns: 40,
+    });
 
     expect(prompt).toContain("cut off at 40 turns");
     expect(prompt).toContain("Stop investigating by turn 30");
+    expect(prompt).toContain("you have Read, Grep and Glob");
+  });
+
+  it("gives Codex its shell, a time limit, and a way to number lines", () => {
+    const prompt = buildRunnerSystemPrompt("studio_band", "standard", {
+      agent: "codex",
+      minutes: 20,
+    });
+
+    expect(prompt).toContain("read-only shell commands");
+    expect(prompt).toContain("cut off after 20 minutes");
+    expect(prompt).toContain("Stop investigating after about 15 minutes");
+    expect(prompt).toContain("nl -ba <path>");
+    expect(prompt).toContain("Never print or quote credentials");
+    expect(prompt).not.toContain("Read, Grep and Glob");
   });
 });
 

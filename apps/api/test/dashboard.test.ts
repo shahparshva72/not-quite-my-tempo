@@ -101,10 +101,10 @@ describe("dashboard", () => {
     expect(termsBody).toContain("Terms of Service");
 
     // Fletcher calls only Gemini (ENABLED_VENDORS), and a repository's own
-    // runner uses Claude: name no other AI provider.
+    // runner uses Claude or Codex: both are named as the user's providers.
     for (const body of [privacyBody, termsBody]) {
       expect(body).toContain("Anthropic");
-      expect(body).not.toContain("OpenAI");
+      expect(body).toContain("OpenAI");
     }
   });
 

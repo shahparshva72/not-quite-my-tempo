@@ -16,7 +16,8 @@ import {
   workspaceActionAllowed,
 } from "../application/authorization.js";
 import { hasOpenSubscription, hasPaidPlan } from "../application/billing.js";
-import { RUNNER_MODELS } from "../application/runner-jobs.js";
+import { RUNNER_AGENTS, runnerModels } from "../application/runner-jobs.js";
+import type { RunnerAgent } from "../application/runner-jobs.js";
 import { trialStatus } from "../application/workspace-settings.js";
 import type { TrialStatus } from "../application/workspace-settings.js";
 import type { PlanPrice } from "../billing/polar-client.js";
@@ -1379,7 +1380,40 @@ const reviewRunnerChoices = [
     "claude_actions",
     "Your Claude subscription, in this repository's GitHub Actions",
   ],
+  [
+    "codex_actions",
+    "Your ChatGPT plan with Codex, in this repository's GitHub Actions",
+  ],
 ] as const;
+
+// One picker per agent, so switching runners never submits the other
+// vendor's model. Each shows the repository's pick only when it is one of
+// that agent's models.
+const runnerModelSelect = (
+  repository: GitHubRepository,
+  agent: RunnerAgent,
+  label: string,
+) => {
+  const models = runnerModels(agent);
+
+  const picked =
+    repository.runnerModel !== null && models.includes(repository.runnerModel)
+      ? repository.runnerModel
+      : null;
+
+  return html`<label for="runner-model-${agent}">${label}</label>
+    <select id="runner-model-${agent}" name="${agent}Model">
+      <option value="" ${picked === null ? "selected" : ""}>
+        Default (${DEFAULT_MODELS[RUNNER_AGENTS[agent].vendor]})
+      </option>
+      ${models.map(
+        (model) =>
+          html`<option value="${model}" ${model === picked ? "selected" : ""}>
+            ${model}
+          </option>`,
+      )}
+    </select>`;
+};
 
 /** Where one repository's reviews run; only admins and owners can change it. */
 const reviewRunnerCard = (repository: GitHubRepository, canChange: boolean) => {
@@ -1407,31 +1441,17 @@ const reviewRunnerCard = (repository: GitHubRepository, canChange: boolean) => {
                     </option>`,
                 )}
               </select>
-              <label for="runner-model">Claude model</label>
-              <select id="runner-model" name="model">
-                <option
-                  value=""
-                  ${repository.runnerModel === null ? "selected" : ""}
-                >
-                  Default (${DEFAULT_MODELS.anthropic})
-                </option>
-                ${RUNNER_MODELS.map(
-                  (model) =>
-                    html`<option
-                      value="${model}"
-                      ${model === repository.runnerModel ? "selected" : ""}
-                    >
-                      ${model}
-                    </option>`,
-                )}
-              </select>
+              ${runnerModelSelect(repository, "claude", "Claude model")}
+              ${runnerModelSelect(repository, "codex", "GPT model (Codex)")}
               <p class="fine">
-                With your Claude subscription, the repository's
+                With a subscription, the repository's
                 <code>.github/workflows/fletcher-review.yml</code> runs Claude
-                Code on its <code>CLAUDE_CODE_OAUTH_TOKEN</code> secret and
-                sends Fletcher the review. Fletcher never sees the token, and
-                these reviews use no credits. See
-                <a href="/docs#claude-subscription">the setup steps</a>.
+                Code or Codex on the repository's own secret and sends Fletcher
+                the review. Fletcher never sees the secret, and these reviews
+                use no credits. The model applies to the runner you pick. See
+                the setup steps for
+                <a href="/docs#claude-subscription">Claude</a> and
+                <a href="/docs#chatgpt-subscription">ChatGPT</a>.
               </p>
               <button class="btn btn-secondary" type="submit">Save</button>
             </form>`
