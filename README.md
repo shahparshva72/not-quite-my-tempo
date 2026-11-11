@@ -291,28 +291,47 @@ since this was added show only their number until their next event.
 ### Reviews on the repository's own runner
 
 A repository whose dashboard setting **Where reviews run** is "Your Claude
-subscription" (`repositories.review_runner = 'claude_actions'`) reviews in
-its own GitHub Actions instead. Fletcher never calls a model or holds a
-Claude credential for these reviews. After loading prior findings, the
-Workflow issues a `runner_jobs` row and waits up to 30 minutes for the
+subscription" (`repositories.review_runner = 'claude_actions'`) or "Your
+ChatGPT plan with Codex" (`'codex_actions'`) reviews in its own GitHub
+Actions instead. Fletcher never calls a model or holds a Claude or ChatGPT
+credential for these reviews. After loading prior findings, the Workflow
+issues a `runner_jobs` row and waits up to 30 minutes for the
 `runner-result` event. The repository's `.github/workflows/fletcher-review.yml`
-(the template is on `/docs#claude-subscription`) then makes two calls:
+(templates on `/docs#claude-subscription` and `/docs#chatgpt-subscription`)
+then makes two calls:
 
-- `POST /runner/v1/claim` with `{ pullRequestNumber, headSha }` returns the
-  production system prompt, the pull request prompt, the review JSON schema
-  and the model.
-- `POST /runner/v1/jobs/:id/result` sends Claude Code's `structured_output`
-  and resumes the Workflow, which persists and posts the review as usual,
-  with `provider = 'claude_actions'` and zero cost and credits.
+- `POST /runner/v1/claim` with `{ pullRequestNumber, headSha, agent }`
+  returns the production system prompt, the pull request prompt, the review
+  JSON schema, the model and its effort. `agent` is `claude` or `codex`
+  (`claude` when missing, as in workflows committed before Codex). A claim
+  from the other agent's template gets `409 wrong_agent` and leaves the job
+  open.
+- `POST /runner/v1/jobs/:id/result` sends the agent's structured output and
+  resumes the Workflow, which persists and posts the review as usual, with
+  `provider` set to the runner (`claude_actions` or `codex_actions`) and
+  zero cost and credits.
 
-The runner review is agentic: Claude Code has `Read`, `Grep` and `Glob` on
-a checkout of the head commit, and the runner system prompt
-(`buildRunnerSystemPrompt`) has it read each changed file in place, follow
-changed symbols to their callers and tests, and try to refute every
-candidate finding against the code before reporting it. The claim's prompt
-therefore carries the diff, guidelines (from the default branch) and
-manifests, but not the changed files. The turn cap (`RUNNER_MAX_TURNS`, 40)
-comes from the claim, so a committed workflow file picks up changes to it.
+The runner review is agentic: Claude Code has `Read`, `Grep` and `Glob`, and
+Codex read-only shell commands, on a checkout of the head commit. The runner
+system prompt (`buildRunnerSystemPrompt`) has the agent read each changed
+file in place, follow changed symbols to their callers and tests, and try to
+refute every candidate finding against the code before reporting it. The
+claim's prompt therefore carries the diff, guidelines (from the default
+branch) and manifests, but not the changed files. Claude Code stops at a
+turn cap (`RUNNER_MAX_TURNS`, 40) that comes from the claim, so a committed
+workflow file picks up changes to it. Codex has no turn cap, so its step
+has a time limit (`CODEX_REVIEW_MINUTES`, 20) that the prompt names.
+
+The Codex template runs `codex exec` under a permission profile that
+extends `:read-only` and denies reading its own `CODEX_HOME`, with only the
+core environment and without the pull request's `AGENTS.md`. It signs in
+with `CODEX_ACCESS_TOKEN` (ChatGPT Business and Enterprise) or
+`CODEX_AUTH_JSON` (Plus and Pro). Codex rotates an `auth.json` session about
+every 8 days and the old refresh token then fails, so review jobs never
+rotate it: the template's scheduled `refresh-codex-sign-in` job forces a
+rotation every 3 days and writes the new file back with
+`CODEX_AUTH_WRITE_TOKEN`, a fine-grained token for that repository's
+secrets.
 
 Both calls authenticate with the job's GitHub Actions OIDC token (audience
 `RUNNER_OIDC_AUDIENCE`, default `fletcher`). Only a `pull_request` run of

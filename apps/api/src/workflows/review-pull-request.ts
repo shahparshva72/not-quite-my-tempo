@@ -52,6 +52,7 @@ import {
   expireRunnerJob,
   issueRunnerJob,
   repositoryReviewRunner,
+  RUNNER_AGENTS,
   RUNNER_RESULT_EVENT,
   RUNNER_WAIT_TIMEOUT,
   RunnerResult,
@@ -328,7 +329,8 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
       };
 
       // The repository's own GitHub Actions reviews on its owner's Claude
-      // subscription (runner-jobs.ts); no key, credits, or trial involved.
+      // or ChatGPT subscription (runner-jobs.ts); no key, credits, or trial
+      // involved.
       const reviewOnRunner = (pullRequest: ReviewablePullRequest) =>
         Effect.gen(function* () {
           const { jobId } = yield* runStep(
@@ -361,11 +363,14 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           }
 
           const reviewResult = runnerReviewResult(result, pullRequest);
+          // The agent that actually reviewed, which a repository switched
+          // mid-review can differ from its setting.
+          const runner = RUNNER_AGENTS[result.agent].runner;
 
           const persisted = yield* runStep(
             step,
             "persist findings",
-            persistRunnerReviewFindings(reviewRunId, reviewResult).pipe(
+            persistRunnerReviewFindings(reviewRunId, reviewResult, runner).pipe(
               Effect.provide(databaseLayer),
             ),
           );
@@ -398,7 +403,7 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
 
           yield* logInfo("review_workflow_completed", {
             ...fields,
-            runner: "claude_actions",
+            runner,
             verdict: reviewResult.review.verdict,
             findingCount: persisted.findingCount,
             model: reviewResult.model,
@@ -460,7 +465,7 @@ export class ReviewPullRequestWorkflow extends WorkflowEntrypoint<
           ),
         );
 
-        if (reviewRunner === "claude_actions") {
+        if (reviewRunner !== "fletcher") {
           return yield* reviewOnRunner(pullRequest);
         }
 

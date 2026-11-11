@@ -219,7 +219,10 @@ const buildBundle = Effect.gen(function* () {
 // Fletcher's system prompt, appended to Claude Code's own so its tool
 // guidance stays; the same one the claim endpoint hands a runner.
 const systemPrompt = (input: GeminiReviewInput) =>
-  buildRunnerSystemPrompt(input.intensity, input.tone, maxTurns);
+  buildRunnerSystemPrompt(input.intensity, input.tone, {
+    agent: "claude",
+    maxTurns,
+  });
 
 const checkout = (headSha: string) => {
   if (!existsSync(join(workdir, ".git"))) {

@@ -2,7 +2,11 @@ import { html } from "hono/html";
 
 import { DAILY_REVIEW_RUN_CAP } from "../application/review-requests.js";
 import { layout } from "./components.js";
-import { runnerWorkflowYaml } from "./runner-workflow.js";
+import {
+  CODEX_AUTH_WRITE_TOKEN_SECRET,
+  codexRunnerWorkflowYaml,
+  runnerWorkflowYaml,
+} from "./runner-workflow.js";
 
 // Every claim here mirrors code: the schema in
 // packages/core/src/review-config.ts, the glob rules and built-in ignores in
@@ -76,6 +80,9 @@ export const docsPage = (login: string | null) =>
             <a href="#claude-subscription"
               >Reviews on your Claude subscription</a
             >
+          </li>
+          <li>
+            <a href="#chatgpt-subscription">Reviews on your ChatGPT plan</a>
           </li>
           <li><a href="#gotchas">Things that catch people out</a></li>
         </ul>
@@ -386,6 +393,76 @@ export const docsPage = (login: string | null) =>
           <strong>Each review takes about a minute of Actions time.</strong>
           If the workflow doesn't report back within 30 minutes, the review
           fails and the dashboard says why.
+        </li>
+      </ul>
+
+      <h2 id="chatgpt-subscription">Reviews on your ChatGPT plan</h2>
+      <p>
+        A repository can review with GPT models on your ChatGPT plan instead of
+        a review key or plan credits. Its GitHub Actions run Codex, OpenAI's
+        official CLI, signed in as you, and send Fletcher the review to post.
+        Fletcher never sees your sign-in, and these reviews use no credits.
+      </p>
+      <ol>
+        <li>
+          On the repository's page in the dashboard, set
+          <strong>Where reviews run</strong> to your ChatGPT plan, and pick a
+          GPT model if you want another than the default.
+        </li>
+        <li>
+          Give the repository one way to sign in:
+          <ul>
+            <li>
+              <strong>ChatGPT Business or Enterprise:</strong> create a Codex
+              access token in Codex's settings (your workspace admin has to
+              allow them) and save it:
+              <code>gh secret set CODEX_ACCESS_TOKEN --repo owner/name</code>.
+            </li>
+            <li>
+              <strong>ChatGPT Plus or Pro:</strong> on your machine, set
+              <code>cli_auth_credentials_store = "file"</code> in
+              <code>~/.codex/config.toml</code>, run <code>codex login</code>,
+              then save the file it writes:
+              <code
+                >gh secret set CODEX_AUTH_JSON --repo owner/name &lt;
+                ~/.codex/auth.json</code
+              >. Codex rotates this sign-in about every 8 days, so the workflow
+              refreshes it every 3 days and saves the new copy. That needs a
+              fine-grained personal access token for this repository alone with
+              <strong>Secrets: read and write</strong>, saved as
+              <code>${CODEX_AUTH_WRITE_TOKEN_SECRET}</code>. Then run
+              <code>codex logout</code> on your machine, or keep using a
+              different sign-in there: two copies of one sign-in rotate each
+              other out.
+            </li>
+          </ul>
+        </li>
+        <li>
+          Commit this workflow to the default branch, under exactly this name.
+          It replaces the Claude one; a repository has one or the other.
+        </li>
+      </ol>
+      ${codeBlock(codexRunnerWorkflowYaml())}
+      <ul>
+        <li>
+          <strong>Only for private repositories.</strong> OpenAI asks that a
+          ChatGPT sign-in not be used for public or open-source repositories.
+          Pull requests from forks aren't reviewed either way.
+        </li>
+        <li>
+          <strong>Codex can read the checkout, not your sign-in.</strong> It
+          runs read-only, its sign-in folder is unreadable to the commands it
+          runs, and the pull request's own <code>AGENTS.md</code> isn't loaded.
+        </li>
+        <li>
+          <strong>If reviews start failing to sign in,</strong> the stored
+          sign-in was rotated somewhere else. Run <code>codex login</code> and
+          save <code>CODEX_AUTH_JSON</code> again.
+        </li>
+        <li>
+          <strong>The plan is one person's.</strong> Reviews count toward your
+          Codex usage limits. If the workflow doesn't report back within 30
+          minutes, the review fails and the dashboard says why.
         </li>
       </ul>
 

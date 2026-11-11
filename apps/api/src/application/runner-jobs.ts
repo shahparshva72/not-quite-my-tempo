@@ -16,9 +16,15 @@ import {
   MODEL_CATALOG,
   filterReviewBySeverity,
   GeminiReview,
+  reviewEffort,
   reviewJsonSchema,
 } from "@not-quite-my-tempo/reviewer";
-import type { ReviewResult } from "@not-quite-my-tempo/reviewer";
+import type {
+  ModelVendor,
+  ReviewEffort,
+  ReviewResult,
+  RunnerBudget,
+} from "@not-quite-my-tempo/reviewer";
 
 import type { ActionsOidcClaims } from "../github/actions-oidc.js";
 import { ReviewRequest } from "../github/review-request.js";
@@ -33,12 +39,12 @@ import type { ReviewablePullRequest } from "./review-workflow.js";
 
 /**
  * Reviews that run in the repository's own GitHub Actions, on the owner's
- * Claude subscription. The review Workflow issues a job and waits for
- * {@link RUNNER_RESULT_EVENT}. The repository's `fletcher-review.yml`
- * claims the job, getting the review prompt; runs Claude Code on its own
- * `CLAUDE_CODE_OAUTH_TOKEN` secret, which Fletcher never sees; and reports
- * the result, which resumes the Workflow. Both calls authenticate with the
- * job's GitHub Actions OIDC token.
+ * Claude or ChatGPT subscription. The review Workflow issues a job and
+ * waits for {@link RUNNER_RESULT_EVENT}. The repository's
+ * `fletcher-review.yml` claims the job, getting the review prompt; runs
+ * Claude Code or Codex on its own secret, which Fletcher never sees; and
+ * reports the result, which resumes the Workflow. Both calls authenticate
+ * with the job's GitHub Actions OIDC token.
  */
 
 export const RUNNER_RESULT_EVENT = "runner-result";
@@ -56,23 +62,66 @@ export const RUNNER_WORKFLOW_FILE = "fletcher-review.yml";
 /** The OIDC audience runners request unless RUNNER_OIDC_AUDIENCE is set. */
 export const RUNNER_OIDC_AUDIENCE = "fletcher";
 
-/**
- * The Claude models a repository can pick for runner reviews: every Claude
- * model in the catalog. The plan tiers don't apply, since these reviews run
- * on the owner's subscription, so Opus is offered here too.
- */
-export const RUNNER_MODELS: readonly string[] = MODEL_CATALOG.filter(
-  (model) => model.vendor === "anthropic",
-).map((model) => model.id);
+/** The coding agents a repository's runner can review with. */
+export const RunnerAgent = Schema.Literals(["claude", "codex"]);
 
-/** The model a repository's runner reviews with. */
+export type RunnerAgent = typeof RunnerAgent.Type;
+
+/** A runner other than Fletcher itself. */
+export type ActionsReviewRunner = Exclude<RepositoryReviewRunner, "fletcher">;
+
+interface RunnerAgentInfo {
+  readonly runner: ActionsReviewRunner;
+  readonly vendor: ModelVendor;
+  /** The agent's name in messages: "Claude Code produced no review". */
+  readonly name: string;
+}
+
+export const RUNNER_AGENTS: Readonly<Record<RunnerAgent, RunnerAgentInfo>> = {
+  claude: {
+    runner: "claude_actions",
+    vendor: "anthropic",
+    name: "Claude Code",
+  },
+  codex: { runner: "codex_actions", vendor: "openai", name: "Codex" },
+};
+
+const AGENT_OF_RUNNER: Readonly<
+  Record<RepositoryReviewRunner, RunnerAgent | null>
+> = {
+  fletcher: null,
+  claude_actions: "claude",
+  codex_actions: "codex",
+};
+
+/** The agent a runner setting reviews with; none for Fletcher. */
+export const runnerAgentOf = (
+  runner: RepositoryReviewRunner,
+): RunnerAgent | null => AGENT_OF_RUNNER[runner];
+
+/**
+ * The models a repository can pick for an agent's runner reviews: every
+ * catalog model of the agent's vendor. The plan tiers don't apply, since
+ * these reviews run on the owner's subscription, so Opus and the excluded
+ * GPT models are offered here too.
+ */
+export const runnerModels = (agent: RunnerAgent): readonly string[] =>
+  MODEL_CATALOG.filter(
+    (model) => model.vendor === RUNNER_AGENTS[agent].vendor,
+  ).map((model) => model.id);
+
+/**
+ * The model an agent reviews the repository with: its pick when that is
+ * one of the agent's models, else the vendor's default.
+ */
 export const runnerModelFor = (
+  agent: RunnerAgent,
   repository: Pick<GitHubRepository, "runnerModel">,
 ) =>
   repository.runnerModel !== null &&
-  RUNNER_MODELS.includes(repository.runnerModel)
+  runnerModels(agent).includes(repository.runnerModel)
     ? repository.runnerModel
-    : DEFAULT_MODELS.anthropic;
+    : DEFAULT_MODELS[RUNNER_AGENTS[agent].vendor];
 
 /**
  * Claude Code's turn cap on the runner: room to read the changed files,
@@ -80,6 +129,18 @@ export const runnerModelFor = (
  * system prompt tells the model the cap (buildRunnerSystemPrompt).
  */
 export const RUNNER_MAX_TURNS = 40;
+
+/**
+ * Codex has no turn cap, so the workflow's Codex step has this time limit
+ * instead, which the system prompt tells the model. It leaves the job
+ * (25 minutes) room to report, well inside the Workflow's wait.
+ */
+export const CODEX_REVIEW_MINUTES = 20;
+
+const runnerBudget = (agent: RunnerAgent): RunnerBudget =>
+  agent === "claude"
+    ? { agent, maxTurns: RUNNER_MAX_TURNS }
+    : { agent, minutes: CODEX_REVIEW_MINUTES };
 
 // What is stored on the run when a runner review doesn't produce one.
 export const RunnerFailureCode = Schema.Literals([
@@ -100,6 +161,10 @@ const RunnerUsage = Schema.Struct({
 export const RunnerResult = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("completed"),
+    // Results delivered before Codex was offered carry no agent.
+    agent: RunnerAgent.pipe(
+      Schema.withDecodingDefault(Effect.succeed("claude" as const)),
+    ),
     review: GeminiReview,
     model: Schema.String,
     usage: RunnerUsage,
@@ -113,6 +178,11 @@ export const RunnerResult = Schema.Union([
 
 export type RunnerResult = typeof RunnerResult.Type;
 
+// Workflows committed before Codex was offered don't name their agent.
+const ClaimingAgent = RunnerAgent.pipe(
+  Schema.withDecodingDefault(Effect.succeed("claude" as const)),
+);
+
 /** The body of POST /runner/v1/claim. */
 export const RunnerClaimRequest = Schema.Struct({
   pullRequestNumber: Schema.Number.check(
@@ -120,6 +190,7 @@ export const RunnerClaimRequest = Schema.Struct({
     Schema.isGreaterThan(0),
   ),
   headSha: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)),
+  agent: ClaimingAgent,
 });
 
 export type RunnerClaimRequest = typeof RunnerClaimRequest.Type;
@@ -130,8 +201,9 @@ const ReportedTokens = Schema.NullOr(
 
 /** The body of POST /runner/v1/jobs/:id/result. */
 export const RunnerReport = Schema.Struct({
+  agent: ClaimingAgent,
   outcome: Schema.Literals(["success", "failure", "cancelled"]),
-  // Claude Code's structured_output; decoded here, not trusted.
+  // The agent's structured output; decoded here, not trusted.
   structuredOutput: Schema.optional(Schema.Unknown),
   model: Schema.optional(Schema.String.check(Schema.isMaxLength(100))),
   inputTokens: ReportedTokens,
@@ -158,6 +230,17 @@ export class RunnerJobNotReadyError extends Data.TaggedError(
 export class RunnerJobNotFoundError extends Data.TaggedError(
   "RunnerJobNotFoundError",
 ) {}
+
+/**
+ * The repository reviews with another agent than the workflow that tried
+ * to claim: its workflow file is the other template.
+ */
+export class RunnerAgentMismatchError extends Data.TaggedError(
+  "RunnerAgentMismatchError",
+)<{
+  readonly expected: RunnerAgent;
+  readonly claimant: RunnerAgent;
+}> {}
 
 /** Another run claimed the job, or it already finished or expired. */
 export class RunnerJobUnavailableError extends Data.TaggedError(
@@ -337,6 +420,21 @@ export const claimRunnerJob = (
       return yield* new RunnerJobNotReadyError();
     }
 
+    // Checked before claiming, so the wrong template leaves the job open
+    // and the Actions log says which secret and template the repository
+    // needs. A repository switched back to Fletcher after the job was
+    // issued still lets the job's runner finish it.
+    const expected = runnerAgentOf(
+      yield* repositoryReviewRunner(open.value.reviewRunId),
+    );
+
+    if (expected !== null && expected !== body.agent) {
+      return yield* new RunnerAgentMismatchError({
+        expected,
+        claimant: body.agent,
+      });
+    }
+
     const claimed = yield* RunnerJobRepository.use((store) =>
       store.claim(open.value.id, claimant(claims), now),
     );
@@ -349,13 +447,17 @@ export const claimRunnerJob = (
       Schema.fromJsonString(ReviewRequest),
     )(claimed.value.request).pipe(Effect.orDie);
 
-    return { job: claimed.value, request };
+    return { job: claimed.value, request, agent: body.agent };
   });
 
 /** What the runner needs to review: the production prompt, split in two. */
 export interface RunnerBundle {
   readonly jobId: string;
+  readonly agent: RunnerAgent;
   readonly model: string;
+  /** Codex's reasoning effort; Claude Code's workflow ignores it. */
+  readonly effort: ReviewEffort;
+  /** Claude Code's turn cap; Codex's workflow uses a time limit instead. */
   readonly maxTurns: number;
   readonly systemPrompt: string;
   readonly prompt: string;
@@ -366,12 +468,13 @@ export interface RunnerBundle {
  * Builds the review prompt for a claimed job, the way the Workflow builds
  * it for a model call: the repository's .fletcher.json (or the dashboard
  * tone), its filtered diff, its guidelines and manifests, and the prior
- * review. The changed files are left for Claude Code to read.
+ * review. The changed files are left for the agent to read.
  */
 export const buildRunnerBundle = (
   installationToken: string,
   job: RunnerJob,
   request: ReviewRequest,
+  agent: RunnerAgent,
 ) =>
   Effect.gen(function* () {
     const run = yield* requireReviewRun(
@@ -383,9 +486,11 @@ export const buildRunnerBundle = (
       store.findById(run.repositoryId),
     );
 
-    const model = Option.match(repository, {
-      onNone: () => DEFAULT_MODELS.anthropic,
-      onSome: runnerModelFor,
+    const model = runnerModelFor(agent, {
+      runnerModel: Option.match(repository, {
+        onNone: () => null,
+        onSome: (found) => found.runnerModel,
+      }),
     });
 
     const toneOverride = Option.match(repository, {
@@ -413,7 +518,7 @@ export const buildRunnerBundle = (
       headSha: pullRequest.details.headSha,
       diff: pullRequest.diff,
       guidelines: pullRequest.config.guidelines ?? null,
-      // Claude Code reads the changed files from its checkout, where they
+      // The agent reads the changed files from its checkout, where they
       // carry line numbers; repeating them here only invites it not to.
       includeChangedFiles: false,
     });
@@ -422,12 +527,14 @@ export const buildRunnerBundle = (
 
     const bundle: RunnerBundle = {
       jobId: job.id,
+      agent,
       model,
+      effort: reviewEffort(model),
       maxTurns: RUNNER_MAX_TURNS,
       systemPrompt: buildRunnerSystemPrompt(
         pullRequest.config.intensity,
         tone,
-        RUNNER_MAX_TURNS,
+        runnerBudget(agent),
       ),
       prompt: buildReviewUserPrompt({
         repository: `${request.owner}/${request.repo}`,
@@ -454,6 +561,8 @@ const failed = (code: RunnerFailureCode, message: string): RunnerResult => ({
 
 /** What the runner's report means for the run. */
 export const runnerResultOf = (report: RunnerReport): RunnerResult => {
+  const { name, vendor } = RUNNER_AGENTS[report.agent];
+
   if (report.outcome === "cancelled") {
     return failed("runner_cancelled", "The GitHub Actions run was cancelled");
   }
@@ -461,7 +570,7 @@ export const runnerResultOf = (report: RunnerReport): RunnerResult => {
   if (report.outcome === "failure") {
     return failed(
       "runner_failed",
-      report.message ?? "Claude Code failed on the GitHub Actions runner",
+      report.message ?? `${name} failed on the GitHub Actions runner`,
     );
   }
 
@@ -471,12 +580,13 @@ export const runnerResultOf = (report: RunnerReport): RunnerResult => {
       onNone: () =>
         failed(
           "runner_output_invalid",
-          "Claude Code's output wasn't a valid review",
+          `${name}'s output wasn't a valid review`,
         ),
       onSome: (review): RunnerResult => ({
         status: "completed",
+        agent: report.agent,
         review,
-        model: report.model ?? DEFAULT_MODELS.anthropic,
+        model: report.model ?? DEFAULT_MODELS[vendor],
         usage: {
           inputTokens: report.inputTokens,
           outputTokens: report.outputTokens,
