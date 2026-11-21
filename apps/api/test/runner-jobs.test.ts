@@ -795,6 +795,36 @@ describe("Codex runner workflow template", () => {
     expect(reviewJob).toContain("--ignore-rules");
   });
 
+  it("keeps the secrets out of the step that runs Codex", () => {
+    const codexStep = reviewJob.slice(
+      reviewJob.indexOf("- name: Review with Codex"),
+      reviewJob.indexOf("- name: Send the review to Fletcher"),
+    );
+
+    const signinStep = reviewJob.slice(
+      reviewJob.indexOf("- name: Sign in to Codex"),
+      reviewJob.indexOf("- name: Review with Codex"),
+    );
+
+    expect(codexStep).not.toContain("secrets.");
+    expect(codexStep).not.toContain("npm install");
+    expect(signinStep).toContain("secrets.CODEX_AUTH_JSON");
+    expect(signinStep).toContain("secrets.CODEX_ACCESS_TOKEN");
+  });
+
+  it("reports a failed sign-in and survives unreadable usage", () => {
+    expect(reviewJob).toContain("SIGNIN: ${{ steps.signin.outcome }}");
+    expect(reviewJob).toContain("Codex couldn't sign in");
+    expect(reviewJob).toContain("|| usage='{}'");
+  });
+
+  it("checks the write token before rotating the sign-in", () => {
+    const check = refreshJob.indexOf("actions/secrets/public-key");
+
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(refreshJob.indexOf(".last_refresh = "));
+  });
+
   it("never writes the sign-in back from a pull request run", () => {
     expect(reviewJob).not.toContain("gh secret set");
     expect(reviewJob).not.toContain(CODEX_AUTH_WRITE_TOKEN_SECRET);

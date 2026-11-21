@@ -1448,9 +1448,9 @@ const reviewRunnerCard = (repository: GitHubRepository, canChange: boolean) => {
                 <code>.github/workflows/fletcher-review.yml</code> runs Claude
                 Code or Codex on the repository's own secret and sends Fletcher
                 the review. Fletcher never sees the secret, and these reviews
-                use no credits. The model applies to the runner you pick. See
-                the setup steps for
-                <a href="/docs#claude-subscription">Claude</a> and
+                use no credits. The model applies to the runner you pick.
+                Switching runners drops the other runner's pick. See the setup
+                steps for <a href="/docs#claude-subscription">Claude</a> and
                 <a href="/docs#chatgpt-subscription">ChatGPT</a>.
               </p>
               <button class="btn btn-secondary" type="submit">Save</button>

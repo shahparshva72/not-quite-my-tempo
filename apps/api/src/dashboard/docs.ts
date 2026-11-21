@@ -430,7 +430,9 @@ export const docsPage = (login: string | null) =>
               refreshes it every 3 days and saves the new copy. That needs a
               fine-grained personal access token for this repository alone with
               <strong>Secrets: read and write</strong>, saved as
-              <code>${CODEX_AUTH_WRITE_TOKEN_SECRET}</code>. Then run
+              <code>${CODEX_AUTH_WRITE_TOKEN_SECRET}</code>. Renew that token
+              before it expires: the refresh stops, with an error in the Actions
+              log, when it can no longer save. Then run
               <code>codex logout</code> on your machine, or keep using a
               different sign-in there: two copies of one sign-in rotate each
               other out.
@@ -463,6 +465,17 @@ export const docsPage = (login: string | null) =>
           <strong>The plan is one person's.</strong> Reviews count toward your
           Codex usage limits. If the workflow doesn't report back within 30
           minutes, the review fails and the dashboard says why.
+        </li>
+        <li>
+          <strong>
+            Anyone who can push a branch can read the repository's secrets,
+          </strong>
+          by editing the workflow in a pull request. On GitHub Pro, Team or
+          Enterprise you can keep the write token out of reach: create an
+          environment limited to the default branch, save
+          <code>${CODEX_AUTH_WRITE_TOKEN_SECRET}</code> there instead, and add
+          <code>environment: its-name</code> to the
+          <code>refresh-codex-sign-in</code> job.
         </li>
       </ul>
 

@@ -280,8 +280,8 @@ const investigationShare = (budget: number) =>
 const toolsLine = (budget: RunnerBudget) =>
   budget.agent === "claude"
     ? "and you have Read, Grep and Glob."
-    : `and you can run read-only shell commands in it (rg, nl, sed, git
-log, git show). The sandbox can't write or reach the network.`;
+    : `and you can run read-only shell commands in it (rg, nl, sed). The
+sandbox can't write or reach the network.`;
 
 const lineNumbersRule = (budget: RunnerBudget) =>
   budget.agent === "claude"

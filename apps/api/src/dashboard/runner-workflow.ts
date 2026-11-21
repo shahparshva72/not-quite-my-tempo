@@ -25,7 +25,8 @@ import { SITE_URL } from "./components.js";
 // of the prompt; its .codex/config.toml doesn't load in an untrusted
 // checkout. Each was checked against the pinned version. It signs in with
 // a Codex access token (ChatGPT Business and Enterprise) or with the
-// auth.json `codex login` writes (Plus and Pro). Codex rotates an auth.json
+// auth.json `codex login` writes (Plus and Pro), in a step of its own so
+// the review step's environment never holds it. Codex rotates an auth.json
 // session about every 8 days and the old refresh token then stops working,
 // so the review job never rotates it: a scheduled job in the same file
 // refreshes it ahead of time and writes it back to the repository secret.
@@ -196,9 +197,10 @@ ${sendReport}
 
 // Codex reads its sign-in from $CODEX_HOME/auth.json. Both review and
 // refresh jobs keep CODEX_HOME under RUNNER_TEMP, away from the checkout.
-const codexInstall = `          export CODEX_HOME="$RUNNER_TEMP/codex-home"
-          mkdir -p "$CODEX_HOME" && chmod 700 "$CODEX_HOME"
-          npm install --global --loglevel=error @openai/codex@${RUNNER_CODEX_VERSION}`;
+const codexHome = `          export CODEX_HOME="$RUNNER_TEMP/codex-home"
+          mkdir -p "$CODEX_HOME" && chmod 700 "$CODEX_HOME"`;
+
+const codexInstall = `          npm install --global --loglevel=error @openai/codex@${RUNNER_CODEX_VERSION}`;
 
 export const codexRunnerWorkflowYaml = (
   origin: string = SITE_URL,
@@ -227,17 +229,15 @@ ${checkoutStep}
 
 ${claimStep("codex")}
 
-      - name: Review with Codex
-        id: codex
+      # Its own step, so the step that runs Codex never holds the secrets.
+      - name: Sign in to Codex
+        id: signin
         if: steps.claim.outputs.job_id != ''
-        timeout-minutes: ${CODEX_REVIEW_MINUTES}
         env:
           CODEX_ACCESS_TOKEN_SECRET: \${{ secrets.CODEX_ACCESS_TOKEN }}
           CODEX_AUTH_JSON: \${{ secrets.CODEX_AUTH_JSON }}
-          MODEL: \${{ steps.claim.outputs.model }}
-          EFFORT: \${{ steps.claim.outputs.effort }}
         run: |
-          dir="$RUNNER_TEMP/fletcher"
+${codexHome}
 ${codexInstall}
           if [ -n "$CODEX_ACCESS_TOKEN_SECRET" ]; then
             printenv CODEX_ACCESS_TOKEN_SECRET | codex login --with-access-token > /dev/null
@@ -249,7 +249,17 @@ ${codexInstall}
             echo "::error::Set CODEX_ACCESS_TOKEN or CODEX_AUTH_JSON on this repository."
             exit 1
           fi
-          unset CODEX_ACCESS_TOKEN_SECRET CODEX_AUTH_JSON
+
+      - name: Review with Codex
+        id: codex
+        if: steps.claim.outputs.job_id != ''
+        timeout-minutes: ${CODEX_REVIEW_MINUTES}
+        env:
+          MODEL: \${{ steps.claim.outputs.model }}
+          EFFORT: \${{ steps.claim.outputs.effort }}
+        run: |
+          dir="$RUNNER_TEMP/fletcher"
+${codexHome}
           # Read-only, and the sign-in unreadable: the "fletcher" profile
           # extends :read-only and denies CODEX_HOME. The pull request's
           # AGENTS.md is material to review, not instructions, so
@@ -284,11 +294,13 @@ ${codexInstall}
           JOB: \${{ steps.claim.outputs.job_id }}
           MODEL: \${{ steps.claim.outputs.model }}
           OUTCOME: \${{ steps.codex.outcome }}
+          SIGNIN: \${{ steps.signin.outcome }}
         run: |
           dir="$RUNNER_TEMP/fletcher"
           if [ "$OUTCOME" = success ]; then
             # input_tokens already includes cached_input_tokens.
-            usage=$(jq -sc 'map(select(.type == "turn.completed")) | last | .usage // {}' "$dir/events.jsonl")
+            usage=$(jq -sc 'map(select(.type == "turn.completed")) | last | .usage // {}' "$dir/events.jsonl" 2>/dev/null) || usage='{}'
+            [ -n "$usage" ] || usage='{}'
             report=$(jq -c --arg model "$MODEL" --argjson usage "$usage" '{
               agent: "codex",
               outcome: "success",
@@ -297,12 +309,15 @@ ${codexInstall}
               inputTokens: ($usage.input_tokens // null),
               outputTokens: ($usage.output_tokens // null)
             }' "$dir/review.json")
-          elif [ "$OUTCOME" = cancelled ]; then
+          elif [ "$OUTCOME" = cancelled ] || [ "$SIGNIN" = cancelled ]; then
             report='{"agent":"codex","outcome":"cancelled"}'
+          elif [ "$SIGNIN" != success ]; then
+            report=$(jq -n --arg m "Codex couldn't sign in. Set CODEX_ACCESS_TOKEN or CODEX_AUTH_JSON on the repository." \\
+              '{agent: "codex", outcome: "failure", message: $m}')
           else
             message=$(jq -r 'select(.type == "turn.failed" or .type == "error") | .error.message // .message // empty' \\
               "$dir/events.jsonl" 2>/dev/null | tail -n 1 | head -c 400 || true)
-            report=$(jq -n --arg m "\${message:-Codex failed. See the Actions log.}" \\
+            report=$(jq -n --arg m "\${message:-Codex failed or ran past its ${CODEX_REVIEW_MINUTES}-minute limit. See the Actions log.}" \\
               '{agent: "codex", outcome: "failure", message: $m}')
           fi
 ${sendReport}
@@ -335,6 +350,13 @@ ${sendReport}
             echo "::error::Set ${CODEX_AUTH_WRITE_TOKEN_SECRET} so the refreshed sign-in can be saved."
             exit 1
           fi
+          # Checked before rotating: a rotation that can't be saved leaves
+          # the stored sign-in dead.
+          if ! gh api "repos/$REPOSITORY/actions/secrets/public-key" > /dev/null 2>&1; then
+            echo "::error::${CODEX_AUTH_WRITE_TOKEN_SECRET} can't reach this repository's secrets: it expired or lacks Secrets read and write. The sign-in was left as it is."
+            exit 1
+          fi
+${codexHome}
 ${codexInstall}
           # Marking the session stale makes Codex rotate it on this run.
           printf '%s' "$CODEX_AUTH_JSON" \\
