@@ -1,0 +1,228 @@
+# .github/workflows/fletcher-review.yml
+# Fletcher reviews each pull request with Codex on your ChatGPT plan. Needs
+# one secret: CODEX_ACCESS_TOKEN (Business and Enterprise), or
+# CODEX_AUTH_JSON, your ~/.codex/auth.json (Plus and Pro), which also needs
+# CODEX_AUTH_WRITE_TOKEN so the refresh job can keep it signed in.
+name: Fletcher review
+
+on:
+  pull_request: # never pull_request_target
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "23 5 */3 * *" # refreshes CODEX_AUTH_JSON; see refresh-codex-sign-in
+  workflow_dispatch:
+
+concurrency:
+  group: fletcher-review-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Forks get no secrets or OIDC token on pull_request, so they can't run.
+    if: >-
+      ${{ github.event_name == 'pull_request' &&
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write # Fletcher checks GitHub's OIDC token, not a secret
+    env:
+      FLETCHER_URL: ${{ vars.FLETCHER_DEV_URL }}
+      FLETCHER_AUDIENCE: fletcher
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Get the review from Fletcher
+        id: claim
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          dir="$RUNNER_TEMP/fletcher" && mkdir -p "$dir"
+          oidc=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$FLETCHER_AUDIENCE" | jq -r .value)
+          body=$(jq -n --argjson pr "$PR" --arg sha "$SHA" \
+            '{pullRequestNumber: $pr, headSha: $sha, agent: "codex"}')
+          # Fletcher may still be starting this review: wait up to a minute.
+          for attempt in 1 2 3 4 5 6 7; do
+            # Fletcher being unreachable is a notice, not a failed check.
+            status=$(curl -sS -o "$dir/job.json" -w '%{http_code}' -X POST \
+              "$FLETCHER_URL/runner/v1/claim" -H "Authorization: Bearer $oidc" \
+              -H 'content-type: application/json' -d "$body") || status=unreachable
+            [ "$status" = 200 ] && break
+            code=$(jq -r '.error.code // empty' "$dir/job.json" 2>/dev/null || true)
+            [ "$status" = 409 ] && [ "$code" = not_ready ] || break
+            sleep 10
+          done
+          if [ "$code" = wrong_agent ]; then
+            echo "::error::$(jq -r .error.message "$dir/job.json")"
+            exit 1
+          fi
+          if [ "$status" != 200 ]; then
+            echo "::notice::Fletcher has no review for this commit ($status $code)."
+            exit 0
+          fi
+          jq -r .systemPrompt "$dir/job.json" > "$dir/system.md"
+          jq -r .prompt "$dir/job.json" > "$dir/prompt.md"
+          jq -c .schema "$dir/job.json" > "$dir/schema.json"
+          {
+            echo "job_id=$(jq -r .jobId "$dir/job.json")"
+            echo "model=$(jq -r .model "$dir/job.json")"
+            echo "effort=$(jq -r .effort "$dir/job.json")"
+            echo "max_turns=$(jq -r .maxTurns "$dir/job.json")"
+          } >> "$GITHUB_OUTPUT"
+
+      # Its own step, so the step that runs Codex never holds the secrets.
+      - name: Sign in to Codex
+        id: signin
+        if: steps.claim.outputs.job_id != ''
+        env:
+          CODEX_ACCESS_TOKEN_SECRET: ${{ secrets.CODEX_ACCESS_TOKEN }}
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: |
+          export CODEX_HOME="$RUNNER_TEMP/codex-home"
+          mkdir -p "$CODEX_HOME" && chmod 700 "$CODEX_HOME"
+          npm install --global --loglevel=error @openai/codex@0.167.1
+          if [ -n "$CODEX_ACCESS_TOKEN_SECRET" ]; then
+            printenv CODEX_ACCESS_TOKEN_SECRET | codex login --with-access-token > /dev/null
+          elif [ -n "$CODEX_AUTH_JSON" ]; then
+            # Never written back from here: the refresh job owns rotation.
+            printf '%s' "$CODEX_AUTH_JSON" > "$CODEX_HOME/auth.json"
+            chmod 600 "$CODEX_HOME/auth.json"
+          else
+            echo "::error::Set CODEX_ACCESS_TOKEN or CODEX_AUTH_JSON on this repository."
+            exit 1
+          fi
+
+      - name: Review with Codex
+        id: codex
+        if: steps.claim.outputs.job_id != ''
+        timeout-minutes: 20
+        env:
+          MODEL: ${{ steps.claim.outputs.model }}
+          EFFORT: ${{ steps.claim.outputs.effort }}
+        run: |
+          dir="$RUNNER_TEMP/fletcher"
+          export CODEX_HOME="$RUNNER_TEMP/codex-home"
+          mkdir -p "$CODEX_HOME" && chmod 700 "$CODEX_HOME"
+          # Read-only, and the sign-in unreadable: the "fletcher" profile
+          # extends :read-only and denies CODEX_HOME. The pull request's
+          # AGENTS.md is material to review, not instructions, so
+          # project_doc_max_bytes=0 keeps Codex from loading it.
+          status=0
+          cat "$dir/system.md" "$dir/prompt.md" | codex exec - \
+            -c default_permissions='"fletcher"' \
+            -c permissions.fletcher.extends='":read-only"' \
+            -c "permissions.fletcher.filesystem={\"$CODEX_HOME\"=\"none\"}" \
+            -c shell_environment_policy.inherit='"core"' \
+            -c project_doc_max_bytes=0 \
+            --ephemeral \
+            --ignore-user-config \
+            --ignore-rules \
+            --json \
+            --output-schema "$dir/schema.json" \
+            -o "$dir/review.json" \
+            --model "$MODEL" \
+            -c model_reasoning_effort="$EFFORT" \
+            > "$dir/events.jsonl" || status=$?
+          # Say why there is no review: Codex reports it as an event.
+          if [ "$status" -ne 0 ] || ! jq -e . "$dir/review.json" > /dev/null 2>&1; then
+            reason=$(jq -r 'select(.type == "turn.failed" or .type == "error") | .error.message // .message // empty' \
+              "$dir/events.jsonl" 2>/dev/null | tail -n 1 | head -c 400 || true)
+            echo "::error::Codex produced no review (exit $status). ${reason:-It reported no error.}"
+            exit 1
+          fi
+
+      - name: Send the review to Fletcher
+        if: always() && steps.claim.outputs.job_id != ''
+        env:
+          JOB: ${{ steps.claim.outputs.job_id }}
+          MODEL: ${{ steps.claim.outputs.model }}
+          OUTCOME: ${{ steps.codex.outcome }}
+          SIGNIN: ${{ steps.signin.outcome }}
+        run: |
+          dir="$RUNNER_TEMP/fletcher"
+          if [ "$OUTCOME" = success ]; then
+            # input_tokens already includes cached_input_tokens.
+            usage=$(jq -sc 'map(select(.type == "turn.completed")) | last | .usage // {}' "$dir/events.jsonl" 2>/dev/null) || usage='{}'
+            [ -n "$usage" ] || usage='{}'
+            report=$(jq -c --arg model "$MODEL" --argjson usage "$usage" '{
+              agent: "codex",
+              outcome: "success",
+              structuredOutput: .,
+              model: $model,
+              inputTokens: ($usage.input_tokens // null),
+              outputTokens: ($usage.output_tokens // null)
+            }' "$dir/review.json")
+          elif [ "$OUTCOME" = cancelled ] || [ "$SIGNIN" = cancelled ]; then
+            report='{"agent":"codex","outcome":"cancelled"}'
+          elif [ "$SIGNIN" != success ]; then
+            report=$(jq -n --arg m "Codex couldn't sign in. Set CODEX_ACCESS_TOKEN or CODEX_AUTH_JSON on the repository." \
+              '{agent: "codex", outcome: "failure", message: $m}')
+          else
+            message=$(jq -r 'select(.type == "turn.failed" or .type == "error") | .error.message // .message // empty' \
+              "$dir/events.jsonl" 2>/dev/null | tail -n 1 | head -c 400 || true)
+            report=$(jq -n --arg m "${message:-Codex failed or ran past its 20-minute limit. See the Actions log.}" \
+              '{agent: "codex", outcome: "failure", message: $m}')
+          fi
+          oidc=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$FLETCHER_AUDIENCE" | jq -r .value)
+          curl -sS --fail-with-body --retry 3 --retry-delay 5 -X POST \
+            "$FLETCHER_URL/runner/v1/jobs/$JOB/result" -H "Authorization: Bearer $oidc" \
+            -H 'content-type: application/json' -d "$report"
+
+  # Keeps CODEX_AUTH_JSON signed in. Codex rotates a session older than
+  # about 8 days, and the refresh token in the old copy then stops working,
+  # so this job rotates it every 3 days and saves the new copy, before any
+  # review would. It checks out nothing, so no pull request code runs
+  # beside the write token. A no-op with CODEX_ACCESS_TOKEN.
+  refresh-codex-sign-in:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    concurrency:
+      group: fletcher-codex-sign-in
+      cancel-in-progress: false
+    steps:
+      - name: Refresh the Codex sign-in
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          GH_TOKEN: ${{ secrets.CODEX_AUTH_WRITE_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ -z "$CODEX_AUTH_JSON" ]; then
+            echo "::notice::No CODEX_AUTH_JSON secret, so there is nothing to refresh."
+            exit 0
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Set CODEX_AUTH_WRITE_TOKEN so the refreshed sign-in can be saved."
+            exit 1
+          fi
+          # Checked before rotating: a rotation that can't be saved leaves
+          # the stored sign-in dead.
+          if ! gh api "repos/$REPOSITORY/actions/secrets/public-key" > /dev/null 2>&1; then
+            echo "::error::CODEX_AUTH_WRITE_TOKEN can't reach this repository's secrets: it expired or lacks Secrets read and write. The sign-in was left as it is."
+            exit 1
+          fi
+          export CODEX_HOME="$RUNNER_TEMP/codex-home"
+          mkdir -p "$CODEX_HOME" && chmod 700 "$CODEX_HOME"
+          npm install --global --loglevel=error @openai/codex@0.167.1
+          # Marking the session stale makes Codex rotate it on this run.
+          printf '%s' "$CODEX_AUTH_JSON" \
+            | jq '.last_refresh = "2000-01-01T00:00:00Z"' > "$CODEX_HOME/auth.json"
+          chmod 600 "$CODEX_HOME/auth.json"
+          unset CODEX_AUTH_JSON
+          codex exec --ephemeral --ignore-user-config --skip-git-repo-check \
+            --sandbox read-only "Reply with the single word OK." > /dev/null
+          if ! jq -e '.auth_mode == "chatgpt" and .last_refresh > "2001"' "$CODEX_HOME/auth.json" > /dev/null; then
+            echo "::error::Codex didn't refresh the sign-in. Run codex login and save a new CODEX_AUTH_JSON."
+            exit 1
+          fi
+          gh secret set CODEX_AUTH_JSON --repo "$REPOSITORY" < "$CODEX_HOME/auth.json"
